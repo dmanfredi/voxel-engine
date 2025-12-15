@@ -48,5 +48,16 @@ export default defineConfig(
 				tsconfigRootDir: __dirname,
 			},
 		},
+	},
+
+	{
+		files: ['src/**/*.{ts,tsx,mts,cts}'],
+		rules: {
+			'@typescript-eslint/prefer-optional-chain': 'off',
+			'@typescript-eslint/no-unnecessary-condition': 'off',
+
+			// maybe, probably shouldnt.
+			// '@typescript-eslint/no-non-null-assertion': 'off',
+		},
 	}
 );

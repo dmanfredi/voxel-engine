@@ -11,15 +11,15 @@ function createCubeVertices() {
 	const positions: number[] = [
 		// left
 		0, 0,  0,
-		0, 0, -1,
-		0, 1,  0,
-		0, 1, -1,
+		0, 0, -10,
+		0, 10,  0,
+		0, 10, -10,
 	
 		// right
-		1, 0,  0,
-		1, 0, -1,
-		1, 1,  0,
-		1, 1, -1,
+		10, 0,  0,
+		10, 0, -10,
+		10, 10,  0,
+		10, 10, -10,
 	];
 
 	//prettier-ignore
@@ -94,7 +94,6 @@ async function main(): Promise<void> {
 		code: /*wgsl*/ `
 			struct Uniforms {
 				matrix: mat4x4f,
-				color: vec4f,
 			}
 
 			struct Vertex {
@@ -117,7 +116,7 @@ async function main(): Promise<void> {
 			}
 
 			@fragment fn fs(vsOut: VSOutput) -> @location(0) vec4f {
-				return vsOut.color * uni.color;
+				return vsOut.color;
 			}
 		`,
 	});
@@ -151,7 +150,7 @@ async function main(): Promise<void> {
 		},
 	});
 
-	const numFs = 10;
+	const numFs = 25;
 	const objectInfos: {
 		uniformBuffer: GPUBuffer;
 		uniformValues: Float32Array<ArrayBuffer>;
@@ -198,59 +197,53 @@ async function main(): Promise<void> {
 	});
 	device.queue.writeBuffer(vertexBuffer, 0, vertexData);
 
-	const renderPassDescriptor: GPURenderPassDescriptor = {
-		label: 'our basic canvas renderPass',
-		colorAttachments: [
-			{
-				// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-				view: undefined!, // to be filled out when we render
-				loadOp: 'clear',
-				storeOp: 'store',
-			},
-		],
-		depthStencilAttachment: {
-			// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-			view: undefined!, // to be filled out when we render
-			depthClearValue: 1.0,
-			depthLoadOp: 'clear',
-			depthStoreOp: 'store',
-		},
-	};
+	const degToRad = (d: number) => (d * Math.PI) / 180;
 
 	let depthTexture: GPUTexture;
-	const cameraAngle = 90;
+	const cameraAngle = 0;
 	const radius = 200;
-	const fieldOfView = 100;
+	const fieldOfView = degToRad(100);
 
-	function render(
-		renderPassDescriptor: GPURenderPassDescriptor,
-		canvas: HTMLCanvasElement
-	) {
+	function ensureDepthTexture(width: number, height: number) {
+		if (
+			!depthTexture ||
+			depthTexture.width !== width ||
+			depthTexture.height !== height
+		) {
+			depthTexture?.destroy();
+			depthTexture = device.createTexture({
+				size: [width, height],
+				format: 'depth24plus',
+				usage: GPUTextureUsage.RENDER_ATTACHMENT,
+			});
+		}
+	}
+
+	function render(canvas: HTMLCanvasElement) {
 		// Get the current texture from the canvas context and
 		// set it as the texture to render to.
 		const canvasTexture = context?.getCurrentTexture();
 		if (!canvasTexture) throw new Error('No canvasTexture found!');
 
-		renderPassDescriptor.colorAttachments[0].view =
-			canvasTexture.createView();
+		ensureDepthTexture(canvasTexture.width, canvasTexture.height);
 
-		// If we dont have a depth texture OR if its size is different
-		// from the canvasTexture when we make a new depth texture
-
-		if (
-			depthTexture.width !== canvasTexture.width ||
-			depthTexture.height !== canvasTexture.height
-		) {
-			depthTexture.destroy();
-
-			depthTexture = device.createTexture({
-				size: [canvasTexture.width, canvasTexture.height],
-				format: 'depth24plus',
-				usage: GPUTextureUsage.RENDER_ATTACHMENT,
-			});
-		}
-		renderPassDescriptor.depthStencilAttachment.view =
-			depthTexture.createView();
+		const renderPassDescriptor: GPURenderPassDescriptor = {
+			label: 'main pass',
+			colorAttachments: [
+				{
+					view: canvasTexture.createView(),
+					loadOp: 'clear',
+					storeOp: 'store',
+					clearValue: { r: 0, g: 0, b: 0, a: 0 }, // clear totally
+				},
+			],
+			depthStencilAttachment: {
+				view: depthTexture.createView(),
+				depthClearValue: 1.0,
+				depthLoadOp: 'clear',
+				depthStoreOp: 'store',
+			},
+		};
 
 		const encoder = device.createCommandEncoder();
 		const pass = encoder.beginRenderPass(renderPassDescriptor);
@@ -323,7 +316,7 @@ async function main(): Promise<void> {
 				Math.min(height, device.limits.maxTextureDimension2D)
 			);
 			// re-render
-			render(renderPassDescriptor, canvas);
+			render(canvas);
 		}
 	});
 	observer.observe(canvas);

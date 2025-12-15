@@ -2,14 +2,14 @@
 	"name": "pillarman",
 	"version": "1.0.0",
 	"main": "index.js",
-  "scripts": {
-    "dev": "vite",
-    "build": "tsc -p tsconfig.json --noEmit && vite build",
-    "preview": "vite preview",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "eslint .",
-    "lint:fix": "eslint . --fix"
-  },
+	"scripts": {
+		"dev": "vite",
+		"build": "tsc -p tsconfig.json --noEmit && vite build",
+		"preview": "vite preview",
+		"typecheck": "tsc -p tsconfig.json --noEmit",
+		"lint": "eslint .",
+		"lint:fix": "eslint . --fix"
+	},
 	"keywords": [],
 	"author": "",
 	"license": "ISC",

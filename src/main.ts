@@ -198,17 +198,19 @@ async function main(): Promise<void> {
 	});
 	device.queue.writeBuffer(vertexBuffer, 0, vertexData);
 
-	const renderPassDescriptor = {
+	const renderPassDescriptor: GPURenderPassDescriptor = {
 		label: 'our basic canvas renderPass',
 		colorAttachments: [
 			{
-				// view: <- to be filled out when we render
+				// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+				view: undefined!, // to be filled out when we render
 				loadOp: 'clear',
 				storeOp: 'store',
 			},
 		],
 		depthStencilAttachment: {
-			// view <- to be filled out when we render
+			// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+			view: undefined!, // to be filled out when we render
 			depthClearValue: 1.0,
 			depthLoadOp: 'clear',
 			depthStoreOp: 'store',
@@ -220,7 +222,10 @@ async function main(): Promise<void> {
 	const radius = 200;
 	const fieldOfView = 100;
 
-	function render() {
+	function render(
+		renderPassDescriptor: GPURenderPassDescriptor,
+		canvas: HTMLCanvasElement
+	) {
 		// Get the current texture from the canvas context and
 		// set it as the texture to render to.
 		const canvasTexture = context?.getCurrentTexture();
@@ -301,9 +306,14 @@ async function main(): Promise<void> {
 
 	const observer = new ResizeObserver((entries) => {
 		for (const entry of entries) {
-			const canvas = entry.target;
-			const width = entry.contentBoxSize[0].inlineSize;
-			const height = entry.contentBoxSize[0].blockSize;
+			const canvas = entry.target as HTMLCanvasElement;
+			const boxSize = entry.contentBoxSize[0];
+			const width = boxSize
+				? boxSize.inlineSize
+				: entry.contentRect.width;
+			const height = boxSize
+				? boxSize.blockSize
+				: entry.contentRect.height;
 			canvas.width = Math.max(
 				1,
 				Math.min(width, device.limits.maxTextureDimension2D)
@@ -313,7 +323,7 @@ async function main(): Promise<void> {
 				Math.min(height, device.limits.maxTextureDimension2D)
 			);
 			// re-render
-			render();
+			render(renderPassDescriptor, canvas);
 		}
 	});
 	observer.observe(canvas);

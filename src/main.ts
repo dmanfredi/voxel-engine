@@ -203,6 +203,14 @@ async function main(): Promise<void> {
 			// move
 			vec3.add(cameraPos, move, cameraPos);
 		}
+		if (keysDown.has('KeyQ')) {
+			// move up
+			vec3.add(cameraPos, vec3.mulScalar(cameraUp, units), cameraPos);
+		}
+		if (keysDown.has('KeyE')) {
+			// move down
+			vec3.sub(cameraPos, vec3.mulScalar(cameraUp, units), cameraPos);
+		}
 
 		if (dx !== 0 || dz !== 0) {
 		}

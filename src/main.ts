@@ -1,4 +1,4 @@
-import { mat4 } from 'wgpu-matrix';
+import { mat4, vec3 } from 'wgpu-matrix';
 
 // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
 if (!navigator.gpu) {
@@ -63,6 +63,20 @@ function createCubeVertices() {
 	};
 }
 
+const degToRad = (d: number) => (d * Math.PI) / 180;
+const up = vec3.create(0, 1, 0);
+
+const cameraPos = vec3.create(0, 100, 300);
+const cameraFront = vec3.create(0, 0, -1);
+const cameraTarget = vec3.create(0, 0, 1);
+
+const cameraDirection = vec3.normalize(vec3.subtract(cameraPos, cameraTarget));
+const cameraRight = vec3.normalize(vec3.cross(up, cameraDirection));
+const cameraUp = up;
+
+let cameraYaw = -90;
+let cameraPitch = 0;
+
 async function main(): Promise<void> {
 	const canvas = document.querySelector<HTMLCanvasElement>('canvas');
 	if (!canvas) {
@@ -80,6 +94,136 @@ async function main(): Promise<void> {
 		alert('No appropriate GPUAdapter found.');
 		throw new Error('No appropriate GPUAdapter found.');
 	}
+
+	let renderRequestId: number;
+	canvas.addEventListener('click', async () => {
+		await canvas.requestPointerLock();
+	});
+
+	// ============================================
+	// MOVEMENT START
+	// ============================================
+	let firstMouse = true;
+	document.addEventListener(
+		'mousemove',
+		(e) => {
+			if (document.pointerLockElement !== canvas) return;
+
+			const sensitivity = 40;
+			const step = sensitivity * 0.001;
+			cameraYaw += e.movementX * step;
+			cameraPitch -= e.movementY * step;
+
+			// prevents doing somersaults
+			if (cameraPitch + step >= 88) cameraPitch = 88 - step;
+			if (cameraPitch - step <= -88) cameraPitch = -88 + step;
+
+			// if (cameraPitch - 0.1 <= -(Math.PI / 2))
+			// 	cameraPitch = -(Math.PI / 2) + 0.1;
+
+			const direction = vec3.create(
+				Math.cos(degToRad(cameraYaw)) * Math.cos(degToRad(cameraPitch)),
+				Math.sin(degToRad(cameraPitch)),
+				Math.sin(degToRad(cameraYaw)) * Math.cos(degToRad(cameraPitch))
+			);
+
+			vec3.normalize(direction, cameraFront);
+
+			requestRender();
+		},
+		false
+	);
+
+	document.addEventListener('keydown', (e) => {
+		// Use e.code so it's layout-independent ("KeyW" stays KeyW on AZERTY, etc.)
+		if (
+			e.code === 'KeyW' ||
+			e.code === 'KeyA' ||
+			e.code === 'KeyS' ||
+			e.code === 'KeyD' ||
+			e.code === 'KeyE' ||
+			e.code === 'KeyQ'
+		) {
+			e.preventDefault();
+			keysDown.add(e.code);
+		}
+	});
+
+	document.addEventListener('keyup', (e) => {
+		keysDown.delete(e.code);
+	});
+
+	// Prevent "stuck key" if the tab loses focus mid-press
+	window.addEventListener('blur', () => {
+		keysDown.clear();
+	});
+
+	let lastT = 0;
+	const keysDown = new Set();
+
+	function tick(t: number) {
+		const dt = Math.min(0.05, (t - lastT) / 1000);
+		lastT = t;
+
+		const speed = 500; // units per second
+		const units = speed * dt;
+		let dx = 0;
+		let dy = 0;
+		let dz = 0;
+
+		if (keysDown.has('KeyW')) {
+			vec3.add(cameraPos, vec3.mulScalar(cameraFront, units), cameraPos);
+		}
+		if (keysDown.has('KeyS')) {
+			vec3.sub(cameraPos, vec3.mulScalar(cameraFront, units), cameraPos);
+		}
+		if (keysDown.has('KeyA')) {
+			// get the right vector
+			const right = vec3.cross(cameraFront, cameraUp);
+
+			// normalize it
+			const normalRight = vec3.normalize(right);
+
+			// how much to move leftward on the right vector
+			const move = vec3.mulScalar(normalRight, units);
+
+			// move
+			vec3.sub(cameraPos, move, cameraPos);
+		}
+		if (keysDown.has('KeyD')) {
+			// get the right vector
+			const right = vec3.cross(cameraFront, cameraUp);
+
+			// normalize it
+			const normalRight = vec3.normalize(right);
+
+			// how much to move on the right vector
+			const move = vec3.mulScalar(normalRight, units);
+
+			// move
+			vec3.add(cameraPos, move, cameraPos);
+		}
+
+		if (dx !== 0 || dz !== 0) {
+		}
+
+		requestRender();
+
+		requestAnimationFrame(tick);
+	}
+
+	requestAnimationFrame((t) => {
+		lastT = t;
+		tick(t);
+	});
+
+	// if (keysDown.size) {
+	// 	tick();
+	// }
+
+	// ============================================
+	// MOVEMENT END
+	// ============================================
 
 	const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
 	const device = await adapter.requestDevice();
@@ -197,8 +341,6 @@ async function main(): Promise<void> {
 	});
 	device.queue.writeBuffer(vertexBuffer, 0, vertexData);
 
-	const degToRad = (d: number) => (d * Math.PI) / 180;
-
 	let depthTexture: GPUTexture;
 	const cameraAngle = 0;
 	const radius = 200;
@@ -219,7 +361,16 @@ async function main(): Promise<void> {
 		}
 	}
 
-	function render(canvas: HTMLCanvasElement) {
+	function requestRender() {
+		if (!renderRequestId) {
+			renderRequestId = requestAnimationFrame(() => render());
+		}
+	}
+
+	function render() {
+		renderRequestId = 0;
+
+		if (canvas === null) throw new Error('No canvas found!');
 		// Get the current texture from the canvas context and
 		// set it as the texture to render to.
 		const canvasTexture = context?.getCurrentTexture();
@@ -252,27 +403,18 @@ async function main(): Promise<void> {
 
 		const aspect = canvas.clientWidth / canvas.clientHeight;
 		const projection = mat4.perspective(
-			fieldOfView,
+			degToRad(60), // fieldOfView,
 			aspect,
 			1, // zNear
 			2000 // zFar
 		);
 
-		// compute a matrix for the camera.
-		// const cameraMatrix = mat4.rotationY(cameraAngle);
-		// mat4.translate(cameraMatrix, [0, 0, radius * 1.5], cameraMatrix);
-
-		// compute the position of the first F
-		const fPosistion = [radius, 0, 0];
-
-		// Use matrix math to compute a position on a circle where the camera is
-		const tempMatrix = mat4.rotationY(cameraAngle);
-		mat4.translate(tempMatrix, [0, 0, radius * 1.5], tempMatrix);
-		const eye = tempMatrix.slice(12, 15);
-		const up = [0, 1, 0];
-
-		// Compute a view matrix
-		const viewMatrix = mat4.lookAt(eye, fPosistion, up);
+		const viewMatrix = mat4.lookAt(
+			cameraPos,
+			vec3.add(cameraPos, cameraFront),
+			cameraUp
+		);
+		// Compute the view projection matrix
 		const viewProjectionMatrix = mat4.multiply(projection, viewMatrix);
 
 		objectInfos.forEach(
@@ -316,7 +458,7 @@ async function main(): Promise<void> {
 				Math.min(height, device.limits.maxTextureDimension2D)
 			);
 			// re-render
-			render(canvas);
+			render();
 		}
 	});
 	observer.observe(canvas);

@@ -302,7 +302,7 @@ async function main(): Promise<void> {
 		},
 	});
 
-	const numFs = 25;
+	const numFs = 256;
 	const objectInfos: {
 		uniformBuffer: GPUBuffer;
 		uniformValues: Float32Array<ArrayBuffer>;
@@ -425,11 +425,19 @@ async function main(): Promise<void> {
 		// Compute the view projection matrix
 		const viewProjectionMatrix = mat4.multiply(projection, viewMatrix);
 
-		objectInfos.forEach(
-			({ matrixValue, uniformBuffer, uniformValues, bindGroup }, i) => {
-				const angle = (i / numFs) * Math.PI * 2;
-				const x = Math.cos(angle) * radius;
-				const z = Math.sin(angle) * radius;
+		let width = 16;
+		let depth = 16;
+		let spacing = 11;
+		for (let row = 0; row < depth; row++) {
+			for (let col = 0; col < width; col++) {
+				const i = row * width + col;
+				const obj = objectInfos[i];
+				if (!obj) continue;
+				const { uniformBuffer, uniformValues, matrixValue, bindGroup } =
+					obj;
+
+				const x = col * spacing;
+				const z = row * spacing;
 
 				mat4.translate(viewProjectionMatrix, [x, 0, z], matrixValue);
 
@@ -439,7 +447,7 @@ async function main(): Promise<void> {
 				pass.setBindGroup(0, bindGroup);
 				pass.draw(numVertices);
 			}
-		);
+		}
 
 		pass.end();
 

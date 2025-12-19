@@ -1,6 +1,8 @@
 import { mat4, vec3 } from 'wgpu-matrix';
 
-// eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+// TODO OF SORTS?
+// instancing?
+
 if (!navigator.gpu) {
 	alert('WebGPU not supported on this browser.');
 	throw new Error('WebGPU not supported on this browser.');
@@ -68,10 +70,10 @@ const up = vec3.create(0, 1, 0);
 
 const cameraPos = vec3.create(0, 100, 300);
 const cameraFront = vec3.create(0, 0, -1);
-const cameraTarget = vec3.create(0, 0, 1);
+// const cameraTarget = vec3.create(0, 0, 1);
 
-const cameraDirection = vec3.normalize(vec3.subtract(cameraPos, cameraTarget));
-const cameraRight = vec3.normalize(vec3.cross(up, cameraDirection));
+// const cameraDirection = vec3.normalize(vec3.subtract(cameraPos, cameraTarget));
+// const cameraRight = vec3.normalize(vec3.cross(up, cameraDirection));
 const cameraUp = up;
 
 let cameraYaw = -90;
@@ -96,14 +98,14 @@ async function main(): Promise<void> {
 	}
 
 	let renderRequestId: number;
-	canvas.addEventListener('click', async () => {
-		await canvas.requestPointerLock();
+	canvas.addEventListener('click', () => {
+		void canvas.requestPointerLock();
 	});
 
 	// ============================================
 	// MOVEMENT START
 	// ============================================
-	let firstMouse = true;
+
 	document.addEventListener(
 		'mousemove',
 		(e) => {
@@ -167,9 +169,6 @@ async function main(): Promise<void> {
 
 		const speed = 500; // units per second
 		const units = speed * dt;
-		let dx = 0;
-		let dy = 0;
-		let dz = 0;
 
 		if (keysDown.has('KeyW')) {
 			vec3.add(cameraPos, vec3.mulScalar(cameraFront, units), cameraPos);
@@ -210,9 +209,6 @@ async function main(): Promise<void> {
 		if (keysDown.has('KeyE')) {
 			// move down
 			vec3.sub(cameraPos, vec3.mulScalar(cameraUp, units), cameraPos);
-		}
-
-		if (dx !== 0 || dz !== 0) {
 		}
 
 		requestRender();
@@ -350,9 +346,6 @@ async function main(): Promise<void> {
 	device.queue.writeBuffer(vertexBuffer, 0, vertexData);
 
 	let depthTexture: GPUTexture;
-	const cameraAngle = 0;
-	const radius = 200;
-	const fieldOfView = degToRad(100);
 
 	function ensureDepthTexture(width: number, height: number) {
 		if (
@@ -371,7 +364,9 @@ async function main(): Promise<void> {
 
 	function requestRender() {
 		if (!renderRequestId) {
-			renderRequestId = requestAnimationFrame(() => render());
+			renderRequestId = requestAnimationFrame(() => {
+				render();
+			});
 		}
 	}
 
@@ -425,9 +420,9 @@ async function main(): Promise<void> {
 		// Compute the view projection matrix
 		const viewProjectionMatrix = mat4.multiply(projection, viewMatrix);
 
-		let width = 16;
-		let depth = 16;
-		let spacing = 11;
+		const width = 16;
+		const depth = 16;
+		const spacing = 11;
 		for (let row = 0; row < depth; row++) {
 			for (let col = 0; col < width; col++) {
 				const i = row * width + col;

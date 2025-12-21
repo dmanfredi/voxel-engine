@@ -63,6 +63,7 @@ function createCubeVertices() {
 	return {
 		vertexData,
 		numVertices,
+		indices: new Uint32Array(indices),
 	};
 }
 
@@ -248,6 +249,7 @@ async function main(): Promise<void> {
 		layout: 'auto',
 		vertex: {
 			module,
+			entryPoint: 'vs',
 			buffers: [
 				{
 					arrayStride: 4 * 4, // (3) floats 4 bytes each+ one 4 byte color
@@ -260,6 +262,7 @@ async function main(): Promise<void> {
 		},
 		fragment: {
 			module,
+			entryPoint: 'fs',
 			targets: [{ format: presentationFormat }],
 		},
 		primitive: {
@@ -272,14 +275,56 @@ async function main(): Promise<void> {
 		},
 	});
 
-	const numFs = 256;
+	const barycentricCoordinatesBasedWireframePipeline =
+		device.createRenderPipeline({
+			label: 'barycentric coordinates based wireframe pipeline',
+			layout: 'auto',
+			vertex: {
+				module,
+				entryPoint: 'vsIndexedU32BarycentricCoordinateBasedLines',
+			},
+			fragment: {
+				module,
+				entryPoint: 'fsBarycentricCoordinateBasedLines',
+				targets: [
+					{
+						format: presentationFormat,
+						blend: {
+							color: {
+								srcFactor: 'one',
+								dstFactor: 'one-minus-src-alpha',
+							},
+							alpha: {
+								srcFactor: 'one',
+								dstFactor: 'one-minus-src-alpha',
+							},
+						},
+					},
+				],
+			},
+			primitive: {
+				topology: 'triangle-list',
+			},
+			depthStencil: {
+				depthWriteEnabled: true,
+				depthCompare: 'less-equal',
+				format: 'depth24plus',
+			},
+		});
+
+	const numCubes = 256;
+	const { vertexData, numVertices, indices } = createCubeVertices();
+
 	const objectInfos: {
 		uniformBuffer: GPUBuffer;
+		indexBuffer: GPUBuffer;
+		vertexBuffer: GPUBuffer;
 		uniformValues: Float32Array<ArrayBuffer>;
 		matrixValue: Float32Array<ArrayBuffer>;
 		bindGroup: GPUBindGroup;
+		barycentricCoordinatesBasedWireframeBindGroup: GPUBindGroup;
 	}[] = [];
-	for (let i = 0; i < numFs; i++) {
+	for (let i = 0; i < numCubes; i++) {
 		// matrix
 		const uniformBufferSize = 16 * 4;
 		const uniformBuffer = device.createBuffer({
@@ -287,7 +332,6 @@ async function main(): Promise<void> {
 			size: uniformBufferSize,
 			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 		});
-
 		const uniformValues = new Float32Array(uniformBufferSize / 4);
 
 		// offsets to the various uniform values in float32 indices
@@ -297,21 +341,65 @@ async function main(): Promise<void> {
 			kMatrixOffset + 16
 		);
 
+		// fundementally, what is needed for barycentric calculations?
+		// what do I need to be passing in?
+		// what am I passing in?
+
+		const vertexBuffer = device.createBuffer({
+			label: 'vertexUni',
+			size: vertexData.byteLength,
+			usage:
+				GPUBufferUsage.VERTEX |
+				GPUBufferUsage.STORAGE |
+				GPUBufferUsage.COPY_DST,
+		});
+
+		const indexBuffer = device.createBuffer({
+			label: 'vertexUni',
+			size: indices.byteLength,
+			usage:
+				GPUBufferUsage.INDEX |
+				GPUBufferUsage.STORAGE |
+				GPUBufferUsage.COPY_DST,
+		});
+
+		device.queue.writeBuffer(vertexBuffer, 0, vertexData);
+		device.queue.writeBuffer(indexBuffer, 0, indices);
+
 		const bindGroup = device.createBindGroup({
 			label: 'bind group for object',
 			layout: pipeline.getBindGroupLayout(0),
-			entries: [{ binding: 0, resource: { buffer: uniformBuffer } }],
+			entries: [
+				{ binding: 0, resource: { buffer: uniformBuffer } },
+				// { binding: 1, resource: { buffer: vertexBuffer } },
+				// { binding: 2, resource: { buffer: indexBuffer } },
+			],
 		});
+
+		const barycentricCoordinatesBasedWireframeBindGroup =
+			device.createBindGroup({
+				label: 'the other bindgroup for wireframes',
+				layout: barycentricCoordinatesBasedWireframePipeline.getBindGroupLayout(
+					0
+				),
+				entries: [
+					{ binding: 0, resource: { buffer: uniformBuffer } },
+					{ binding: 1, resource: { buffer: vertexBuffer } },
+					{ binding: 2, resource: { buffer: indexBuffer } },
+				],
+			});
 
 		objectInfos.push({
 			uniformBuffer,
+			indexBuffer,
+			vertexBuffer,
 			uniformValues,
 			matrixValue,
 			bindGroup,
+			barycentricCoordinatesBasedWireframeBindGroup,
 		});
 	}
 
-	const { vertexData, numVertices } = createCubeVertices();
 	const vertexBuffer = device.createBuffer({
 		label: 'vertex buffer vertices',
 		size: vertexData.byteLength,
@@ -414,6 +502,22 @@ async function main(): Promise<void> {
 				device.queue.writeBuffer(uniformBuffer, 0, uniformValues);
 
 				pass.setBindGroup(0, bindGroup);
+				pass.draw(numVertices);
+			}
+		}
+
+		// Draw wireframes
+		pass.setPipeline(barycentricCoordinatesBasedWireframePipeline);
+		for (let row = 0; row < depth; row++) {
+			for (let col = 0; col < width; col++) {
+				const i = row * width + col;
+				const obj = objectInfos[i];
+				if (!obj) continue;
+
+				pass.setBindGroup(
+					0,
+					obj.barycentricCoordinatesBasedWireframeBindGroup
+				);
 				pass.draw(numVertices);
 			}
 		}

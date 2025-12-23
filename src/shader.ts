@@ -15,7 +15,7 @@ const MainShader = /*wgsl*/ `
 
 	@group(0) @binding(0) var<uniform> uni: Uniforms;
 	@group(0) @binding(1) var<storage, read> positions: array<f32>;
-	@group(0) @binding(2) var<storage, read> indices: array<u32>;
+	// @group(0) @binding(2) var<storage, read> indices: array<u32>;
 
 	@vertex fn vs(vert: Vertex) -> VSOutput {
 		var vsOut: VSOutput;
@@ -38,30 +38,17 @@ const MainShader = /*wgsl*/ `
 	@vertex fn vsIndexedU32BarycentricCoordinateBasedLines(
   		@builtin(vertex_index) vNdx: u32
 	) -> BarycentricCoordinateBasedVSOutput {
-		let vertNdx = vNdx % 3;
-		let index = indices[vNdx];
+		let vertNdx = vNdx % 3u;
 
-		// note:
-		//
-		// * if your indices are U16 you could use this
-		//
-		//    let twoIndices = indices[vNdx / 2];  // indices is u32 but we want u16
-		//    let index = (twoIndices >> ((vNdx & 1) * 16)) & 0xFFFF;
-		//
-		// * if you're not using indices you could use this
-		//
-		//    let index = vNdx;
+		let pNdx = vNdx * 4u; // <-- expanded vertex list
+		let position = vec4f(positions[pNdx], positions[pNdx + 1u], positions[pNdx + 2u], 1.0);
 
-		let pNdx = index * 4;
-		let position = vec4f(positions[pNdx], positions[pNdx + 1], positions[pNdx + 2], 1);
+		var out: BarycentricCoordinateBasedVSOutput;
+		out.position = uni.matrix * position;
 
-		var vsOut: BarycentricCoordinateBasedVSOutput;
-		vsOut.position = uni.matrix * position;
-
-		// emit a barycentric coordinate
-		vsOut.barycenticCoord = vec3f(0);
-		vsOut.barycenticCoord[vertNdx] = 1.0;
-		return vsOut;
+		out.barycenticCoord = vec3f(0.0);
+		out.barycenticCoord[vertNdx] = 1.0;
+		return out;
 	}
 
 	fn edgeFactor(bary: vec3f) -> f32 {
@@ -74,7 +61,7 @@ const MainShader = /*wgsl*/ `
 	@fragment fn fsBarycentricCoordinateBasedLines(
 		v: BarycentricCoordinateBasedVSOutput
 	) -> @location(0) vec4f {
-		let lineAlphaThreshold = 0.5;
+		let lineAlphaThreshold = 0.1;
 		let a = 1.0 - edgeFactor(v.barycenticCoord);
 		if (a < lineAlphaThreshold) {
 			discard;

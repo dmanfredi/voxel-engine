@@ -312,7 +312,7 @@ async function main(): Promise<void> {
 			},
 		});
 
-	const numCubes = 256;
+	const numCubes = 4096;
 	const { vertexData, numVertices, indices } = createCubeVertices();
 
 	const objectInfos: {
@@ -340,10 +340,6 @@ async function main(): Promise<void> {
 			kMatrixOffset,
 			kMatrixOffset + 16
 		);
-
-		// fundementally, what is needed for barycentric calculations?
-		// what do I need to be passing in?
-		// what am I passing in?
 
 		const vertexBuffer = device.createBuffer({
 			label: 'vertexUni',
@@ -385,7 +381,7 @@ async function main(): Promise<void> {
 				entries: [
 					{ binding: 0, resource: { buffer: uniformBuffer } },
 					{ binding: 1, resource: { buffer: vertexBuffer } },
-					{ binding: 2, resource: { buffer: indexBuffer } },
+					// { binding: 2, resource: { buffer: indexBuffer } },
 				],
 			});
 
@@ -484,25 +480,41 @@ async function main(): Promise<void> {
 
 		const width = 16;
 		const depth = 16;
-		const spacing = 11;
+		const height = 16;
+		const spacing = 10;
 		for (let row = 0; row < depth; row++) {
 			for (let col = 0; col < width; col++) {
-				const i = row * width + col;
-				const obj = objectInfos[i];
-				if (!obj) continue;
-				const { uniformBuffer, uniformValues, matrixValue, bindGroup } =
-					obj;
+				for (let lay = 0; lay < height; lay++) {
+					// Calculate 3D array index: layer * (width * depth) + row * width + col
+					const layerOffset = lay * (width * depth); // Skip complete layers
+					const rowOffset = row * width; // Skip rows in current layer
+					const i = layerOffset + rowOffset + col; // Final flat array index
 
-				const x = col * spacing;
-				const z = row * spacing;
+					const obj = objectInfos[i];
+					if (!obj) continue;
+					const {
+						uniformBuffer,
+						uniformValues,
+						matrixValue,
+						bindGroup,
+					} = obj;
 
-				mat4.translate(viewProjectionMatrix, [x, 0, z], matrixValue);
+					const x = col * spacing;
+					const z = row * spacing;
+					const y = lay * spacing;
 
-				// upload the uniform values to the uniform buffer
-				device.queue.writeBuffer(uniformBuffer, 0, uniformValues);
+					mat4.translate(
+						viewProjectionMatrix,
+						[x, y, z],
+						matrixValue
+					);
 
-				pass.setBindGroup(0, bindGroup);
-				pass.draw(numVertices);
+					// upload the uniform values to the uniform buffer
+					device.queue.writeBuffer(uniformBuffer, 0, uniformValues);
+
+					pass.setBindGroup(0, bindGroup);
+					pass.draw(numVertices);
+				}
 			}
 		}
 
@@ -510,15 +522,20 @@ async function main(): Promise<void> {
 		pass.setPipeline(barycentricCoordinatesBasedWireframePipeline);
 		for (let row = 0; row < depth; row++) {
 			for (let col = 0; col < width; col++) {
-				const i = row * width + col;
-				const obj = objectInfos[i];
-				if (!obj) continue;
+				for (let lay = 0; lay < height; lay++) {
+					// Calculate 3D array index: layer * (width * depth) + row * width + col
+					const layerOffset = lay * (width * depth); // Skip complete layers
+					const rowOffset = row * width; // Skip rows in current layer
+					const i = layerOffset + rowOffset + col; // Final flat array index
+					const obj = objectInfos[i];
+					if (!obj) continue;
 
-				pass.setBindGroup(
-					0,
-					obj.barycentricCoordinatesBasedWireframeBindGroup
-				);
-				pass.draw(numVertices);
+					pass.setBindGroup(
+						0,
+						obj.barycentricCoordinatesBasedWireframeBindGroup
+					);
+					pass.draw(numVertices);
+				}
 			}
 		}
 

@@ -1,5 +1,6 @@
 import { mat4, vec3 } from 'wgpu-matrix';
 import MainShader from './shader';
+import WireframeShader from './wireframe';
 
 import { BuildDebug, debuggerParams, stats } from './debug';
 
@@ -259,6 +260,10 @@ async function main(): Promise<void> {
 		code: MainShader,
 	});
 
+	const wireframeModule = device.createShaderModule({
+		code: WireframeShader,
+	});
+
 	const pipeline = device.createRenderPipeline({
 		label: '2 attributes',
 		layout: 'auto',
@@ -301,11 +306,11 @@ async function main(): Promise<void> {
 			label: 'barycentric coordinates based wireframe pipeline',
 			layout: 'auto',
 			vertex: {
-				module,
+				module: wireframeModule,
 				entryPoint: 'vsIndexedU32BarycentricCoordinateBasedLines',
 			},
 			fragment: {
-				module,
+				module: wireframeModule,
 				entryPoint: 'fsBarycentricCoordinateBasedLines',
 				targets: [
 					{

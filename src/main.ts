@@ -1,6 +1,21 @@
 import { mat4, vec3 } from 'wgpu-matrix';
 import MainShader from './shader';
 
+import { BuildDebug, debuggerParams, stats } from './debug';
+
+// Practical TODO
+
+// FPS counter
+// -> WITH TWEAKPANE
+// -> VERTICE COUNT
+// -^ maybe later
+// reorganize code a little
+
+// block class
+// textured cubes
+// greedy mesh man
+// how tf is that shit working
+
 // TODO OF SORTS?
 // instancing?
 
@@ -273,6 +288,12 @@ async function main(): Promise<void> {
 			depthCompare: 'less',
 			format: 'depth24plus',
 		},
+		// wire frame everywhere mode
+		// depthStencil: {
+		// 	depthWriteEnabled: false,
+		// 	depthCompare: 'always',
+		// 	format: 'depth24plus',
+		// },
 	});
 
 	const barycentricCoordinatesBasedWireframePipeline =
@@ -428,7 +449,9 @@ async function main(): Promise<void> {
 		}
 	}
 
-	function render() {
+	BuildDebug(render);
+	function render(): void {
+		stats.begin();
 		renderRequestId = 0;
 
 		if (canvas === null) throw new Error('No canvas found!');
@@ -519,22 +542,24 @@ async function main(): Promise<void> {
 		}
 
 		// Draw wireframes
-		pass.setPipeline(barycentricCoordinatesBasedWireframePipeline);
-		for (let row = 0; row < depth; row++) {
-			for (let col = 0; col < width; col++) {
-				for (let lay = 0; lay < height; lay++) {
-					// Calculate 3D array index: layer * (width * depth) + row * width + col
-					const layerOffset = lay * (width * depth); // Skip complete layers
-					const rowOffset = row * width; // Skip rows in current layer
-					const i = layerOffset + rowOffset + col; // Final flat array index
-					const obj = objectInfos[i];
-					if (!obj) continue;
+		if (debuggerParams.wireframe) {
+			pass.setPipeline(barycentricCoordinatesBasedWireframePipeline);
+			for (let row = 0; row < depth; row++) {
+				for (let col = 0; col < width; col++) {
+					for (let lay = 0; lay < height; lay++) {
+						// Calculate 3D array index: layer * (width * depth) + row * width + col
+						const layerOffset = lay * (width * depth); // Skip complete layers
+						const rowOffset = row * width; // Skip rows in current layer
+						const i = layerOffset + rowOffset + col; // Final flat array index
+						const obj = objectInfos[i];
+						if (!obj) continue;
 
-					pass.setBindGroup(
-						0,
-						obj.barycentricCoordinatesBasedWireframeBindGroup
-					);
-					pass.draw(numVertices);
+						pass.setBindGroup(
+							0,
+							obj.barycentricCoordinatesBasedWireframeBindGroup
+						);
+						pass.draw(numVertices);
+					}
 				}
 			}
 		}
@@ -543,6 +568,8 @@ async function main(): Promise<void> {
 
 		const commandBuffer = encoder.finish();
 		device.queue.submit([commandBuffer]);
+
+		stats.end();
 	}
 
 	const observer = new ResizeObserver((entries) => {

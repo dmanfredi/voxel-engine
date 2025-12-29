@@ -50,6 +50,7 @@ function createCubeVertices() {
 		0,  1,  4,    4,  1,  5,   // bottom
 		2,  6,  3,    3,  6,  7,   // top
 	];
+
 	//prettier-ignore
 	const quadColors: number[] = [
 		200,  70, 120,  // left column front
@@ -58,22 +59,47 @@ function createCubeVertices() {
 		160, 160, 220,  // top rung right
 		90, 130, 110,  // top rung bottom
 		200, 200,  70,  // between top and middle rung
-  	];
+	];
+
+	//prettier-ignore
+	const uvs: number[] = [
+		// left face: indices 0, 2, 1, 2, 3, 1
+		0, 0,   0, 1,   1, 0,      0, 1,   1, 1,   1, 0,
+		// right face: indices 4, 5, 6, 6, 5, 7
+		1, 0,   0, 0,   1, 1,      1, 1,   0, 0,   0, 1,
+		// front face: indices 0, 4, 2, 2, 4, 6
+		0, 0,   1, 0,   0, 1,      0, 1,   1, 0,   1, 1,
+		// back face: indices 1, 3, 5, 5, 3, 7
+		1, 0,   1, 1,   0, 0,      0, 0,   1, 1,   0, 1,
+		// bottom face: indices 0, 1, 4, 4, 1, 5
+		0, 1,   0, 0,   1, 1,      1, 1,   0, 0,   1, 0,
+		// top face: indices 2, 6, 3, 3, 6, 7
+		0, 0,   1, 0,   0, 1,      0, 1,   1, 0,   1, 1,
+	];
 
 	const numVertices = indices.length;
-	const vertexData = new Float32Array(numVertices * 4); // xyz + color
+	const vertexData = new Float32Array(numVertices * 6); // xyz (3) + uv (2) + color (1)
 	const colorData = new Uint8Array(vertexData.buffer);
+
+	// Float index:   0     1     2     3       4       5
+	//              [ x ] [ y ] [ z ] [ uvx ] [ uvy ] [ rgba ]
+	// Byte offset:   0     4     8     12      16      20
+	//                                                [R][G][B][A]
+	//
 
 	for (const [i, index] of indices.entries()) {
 		const positionNdx = index * 3;
-
 		const posistion = positions.slice(positionNdx, positionNdx + 3);
-		vertexData.set(posistion, i * 4);
+		vertexData.set(posistion, i * 6);
+
+		const uvNdx = i * 2; // I think?
+		const uv = uvs.slice(uvNdx, uvNdx + 2);
+		vertexData.set(uv, i * 6 + 3);
 
 		const quadNdx = ((i / 6) | 0) * 3;
 		const color = quadColors.slice(quadNdx, quadNdx + 3);
-		colorData.set(color, i * 16 + 12); // Set RGB
-		colorData[i * 16 + 15] = 255; // Set A
+		colorData.set(color, i * 24 + 20); // Set RGB
+		colorData[i * 24 + 25] = 255; // Set A
 	}
 
 	return {

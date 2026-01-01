@@ -3,7 +3,7 @@
 const WireframeShader = /*wgsl*/ `
 	struct Uniforms { 
 		matrix: mat4x4f
-	 }
+	}
 
 	@group(0) @binding(0) var<uniform> uni: Uniforms;
 	@group(0) @binding(1) var<storage, read> positions: array<f32>;
@@ -18,7 +18,7 @@ const WireframeShader = /*wgsl*/ `
 	) -> BarycentricCoordinateBasedVSOutput {
 		let vertNdx = vNdx % 3u;
 
-		let pNdx = vNdx * 4u; // <-- expanded vertex list
+		let pNdx = vNdx * 6u; // <-- expanded vertex list
 		let position = vec4f(positions[pNdx], positions[pNdx + 1u], positions[pNdx + 2u], 1.0);
 
 		var out: BarycentricCoordinateBasedVSOutput;

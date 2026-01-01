@@ -291,17 +291,18 @@ async function main(): Promise<void> {
 	});
 
 	const pipeline = device.createRenderPipeline({
-		label: '2 attributes',
+		label: '3 attributes',
 		layout: 'auto',
 		vertex: {
 			module,
 			entryPoint: 'vs',
 			buffers: [
 				{
-					arrayStride: 4 * 4, // (3) floats 4 bytes each+ one 4 byte color
+					arrayStride: (3 + 2 + 1) * 4, // pos , uv, color (4 bytes each)
 					attributes: [
 						{ shaderLocation: 0, offset: 0, format: 'float32x3' }, // posistion
-						{ shaderLocation: 1, offset: 12, format: 'unorm8x4' }, // color
+						{ shaderLocation: 1, offset: 12, format: 'float32x3' }, // uv
+						{ shaderLocation: 2, offset: 20, format: 'unorm8x4' }, // color
 					],
 				},
 			],

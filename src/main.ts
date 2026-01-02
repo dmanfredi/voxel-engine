@@ -64,17 +64,17 @@ function createCubeVertices() {
 	//prettier-ignore
 	const uvs: number[] = [
 		// left face: indices 0, 2, 1, 2, 3, 1
-		0, 0,   0, 1,   1, 0,      0, 1,   1, 1,   1, 0,
+		 0, 1,   0, 0,   1, 1,      0, 0,   1, 0,   1, 1,
 		// right face: indices 4, 5, 6, 6, 5, 7
-		1, 0,   0, 0,   1, 1,      1, 1,   0, 0,   0, 1,
+		1, 1,   0, 1,   1, 0,      1, 0,   0, 1,   0, 0,
 		// front face: indices 0, 4, 2, 2, 4, 6
-		0, 0,   1, 0,   0, 1,      0, 1,   1, 0,   1, 1,
+		 0, 1,   1, 1,   0, 0,      0, 0,   1, 1,   1, 0,
 		// back face: indices 1, 3, 5, 5, 3, 7
-		1, 0,   1, 1,   0, 0,      0, 0,   1, 1,   0, 1,
+		 1, 1,   1, 0,   0, 1,      0, 1,   1, 0,   0, 0,
 		// bottom face: indices 0, 1, 4, 4, 1, 5
-		0, 1,   0, 0,   1, 1,      1, 1,   0, 0,   1, 0,
+		 0, 0,   0, 1,   1, 0,      1, 0,   0, 1,   1, 1,
 		// top face: indices 2, 6, 3, 3, 6, 7
-		0, 0,   1, 0,   0, 1,      0, 1,   1, 0,   1, 1,
+		 0, 1,   1, 1,   0, 0,      0, 0,   1, 1,   1, 0,
 	];
 
 	const numVertices = indices.length;
@@ -99,7 +99,7 @@ function createCubeVertices() {
 		const quadNdx = ((i / 6) | 0) * 3;
 		const color = quadColors.slice(quadNdx, quadNdx + 3);
 		colorData.set(color, i * 24 + 20); // Set RGB
-		colorData[i * 24 + 25] = 255; // Set A
+		colorData[i * 24 + 23] = 255; // set Alpha
 	}
 
 	return {
@@ -265,10 +265,6 @@ async function main(): Promise<void> {
 		tick(t);
 	});
 
-	// if (keysDown.size) {
-	// 	tick();
-	// }
-
 	// ============================================
 	// MOVEMENT END
 	// ============================================
@@ -301,7 +297,7 @@ async function main(): Promise<void> {
 					arrayStride: (3 + 2 + 1) * 4, // pos , uv, color (4 bytes each)
 					attributes: [
 						{ shaderLocation: 0, offset: 0, format: 'float32x3' }, // posistion
-						{ shaderLocation: 1, offset: 12, format: 'float32x3' }, // uv
+						{ shaderLocation: 1, offset: 12, format: 'float32x2' }, // uv
 						{ shaderLocation: 2, offset: 20, format: 'unorm8x4' }, // color
 					],
 				},
@@ -368,6 +364,29 @@ async function main(): Promise<void> {
 	const numCubes = 4096;
 	const { vertexData, numVertices, indices } = createCubeVertices();
 
+	const response = await fetch('../assets/bitey1.jpg');
+	const imageBitmap = await createImageBitmap(await response.blob());
+
+	const cubeTexture: GPUTexture = device.createTexture({
+		size: [imageBitmap.width, imageBitmap.height, 1],
+		format: 'rgba8unorm',
+		usage:
+			GPUTextureUsage.TEXTURE_BINDING |
+			GPUTextureUsage.COPY_DST |
+			GPUTextureUsage.RENDER_ATTACHMENT,
+	});
+	device.queue.copyExternalImageToTexture(
+		{ source: imageBitmap },
+		{ texture: cubeTexture },
+		[imageBitmap.width, imageBitmap.height]
+	);
+
+	// Create a sampler with linear filtering for smooth interpolation.
+	const sampler = device.createSampler({
+		magFilter: 'linear',
+		minFilter: 'linear',
+	});
+
 	const objectInfos: {
 		uniformBuffer: GPUBuffer;
 		indexBuffer: GPUBuffer;
@@ -420,8 +439,8 @@ async function main(): Promise<void> {
 			layout: pipeline.getBindGroupLayout(0),
 			entries: [
 				{ binding: 0, resource: { buffer: uniformBuffer } },
-				// { binding: 1, resource: { buffer: vertexBuffer } },
-				// { binding: 2, resource: { buffer: indexBuffer } },
+				{ binding: 1, resource: sampler },
+				{ binding: 2, resource: cubeTexture.createView() },
 			],
 		});
 

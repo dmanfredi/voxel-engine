@@ -26,21 +26,22 @@ if (!navigator.gpu) {
 	throw new Error('WebGPU not supported on this browser.');
 }
 
-const CUBE_SIZE = 10;
+const BLOCK_SIZE = 10;
+const blocks = buildBlocks();
 function createCubeVertices() {
 	//prettier-ignore
 	const positions: number[] = [
 		// left
 		0, 0,  0,
-		0, 0, -CUBE_SIZE,
-		0, CUBE_SIZE,  0,
-		0, CUBE_SIZE, -CUBE_SIZE,
+		0, 0, -BLOCK_SIZE,
+		0, BLOCK_SIZE,  0,
+		0, BLOCK_SIZE, -BLOCK_SIZE,
 	
 		// right
-		CUBE_SIZE, 0,  0,
-		CUBE_SIZE, 0, -CUBE_SIZE,
-		CUBE_SIZE, CUBE_SIZE,  0,
-		CUBE_SIZE, CUBE_SIZE, -CUBE_SIZE,
+		BLOCK_SIZE, 0,  0,
+		BLOCK_SIZE, 0, -BLOCK_SIZE,
+		BLOCK_SIZE, BLOCK_SIZE,  0,
+		BLOCK_SIZE, BLOCK_SIZE, -BLOCK_SIZE,
 	];
 
 	//prettier-ignore
@@ -503,8 +504,6 @@ async function main(): Promise<void> {
 		}
 	}
 
-	const blocks = buildBlocks();
-
 	BuildDebug(render);
 	function render(): void {
 		stats.begin();
@@ -560,9 +559,9 @@ async function main(): Promise<void> {
 		blocks.forEach((layer, layerNdx) => {
 			layer.forEach((row, rowNdx) => {
 				row.forEach((col, colNdx) => {
-					const x = colNdx * CUBE_SIZE;
-					const z = rowNdx * CUBE_SIZE;
-					const y = layerNdx * CUBE_SIZE;
+					const x = colNdx * BLOCK_SIZE;
+					const z = rowNdx * BLOCK_SIZE;
+					const y = layerNdx * BLOCK_SIZE;
 
 					const index =
 						layerNdx * layer.length * row.length +

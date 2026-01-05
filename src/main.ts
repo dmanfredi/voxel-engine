@@ -508,6 +508,7 @@ async function main(): Promise<void> {
 	function render(): void {
 		stats.begin();
 		renderRequestId = 0;
+		debuggerParams.vertices = 0;
 
 		if (canvas === null) throw new Error('No canvas found!');
 		// Get the current texture from the canvas context and
@@ -590,6 +591,7 @@ async function main(): Promise<void> {
 
 					pass.setBindGroup(0, bindGroup);
 					pass.draw(numVertices);
+					debuggerParams.vertices += numVertices;
 				});
 			});
 		});

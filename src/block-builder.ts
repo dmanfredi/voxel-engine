@@ -16,6 +16,9 @@ function create3DArray(
 		)
 	);
 }
+
+
+
 function buildBlocks() {
 	const blocks = create3DArray(layers, rows, columns, new Block());
 	return blocks;

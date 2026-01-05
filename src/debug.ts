@@ -7,12 +7,18 @@ document.body.appendChild(stats.dom);
 
 export const debuggerParams = {
 	wireframe: false,
+	vertices: 0,
 };
 
 export function BuildDebug(render: () => void): void {
 	const pane = new Pane({ title: 'Debug' });
 	const wireframeBinding = pane.addBinding(debuggerParams, 'wireframe', {
 		label: 'Wireframe',
+	});
+	pane.addBinding(debuggerParams, 'vertices', {
+		readonly: true,
+		label: 'Vertices',
+		format: (v) => v.toFixed(0),
 	});
 
 	wireframeBinding.on('change', () => {

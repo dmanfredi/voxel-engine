@@ -3,6 +3,7 @@ import MainShader from './shader';
 import WireframeShader from './wireframe';
 
 import { BuildDebug, debuggerParams, stats } from './debug';
+import buildBlocks from './block-builder';
 
 // Practical TODO
 
@@ -25,20 +26,21 @@ if (!navigator.gpu) {
 	throw new Error('WebGPU not supported on this browser.');
 }
 
+const CUBE_SIZE = 10;
 function createCubeVertices() {
 	//prettier-ignore
 	const positions: number[] = [
 		// left
 		0, 0,  0,
-		0, 0, -10,
-		0, 10,  0,
-		0, 10, -10,
+		0, 0, -CUBE_SIZE,
+		0, CUBE_SIZE,  0,
+		0, CUBE_SIZE, -CUBE_SIZE,
 	
 		// right
-		10, 0,  0,
-		10, 0, -10,
-		10, 10,  0,
-		10, 10, -10,
+		CUBE_SIZE, 0,  0,
+		CUBE_SIZE, 0, -CUBE_SIZE,
+		CUBE_SIZE, CUBE_SIZE,  0,
+		CUBE_SIZE, CUBE_SIZE, -CUBE_SIZE,
 	];
 
 	//prettier-ignore
@@ -364,7 +366,7 @@ async function main(): Promise<void> {
 	const numCubes = 4096;
 	const { vertexData, numVertices, indices } = createCubeVertices();
 
-	const response = await fetch('../assets/bitey1.jpg');
+	const response = await fetch('../assets/dirt.png');
 	const imageBitmap = await createImageBitmap(await response.blob());
 
 	const cubeTexture: GPUTexture = device.createTexture({
@@ -381,10 +383,11 @@ async function main(): Promise<void> {
 		[imageBitmap.width, imageBitmap.height]
 	);
 
-	// Create a sampler with linear filtering for smooth interpolation.
+	// nearest filtering for crisp pixel-art textures.
+	// linear for blurring stuff together
 	const sampler = device.createSampler({
-		magFilter: 'linear',
-		minFilter: 'linear',
+		magFilter: 'nearest',
+		minFilter: 'nearest',
 	});
 
 	const objectInfos: {
@@ -500,6 +503,8 @@ async function main(): Promise<void> {
 		}
 	}
 
+	const blocks = buildBlocks();
+
 	BuildDebug(render);
 	function render(): void {
 		stats.begin();
@@ -552,30 +557,28 @@ async function main(): Promise<void> {
 		// Compute the view projection matrix
 		const viewProjectionMatrix = mat4.multiply(projection, viewMatrix);
 
-		const width = 16;
-		const depth = 16;
-		const height = 16;
-		const spacing = 10;
-		for (let row = 0; row < depth; row++) {
-			for (let col = 0; col < width; col++) {
-				for (let lay = 0; lay < height; lay++) {
-					// Calculate 3D array index: layer * (width * depth) + row * width + col
-					const layerOffset = lay * (width * depth); // Skip complete layers
-					const rowOffset = row * width; // Skip rows in current layer
-					const i = layerOffset + rowOffset + col; // Final flat array index
+		blocks.forEach((layer, layerNdx) => {
+			layer.forEach((row, rowNdx) => {
+				row.forEach((col, colNdx) => {
+					const x = colNdx * CUBE_SIZE;
+					const z = rowNdx * CUBE_SIZE;
+					const y = layerNdx * CUBE_SIZE;
 
-					const obj = objectInfos[i];
-					if (!obj) continue;
+					const index =
+						layerNdx * layer.length * row.length +
+						rowNdx * row.length +
+						colNdx;
+
+					const obj = objectInfos[index];
+
+					if (!obj) return;
+
 					const {
 						uniformBuffer,
 						uniformValues,
 						matrixValue,
 						bindGroup,
 					} = obj;
-
-					const x = col * spacing;
-					const z = row * spacing;
-					const y = lay * spacing;
 
 					mat4.translate(
 						viewProjectionMatrix,
@@ -588,31 +591,68 @@ async function main(): Promise<void> {
 
 					pass.setBindGroup(0, bindGroup);
 					pass.draw(numVertices);
-				}
-			}
-		}
+				});
+			});
+		});
+
+		// for (let row = 0; row < depth; row++) {
+		// 	for (let col = 0; col < width; col++) {
+		// 		for (let lay = 0; lay < height; lay++) {
+		// 			// Calculate 3D array index: layer * (width * depth) + row * width + col
+		// 			const layerOffset = lay * (width * depth); // Skip complete layers
+		// 			const rowOffset = row * width; // Skip rows in current layer
+		// 			const i = layerOffset + rowOffset + col; // Final flat array index
+
+		// 			const obj = objectInfos[i];
+		// 			if (!obj) continue;
+		// 			const {
+		// 				uniformBuffer,
+		// 				uniformValues,
+		// 				matrixValue,
+		// 				bindGroup,
+		// 			} = obj;
+
+		// 			const x = col * CUBE_SIZE;
+		// 			const z = row * CUBE_SIZE;
+		// 			const y = lay * CUBE_SIZE;
+
+		// 			mat4.translate(
+		// 				viewProjectionMatrix,
+		// 				[x, y, z],
+		// 				matrixValue
+		// 			);
+
+		// 			// upload the uniform values to the uniform buffer
+		// 			device.queue.writeBuffer(uniformBuffer, 0, uniformValues);
+
+		// 			pass.setBindGroup(0, bindGroup);
+		// 			pass.draw(numVertices);
+		// 		}
+		// 	}
+		// }
 
 		// Draw wireframes
 		if (debuggerParams.wireframe) {
 			pass.setPipeline(barycentricCoordinatesBasedWireframePipeline);
-			for (let row = 0; row < depth; row++) {
-				for (let col = 0; col < width; col++) {
-					for (let lay = 0; lay < height; lay++) {
-						// Calculate 3D array index: layer * (width * depth) + row * width + col
-						const layerOffset = lay * (width * depth); // Skip complete layers
-						const rowOffset = row * width; // Skip rows in current layer
-						const i = layerOffset + rowOffset + col; // Final flat array index
-						const obj = objectInfos[i];
-						if (!obj) continue;
+			blocks.forEach((layer, layerNdx) => {
+				layer.forEach((row, rowNdx) => {
+					row.forEach((col, colNdx) => {
+						const index =
+							layerNdx * layer.length * row.length +
+							rowNdx * row.length +
+							colNdx;
+
+						const obj = objectInfos[index];
+						if (!obj) return;
 
 						pass.setBindGroup(
 							0,
 							obj.barycentricCoordinatesBasedWireframeBindGroup
 						);
 						pass.draw(numVertices);
-					}
-				}
-			}
+					});
+				});
+			});
 		}
 
 		pass.end();

@@ -595,42 +595,6 @@ async function main(): Promise<void> {
 			});
 		});
 
-		// for (let row = 0; row < depth; row++) {
-		// 	for (let col = 0; col < width; col++) {
-		// 		for (let lay = 0; lay < height; lay++) {
-		// 			// Calculate 3D array index: layer * (width * depth) + row * width + col
-		// 			const layerOffset = lay * (width * depth); // Skip complete layers
-		// 			const rowOffset = row * width; // Skip rows in current layer
-		// 			const i = layerOffset + rowOffset + col; // Final flat array index
-
-		// 			const obj = objectInfos[i];
-		// 			if (!obj) continue;
-		// 			const {
-		// 				uniformBuffer,
-		// 				uniformValues,
-		// 				matrixValue,
-		// 				bindGroup,
-		// 			} = obj;
-
-		// 			const x = col * CUBE_SIZE;
-		// 			const z = row * CUBE_SIZE;
-		// 			const y = lay * CUBE_SIZE;
-
-		// 			mat4.translate(
-		// 				viewProjectionMatrix,
-		// 				[x, y, z],
-		// 				matrixValue
-		// 			);
-
-		// 			// upload the uniform values to the uniform buffer
-		// 			device.queue.writeBuffer(uniformBuffer, 0, uniformValues);
-
-		// 			pass.setBindGroup(0, bindGroup);
-		// 			pass.draw(numVertices);
-		// 		}
-		// 	}
-		// }
-
 		// Draw wireframes
 		if (debuggerParams.wireframe) {
 			pass.setPipeline(barycentricCoordinatesBasedWireframePipeline);

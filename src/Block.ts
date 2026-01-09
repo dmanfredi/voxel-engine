@@ -1,9 +1,11 @@
-const DIRT = 'DIRT';
+type BlockType = string;
+export const NOTHING: BlockType = 'NOTHING';
+export const DIRT: BlockType = 'DIRT';
 
 class Block {
 	type: string;
-	constructor() {
-		this.type = DIRT;
+	constructor(type: BlockType) {
+		this.type = type;
 	}
 }
 

@@ -3,20 +3,15 @@ import MainShader from './shader';
 import WireframeShader from './wireframe';
 
 import { BuildDebug, debuggerParams, stats } from './debug';
-import buildBlocks from './block-builder';
+import buildBlocks, { NUM_BLOCKS } from './block-builder';
+import { NOTHING } from './Block';
 
 // Practical TODO
 
-// FPS counter
-// -> WITH TWEAKPANE
-// -> VERTICE COUNT
-// -^ maybe later
-// reorganize code a little
-
-// block class
-// textured cubes
-// greedy mesh man
-// how tf is that shit working
+// different blocks with different textures
+// objectInfos probably needs to change here. but how?
+// perlin noise generation
+// greedy meshing
 
 // TODO OF SORTS?
 // instancing?
@@ -364,7 +359,6 @@ async function main(): Promise<void> {
 			},
 		});
 
-	const numCubes = 4096;
 	const { vertexData, numVertices, indices } = createCubeVertices();
 
 	const response = await fetch('../assets/dirt.png');
@@ -400,7 +394,7 @@ async function main(): Promise<void> {
 		bindGroup: GPUBindGroup;
 		barycentricCoordinatesBasedWireframeBindGroup: GPUBindGroup;
 	}[] = [];
-	for (let i = 0; i < numCubes; i++) {
+	for (let i = 0; i < NUM_BLOCKS; i++) {
 		// matrix
 		const uniformBufferSize = 16 * 4;
 		const uniformBuffer = device.createBuffer({
@@ -559,7 +553,7 @@ async function main(): Promise<void> {
 
 		blocks.forEach((layer, layerNdx) => {
 			layer.forEach((row, rowNdx) => {
-				row.forEach((col, colNdx) => {
+				row.forEach((block, colNdx) => {
 					const x = colNdx * BLOCK_SIZE;
 					const z = rowNdx * BLOCK_SIZE;
 					const y = layerNdx * BLOCK_SIZE;
@@ -571,7 +565,7 @@ async function main(): Promise<void> {
 
 					const obj = objectInfos[index];
 
-					if (!obj) return;
+					if (!obj || !block || block.type === NOTHING) return;
 
 					const {
 						uniformBuffer,
@@ -602,7 +596,7 @@ async function main(): Promise<void> {
 			blocks.forEach((layer, layerNdx) => {
 				layer.forEach((row, rowNdx) => {
 					row.forEach((col, colNdx) => {
-						const index =
+						const index: number =
 							layerNdx * layer.length * row.length +
 							rowNdx * row.length +
 							colNdx;

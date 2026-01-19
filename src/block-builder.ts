@@ -5,10 +5,10 @@ const layers = 16;
 const rows = 16;
 const columns = 16;
 const noise = new (Noise as unknown as { Noise: typeof Noise }).Noise(
-	Math.random()
+	Math.random(),
 );
 
-const NOISE_FREQUENCY = 0.05;
+const NOISE_FREQUENCY = 0.1;
 
 function create3DArray(layers: number, rows: number, cols: number) {
 	return Array.from({ length: layers }, (_, y) =>
@@ -17,12 +17,12 @@ function create3DArray(layers: number, rows: number, cols: number) {
 				const value = noise.perlin3(
 					x * NOISE_FREQUENCY,
 					y * NOISE_FREQUENCY,
-					z * NOISE_FREQUENCY
+					z * NOISE_FREQUENCY,
 				);
 				console.log(value);
 				return new Block(value > 0 ? DIRT : NOTHING);
-			})
-		)
+			}),
+		),
 	);
 }
 

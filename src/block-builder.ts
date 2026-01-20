@@ -19,7 +19,7 @@ function create3DArray() {
 					y * NOISE_FREQUENCY,
 					z * NOISE_FREQUENCY,
 				);
-				return new Block(DIRT);
+				return new Block(value > 0 ? DIRT : NOTHING);
 			}),
 		),
 	);

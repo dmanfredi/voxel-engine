@@ -48,6 +48,8 @@ export function greedyMesh(
 		// UV dimensions for tiling
 		uvWidth: number;
 		uvHeight: number;
+		// Face direction: true = positive axis, false = negative axis
+		positiveFacing: boolean;
 	}[] = [];
 
 	// Dimension lookup helper - returns dimension for axis 0, 1, or 2
@@ -168,37 +170,18 @@ export function greedyMesh(
 						const dvy = dv[1] * blockSize;
 						const dvz = dv[2] * blockSize;
 
-						// Four corners of the quad
-						// Winding order depends on face direction for correct backface culling
-						if (maskVal > 0) {
-							// Positive direction face - counterclockwise when viewed from outside
-							quads.push({
-								v0: [wx, wy, wz],
-								v1: [wx + dux, wy + duy, wz + duz],
-								v2: [
-									wx + dux + dvx,
-									wy + duy + dvy,
-									wz + duz + dvz,
-								],
-								v3: [wx + dvx, wy + dvy, wz + dvz],
-								uvWidth: w,
-								uvHeight: h,
-							});
-						} else {
-							// Negative direction face - flip winding
-							quads.push({
-								v0: [wx, wy, wz],
-								v3: [wx + dux, wy + duy, wz + duz],
-								v2: [
-									wx + dux + dvx,
-									wy + duy + dvy,
-									wz + duz + dvz,
-								],
-								v1: [wx + dvx, wy + dvy, wz + dvz],
-								uvWidth: w,
-								uvHeight: h,
-							});
-						}
+						// Four corners of the quad (consistent vertex positions)
+						// v0 = origin, v1 = origin + du, v2 = origin + du + dv, v3 = origin + dv
+						// Winding order is handled during triangle generation based on positiveFacing
+						quads.push({
+							v0: [wx, wy, wz],
+							v1: [wx + dux, wy + duy, wz + duz],
+							v2: [wx + dux + dvx, wy + duy + dvy, wz + duz + dvz],
+							v3: [wx + dvx, wy + dvy, wz + dvz],
+							uvWidth: w,
+							uvHeight: h,
+							positiveFacing: maskVal > 0,
+						});
 
 						// Zero out the mask cells we just used
 						for (let l = 0; l < h; l++) {
@@ -232,26 +215,36 @@ export function greedyMesh(
 
 	let vertexOffset = 0;
 	for (const quad of quads) {
-		// Two triangles: (v0, v1, v2) and (v0, v2, v3)
 		// UVs are tiled based on quad dimensions
+		// v0 = origin (0, h), v1 = +du (w, h), v2 = +du+dv (w, 0), v3 = +dv (0, 0)
 		const uv0: [number, number] = [0, quad.uvHeight];
 		const uv1: [number, number] = [quad.uvWidth, quad.uvHeight];
 		const uv2: [number, number] = [quad.uvWidth, 0];
 		const uv3: [number, number] = [0, 0];
 
-		// Triangle 1: v0, v1, v2
-		// Triangle 2: v0, v2, v3
+		// Two triangles with winding order based on face direction
+		// Positive facing: (v0, v1, v2), (v0, v2, v3) - counterclockwise from front
+		// Negative facing: (v0, v2, v1), (v0, v3, v2) - reversed winding
 		const triangleData: {
 			pos: [number, number, number];
 			uv: [number, number];
-		}[] = [
-			{ pos: quad.v0, uv: uv0 },
-			{ pos: quad.v1, uv: uv1 },
-			{ pos: quad.v2, uv: uv2 },
-			{ pos: quad.v0, uv: uv0 },
-			{ pos: quad.v2, uv: uv2 },
-			{ pos: quad.v3, uv: uv3 },
-		];
+		}[] = quad.positiveFacing
+			? [
+					{ pos: quad.v0, uv: uv0 },
+					{ pos: quad.v1, uv: uv1 },
+					{ pos: quad.v2, uv: uv2 },
+					{ pos: quad.v0, uv: uv0 },
+					{ pos: quad.v2, uv: uv2 },
+					{ pos: quad.v3, uv: uv3 },
+				]
+			: [
+					{ pos: quad.v0, uv: uv0 },
+					{ pos: quad.v2, uv: uv2 },
+					{ pos: quad.v1, uv: uv1 },
+					{ pos: quad.v0, uv: uv0 },
+					{ pos: quad.v3, uv: uv3 },
+					{ pos: quad.v2, uv: uv2 },
+				];
 
 		for (const { pos, uv } of triangleData) {
 			// Position

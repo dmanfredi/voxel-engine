@@ -26,7 +26,7 @@ const blocks = buildBlocks();
 const { vertexData: meshVertexData, numVertices: meshNumVertices } = greedyMesh(
 	blocks,
 	[CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z],
-	BLOCK_SIZE
+	BLOCK_SIZE,
 );
 
 console.log(
@@ -34,7 +34,7 @@ console.log(
 		String(meshNumVertices) +
 		' vertices (was ' +
 		String(16 * 16 * 16 * 36) +
-		' = 147456 worst case)'
+		' = 147456 worst case)',
 );
 
 const degToRad = (d: number) => (d * Math.PI) / 180;
@@ -98,14 +98,14 @@ async function main(): Promise<void> {
 			const direction = vec3.create(
 				Math.cos(degToRad(cameraYaw)) * Math.cos(degToRad(cameraPitch)),
 				Math.sin(degToRad(cameraPitch)),
-				Math.sin(degToRad(cameraYaw)) * Math.cos(degToRad(cameraPitch))
+				Math.sin(degToRad(cameraYaw)) * Math.cos(degToRad(cameraPitch)),
 			);
 
 			vec3.normalize(direction, cameraFront);
 
 			requestRender();
 		},
-		false
+		false,
 	);
 
 	document.addEventListener('keydown', (e) => {
@@ -290,7 +290,7 @@ async function main(): Promise<void> {
 		});
 
 	// Load texture
-	const response = await fetch('../assets/dirt.png');
+	const response = await fetch('../assets/dirt-debug.png');
 	const imageBitmap = await createImageBitmap(await response.blob());
 
 	const cubeTexture: GPUTexture = device.createTexture({
@@ -304,14 +304,16 @@ async function main(): Promise<void> {
 	device.queue.copyExternalImageToTexture(
 		{ source: imageBitmap },
 		{ texture: cubeTexture },
-		[imageBitmap.width, imageBitmap.height]
+		[imageBitmap.width, imageBitmap.height],
 	);
 
 	// nearest filtering for crisp pixel-art textures.
-	// linear for blurring stuff together
+	// repeat mode for tiling across greedy-meshed quads
 	const sampler = device.createSampler({
 		magFilter: 'nearest',
 		minFilter: 'nearest',
+		addressModeU: 'repeat',
+		addressModeV: 'repeat',
 	});
 
 	// Single uniform buffer for the view-projection matrix
@@ -348,7 +350,9 @@ async function main(): Promise<void> {
 	// Wireframe bind group
 	const wireframeBindGroup = device.createBindGroup({
 		label: 'wireframe bindgroup',
-		layout: barycentricCoordinatesBasedWireframePipeline.getBindGroupLayout(0),
+		layout: barycentricCoordinatesBasedWireframePipeline.getBindGroupLayout(
+			0,
+		),
 		entries: [
 			{ binding: 0, resource: { buffer: uniformBuffer } },
 			{ binding: 1, resource: { buffer: vertexBuffer } },
@@ -422,13 +426,13 @@ async function main(): Promise<void> {
 			degToRad(60), // fieldOfView,
 			aspect,
 			1, // zNear
-			2000 // zFar
+			2000, // zFar
 		);
 
 		const viewMatrix = mat4.lookAt(
 			cameraPos,
 			vec3.add(cameraPos, cameraFront),
-			cameraUp
+			cameraUp,
 		);
 		// Compute the view projection matrix
 		const viewProjectionMatrix = mat4.multiply(projection, viewMatrix);
@@ -469,11 +473,11 @@ async function main(): Promise<void> {
 				: entry.contentRect.height;
 			canvas.width = Math.max(
 				1,
-				Math.min(width, device.limits.maxTextureDimension2D)
+				Math.min(width, device.limits.maxTextureDimension2D),
 			);
 			canvas.height = Math.max(
 				1,
-				Math.min(height, device.limits.maxTextureDimension2D)
+				Math.min(height, device.limits.maxTextureDimension2D),
 			);
 			// re-render
 			render();

@@ -29,14 +29,6 @@ const { vertexData: meshVertexData, numVertices: meshNumVertices } = greedyMesh(
 	BLOCK_SIZE,
 );
 
-console.log(
-	'Greedy mesh: ' +
-		String(meshNumVertices) +
-		' vertices (was ' +
-		String(16 * 16 * 16 * 36) +
-		' = 147456 worst case)',
-);
-
 const degToRad = (d: number) => (d * Math.PI) / 180;
 const up = vec3.create(0, 1, 0);
 
@@ -290,7 +282,7 @@ async function main(): Promise<void> {
 		});
 
 	// Load texture
-	const response = await fetch('../assets/dirt-debug.png');
+	const response = await fetch('../assets/dirt.png');
 	const imageBitmap = await createImageBitmap(await response.blob());
 
 	const cubeTexture: GPUTexture = device.createTexture({
@@ -426,7 +418,7 @@ async function main(): Promise<void> {
 			degToRad(60), // fieldOfView,
 			aspect,
 			1, // zNear
-			2000, // zFar
+			5000, // zFar
 		);
 
 		const viewMatrix = mat4.lookAt(

@@ -50,6 +50,8 @@ export function greedyMesh(
 		uvHeight: number;
 		// Face direction: true = positive axis, false = negative axis
 		positiveFacing: boolean;
+		// Which axis this face is perpendicular to (0=X, 1=Y, 2=Z)
+		axis: number;
 	}[] = [];
 
 	// Dimension lookup helper - returns dimension for axis 0, 1, or 2
@@ -181,6 +183,7 @@ export function greedyMesh(
 							uvWidth: w,
 							uvHeight: h,
 							positiveFacing: maskVal > 0,
+							axis,
 						});
 
 						// Zero out the mask cells we just used
@@ -216,11 +219,41 @@ export function greedyMesh(
 	let vertexOffset = 0;
 	for (const quad of quads) {
 		// UVs are tiled based on quad dimensions
-		// v0 = origin (0, h), v1 = +du (w, h), v2 = +du+dv (w, 0), v3 = +dv (0, 0)
-		const uv0: [number, number] = [0, quad.uvHeight];
-		const uv1: [number, number] = [quad.uvWidth, quad.uvHeight];
-		const uv2: [number, number] = [quad.uvWidth, 0];
-		const uv3: [number, number] = [0, 0];
+		// v0 = origin, v1 = +du, v2 = +du+dv, v3 = +dv
+		//
+		// For consistent texturing, we want world Y (up) to map to texture "up" (-V)
+		// on all vertical faces. The UV mapping depends on which axis the face is on:
+		//
+		// Axis 0 (X-facing, YZ plane): du=Y, dv=Z
+		//   - World Y should map to texture V (vertical)
+		//   - World Z should map to texture U (horizontal)
+		//   - So we swap: use uvHeight for U range, uvWidth for V range
+		//
+		// Axis 2 (Z-facing, XY plane): du=X, dv=Y
+		//   - World X maps to texture U, World Y maps to texture V
+		//   - This is already correct
+		//
+		// Axis 1 (Y-facing, horizontal): du=Z, dv=X
+		//   - Less noticeable, keep as-is
+		//
+		let uv0: [number, number];
+		let uv1: [number, number];
+		let uv2: [number, number];
+		let uv3: [number, number];
+
+		if (quad.axis === 0) {
+			// X-facing: rotate UVs so Y maps to texture vertical
+			uv0 = [0, quad.uvWidth];
+			uv1 = [0, 0];
+			uv2 = [quad.uvHeight, 0];
+			uv3 = [quad.uvHeight, quad.uvWidth];
+		} else {
+			// Default UV mapping for axis 1 and 2
+			uv0 = [0, quad.uvHeight];
+			uv1 = [quad.uvWidth, quad.uvHeight];
+			uv2 = [quad.uvWidth, 0];
+			uv3 = [0, 0];
+		}
 
 		// Two triangles with winding order based on face direction
 		// Positive facing: (v0, v1, v2), (v0, v2, v3) - counterclockwise from front

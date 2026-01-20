@@ -3,18 +3,16 @@ import MainShader from './shader';
 import WireframeShader from './wireframe';
 
 import { BuildDebug, debuggerParams, stats } from './debug';
-import buildBlocks, { NUM_BLOCKS } from './block-builder';
-import { NOTHING } from './Block';
+import buildBlocks, {
+	CHUNK_SIZE_X,
+	CHUNK_SIZE_Y,
+	CHUNK_SIZE_Z,
+} from './block-builder';
+import { greedyMesh } from './greedy-mesh';
 
 // Practical TODO
-
-// different blocks with different textures
-// objectInfos probably needs to change here. but how?
-// perlin noise generation
-// greedy meshing
-
-// TODO OF SORTS?
-// instancing?
+// - different blocks with different textures
+// - multiple chunks
 
 if (!navigator.gpu) {
 	alert('WebGPU not supported on this browser.');
@@ -23,89 +21,21 @@ if (!navigator.gpu) {
 
 const BLOCK_SIZE = 10;
 const blocks = buildBlocks();
-function createCubeVertices() {
-	//prettier-ignore
-	const positions: number[] = [
-		// left
-		0, 0,  0,
-		0, 0, -BLOCK_SIZE,
-		0, BLOCK_SIZE,  0,
-		0, BLOCK_SIZE, -BLOCK_SIZE,
-	
-		// right
-		BLOCK_SIZE, 0,  0,
-		BLOCK_SIZE, 0, -BLOCK_SIZE,
-		BLOCK_SIZE, BLOCK_SIZE,  0,
-		BLOCK_SIZE, BLOCK_SIZE, -BLOCK_SIZE,
-	];
 
-	//prettier-ignore
-	const indices: number[] = [
-		0,  2,  1,    2,  3,  1,   // left
-		4,  5,  6,    6,  5,  7,   // right
-		0,  4,  2,    2,  4,  6,   // front
-		1,  3,  5,    5,  3,  7,   // back
-		0,  1,  4,    4,  1,  5,   // bottom
-		2,  6,  3,    3,  6,  7,   // top
-	];
+// Generate optimized mesh using greedy meshing algorithm
+const { vertexData: meshVertexData, numVertices: meshNumVertices } = greedyMesh(
+	blocks,
+	[CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z],
+	BLOCK_SIZE
+);
 
-	//prettier-ignore
-	const quadColors: number[] = [
-		200,  70, 120,  // left column front
-		80,  70, 200,  // left column back
-		70, 200, 210,  // top
-		160, 160, 220,  // top rung right
-		90, 130, 110,  // top rung bottom
-		200, 200,  70,  // between top and middle rung
-	];
-
-	//prettier-ignore
-	const uvs: number[] = [
-		// left face: indices 0, 2, 1, 2, 3, 1
-		 0, 1,   0, 0,   1, 1,      0, 0,   1, 0,   1, 1,
-		// right face: indices 4, 5, 6, 6, 5, 7
-		1, 1,   0, 1,   1, 0,      1, 0,   0, 1,   0, 0,
-		// front face: indices 0, 4, 2, 2, 4, 6
-		 0, 1,   1, 1,   0, 0,      0, 0,   1, 1,   1, 0,
-		// back face: indices 1, 3, 5, 5, 3, 7
-		 1, 1,   1, 0,   0, 1,      0, 1,   1, 0,   0, 0,
-		// bottom face: indices 0, 1, 4, 4, 1, 5
-		 0, 0,   0, 1,   1, 0,      1, 0,   0, 1,   1, 1,
-		// top face: indices 2, 6, 3, 3, 6, 7
-		 0, 1,   1, 1,   0, 0,      0, 0,   1, 1,   1, 0,
-	];
-
-	const numVertices = indices.length;
-	const vertexData = new Float32Array(numVertices * 6); // xyz (3) + uv (2) + color (1)
-	const colorData = new Uint8Array(vertexData.buffer);
-
-	// Float index:   0     1     2     3       4       5
-	//              [ x ] [ y ] [ z ] [ uvx ] [ uvy ] [ rgba ]
-	// Byte offset:   0     4     8     12      16      20
-	//                                                [R][G][B][A]
-	//
-
-	for (const [i, index] of indices.entries()) {
-		const positionNdx = index * 3;
-		const posistion = positions.slice(positionNdx, positionNdx + 3);
-		vertexData.set(posistion, i * 6);
-
-		const uvNdx = i * 2; // I think?
-		const uv = uvs.slice(uvNdx, uvNdx + 2);
-		vertexData.set(uv, i * 6 + 3);
-
-		const quadNdx = ((i / 6) | 0) * 3;
-		const color = quadColors.slice(quadNdx, quadNdx + 3);
-		colorData.set(color, i * 24 + 20); // Set RGB
-		colorData[i * 24 + 23] = 255; // set Alpha
-	}
-
-	return {
-		vertexData,
-		numVertices,
-		indices: new Uint32Array(indices),
-	};
-}
+console.log(
+	'Greedy mesh: ' +
+		String(meshNumVertices) +
+		' vertices (was ' +
+		String(16 * 16 * 16 * 36) +
+		' = 147456 worst case)'
+);
 
 const degToRad = (d: number) => (d * Math.PI) / 180;
 const up = vec3.create(0, 1, 0);
@@ -359,8 +289,7 @@ async function main(): Promise<void> {
 			},
 		});
 
-	const { vertexData, numVertices, indices } = createCubeVertices();
-
+	// Load texture
 	const response = await fetch('../assets/dirt.png');
 	const imageBitmap = await createImageBitmap(await response.blob());
 
@@ -385,93 +314,46 @@ async function main(): Promise<void> {
 		minFilter: 'nearest',
 	});
 
-	const objectInfos: {
-		uniformBuffer: GPUBuffer;
-		indexBuffer: GPUBuffer;
-		vertexBuffer: GPUBuffer;
-		uniformValues: Float32Array<ArrayBuffer>;
-		matrixValue: Float32Array<ArrayBuffer>;
-		bindGroup: GPUBindGroup;
-		barycentricCoordinatesBasedWireframeBindGroup: GPUBindGroup;
-	}[] = [];
-	for (let i = 0; i < NUM_BLOCKS; i++) {
-		// matrix
-		const uniformBufferSize = 16 * 4;
-		const uniformBuffer = device.createBuffer({
-			label: 'uniforms',
-			size: uniformBufferSize,
-			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-		});
-		const uniformValues = new Float32Array(uniformBufferSize / 4);
-
-		// offsets to the various uniform values in float32 indices
-		const kMatrixOffset = 0;
-		const matrixValue = uniformValues.subarray(
-			kMatrixOffset,
-			kMatrixOffset + 16
-		);
-
-		const vertexBuffer = device.createBuffer({
-			label: 'vertexUni',
-			size: vertexData.byteLength,
-			usage:
-				GPUBufferUsage.VERTEX |
-				GPUBufferUsage.STORAGE |
-				GPUBufferUsage.COPY_DST,
-		});
-
-		const indexBuffer = device.createBuffer({
-			label: 'vertexUni',
-			size: indices.byteLength,
-			usage:
-				GPUBufferUsage.INDEX |
-				GPUBufferUsage.STORAGE |
-				GPUBufferUsage.COPY_DST,
-		});
-
-		device.queue.writeBuffer(vertexBuffer, 0, vertexData);
-		device.queue.writeBuffer(indexBuffer, 0, indices);
-
-		const bindGroup = device.createBindGroup({
-			label: 'bind group for object',
-			layout: pipeline.getBindGroupLayout(0),
-			entries: [
-				{ binding: 0, resource: { buffer: uniformBuffer } },
-				{ binding: 1, resource: sampler },
-				{ binding: 2, resource: cubeTexture.createView() },
-			],
-		});
-
-		const barycentricCoordinatesBasedWireframeBindGroup =
-			device.createBindGroup({
-				label: 'the other bindgroup for wireframes',
-				layout: barycentricCoordinatesBasedWireframePipeline.getBindGroupLayout(
-					0
-				),
-				entries: [
-					{ binding: 0, resource: { buffer: uniformBuffer } },
-					{ binding: 1, resource: { buffer: vertexBuffer } },
-					// { binding: 2, resource: { buffer: indexBuffer } },
-				],
-			});
-
-		objectInfos.push({
-			uniformBuffer,
-			indexBuffer,
-			vertexBuffer,
-			uniformValues,
-			matrixValue,
-			bindGroup,
-			barycentricCoordinatesBasedWireframeBindGroup,
-		});
-	}
-
-	const vertexBuffer = device.createBuffer({
-		label: 'vertex buffer vertices',
-		size: vertexData.byteLength,
-		usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+	// Single uniform buffer for the view-projection matrix
+	const uniformBufferSize = 16 * 4; // mat4x4
+	const uniformBuffer = device.createBuffer({
+		label: 'uniforms',
+		size: uniformBufferSize,
+		usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 	});
-	device.queue.writeBuffer(vertexBuffer, 0, vertexData);
+	const uniformValues = new Float32Array(uniformBufferSize / 4);
+
+	// Single vertex buffer for the entire greedy-meshed chunk
+	const vertexBuffer = device.createBuffer({
+		label: 'greedy mesh vertex buffer',
+		size: meshVertexData.byteLength,
+		usage:
+			GPUBufferUsage.VERTEX |
+			GPUBufferUsage.STORAGE |
+			GPUBufferUsage.COPY_DST,
+	});
+	device.queue.writeBuffer(vertexBuffer, 0, meshVertexData);
+
+	// Single bind group for the entire chunk
+	const bindGroup = device.createBindGroup({
+		label: 'bind group for chunk',
+		layout: pipeline.getBindGroupLayout(0),
+		entries: [
+			{ binding: 0, resource: { buffer: uniformBuffer } },
+			{ binding: 1, resource: sampler },
+			{ binding: 2, resource: cubeTexture.createView() },
+		],
+	});
+
+	// Wireframe bind group
+	const wireframeBindGroup = device.createBindGroup({
+		label: 'wireframe bindgroup',
+		layout: barycentricCoordinatesBasedWireframePipeline.getBindGroupLayout(0),
+		entries: [
+			{ binding: 0, resource: { buffer: uniformBuffer } },
+			{ binding: 1, resource: { buffer: vertexBuffer } },
+		],
+	});
 
 	let depthTexture: GPUTexture;
 
@@ -551,67 +433,20 @@ async function main(): Promise<void> {
 		// Compute the view projection matrix
 		const viewProjectionMatrix = mat4.multiply(projection, viewMatrix);
 
-		blocks.forEach((layer, layerNdx) => {
-			layer.forEach((row, rowNdx) => {
-				row.forEach((block, colNdx) => {
-					const x = colNdx * BLOCK_SIZE;
-					const z = rowNdx * BLOCK_SIZE;
-					const y = layerNdx * BLOCK_SIZE;
+		// Upload the view-projection matrix (positions are baked into the mesh)
+		uniformValues.set(viewProjectionMatrix);
+		device.queue.writeBuffer(uniformBuffer, 0, uniformValues);
 
-					const index =
-						layerNdx * layer.length * row.length +
-						rowNdx * row.length +
-						colNdx;
-
-					const obj = objectInfos[index];
-
-					if (!obj || !block || block.type === NOTHING) return;
-
-					const {
-						uniformBuffer,
-						uniformValues,
-						matrixValue,
-						bindGroup,
-					} = obj;
-
-					mat4.translate(
-						viewProjectionMatrix,
-						[x, y, z],
-						matrixValue
-					);
-
-					// upload the uniform values to the uniform buffer
-					device.queue.writeBuffer(uniformBuffer, 0, uniformValues);
-
-					pass.setBindGroup(0, bindGroup);
-					pass.draw(numVertices);
-					debuggerParams.vertices += numVertices;
-				});
-			});
-		});
+		// Single draw call for the entire greedy-meshed chunk
+		pass.setBindGroup(0, bindGroup);
+		pass.draw(meshNumVertices);
+		debuggerParams.vertices = meshNumVertices;
 
 		// Draw wireframes
 		if (debuggerParams.wireframe) {
 			pass.setPipeline(barycentricCoordinatesBasedWireframePipeline);
-			blocks.forEach((layer, layerNdx) => {
-				layer.forEach((row, rowNdx) => {
-					row.forEach((col, colNdx) => {
-						const index: number =
-							layerNdx * layer.length * row.length +
-							rowNdx * row.length +
-							colNdx;
-
-						const obj = objectInfos[index];
-						if (!obj) return;
-
-						pass.setBindGroup(
-							0,
-							obj.barycentricCoordinatesBasedWireframeBindGroup
-						);
-						pass.draw(numVertices);
-					});
-				});
-			});
+			pass.setBindGroup(0, wireframeBindGroup);
+			pass.draw(meshNumVertices);
 		}
 
 		pass.end();

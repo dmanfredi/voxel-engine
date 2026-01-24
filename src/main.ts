@@ -299,7 +299,7 @@ async function main(): Promise<void> {
 		[imageBitmap.width, imageBitmap.height],
 	);
 
-	// nearest filtering for crisp pixel-art textures.
+	// nearest filtering for crisp textures.
 	// repeat mode for tiling across greedy-meshed quads
 	const sampler = device.createSampler({
 		magFilter: 'nearest',

@@ -9,36 +9,36 @@ async function buildSkybox(
 ): Promise<void> {
 	const skyboxModule = device.createShaderModule({
 		code: /* wgsl */ `
-      struct Uniforms {
-        viewDirectionProjectionInverse: mat4x4f,
-      };
+			struct Uniforms {
+				viewDirectionProjectionInverse: mat4x4f,
+			};
 
-      struct VSOutput {
-        @builtin(position) position: vec4f,
-        @location(0) pos: vec4f,
-      };
+			struct VSOutput {
+				@builtin(position) position: vec4f,
+				@location(0) pos: vec4f,
+			};
 
-      @group(0) @binding(0) var<uniform> uni: Uniforms;
-      @group(0) @binding(1) var ourSampler: sampler;
-      @group(0) @binding(2) var ourTexture: texture_cube<f32>;
+			@group(0) @binding(0) var<uniform> uni: Uniforms;
+			@group(0) @binding(1) var ourSampler: sampler;
+			@group(0) @binding(2) var ourTexture: texture_cube<f32>;
 
-      @vertex fn vs(@builtin(vertex_index) vNdx: u32) -> VSOutput {
-        let pos = array(
-          vec2f(-1, 3),
-          vec2f(-1,-1),
-          vec2f( 3,-1),
-        );
-        var vsOut: VSOutput;
-        vsOut.position = vec4f(pos[vNdx], 1, 1);
-        vsOut.pos = vsOut.position;
-        return vsOut;
-      }
+			@vertex fn vs(@builtin(vertex_index) vNdx: u32) -> VSOutput {
+				let pos = array(
+				vec2f(-1, 3),
+				vec2f(-1,-1),
+				vec2f( 3,-1),
+				);
+				var vsOut: VSOutput;
+				vsOut.position = vec4f(pos[vNdx], 1, 1);
+				vsOut.pos = vsOut.position;
+				return vsOut;
+			}
 
-      @fragment fn fs(vsOut: VSOutput) -> @location(0) vec4f {
-        let t = uni.viewDirectionProjectionInverse * vsOut.pos;
-        return textureSample(ourTexture, ourSampler, normalize(t.xyz / t.w) * vec3f(1, 1, -1));
-      }
-    `,
+			@fragment fn fs(vsOut: VSOutput) -> @location(0) vec4f {
+				let t = uni.viewDirectionProjectionInverse * vsOut.pos;
+				return textureSample(ourTexture, ourSampler, normalize(t.xyz / t.w) * vec3f(1, 1, -1));
+			}
+   	 	`,
 	});
 
 	const skyboxPipeline = device.createRenderPipeline({
@@ -118,40 +118,40 @@ async function buildSkybox(
 				module = device.createShaderModule({
 					label: 'textured quad shaders for mip level generation',
 					code: /* wgsl */ `
-            struct VSOutput {
-              @builtin(position) position: vec4f,
-              @location(0) texcoord: vec2f,
-            };
+						struct VSOutput {
+							@builtin(position) position: vec4f,
+							@location(0) texcoord: vec2f,
+						};
 
-            @vertex fn vs(
-              @builtin(vertex_index) vertexIndex : u32
-            ) -> VSOutput {
-              let pos = array(
+						@vertex fn vs(
+						@builtin(vertex_index) vertexIndex : u32
+						) -> VSOutput {
+							let pos = array(
+								
+								vec2f( 0.0,  0.0),  // center
+								vec2f( 1.0,  0.0),  // right, center
+								vec2f( 0.0,  1.0),  // center, top
 
-                vec2f( 0.0,  0.0),  // center
-                vec2f( 1.0,  0.0),  // right, center
-                vec2f( 0.0,  1.0),  // center, top
+								// 2st triangle
+								vec2f( 0.0,  1.0),  // center, top
+								vec2f( 1.0,  0.0),  // right, center
+								vec2f( 1.0,  1.0),  // right, top
+							);
 
-                // 2st triangle
-                vec2f( 0.0,  1.0),  // center, top
-                vec2f( 1.0,  0.0),  // right, center
-                vec2f( 1.0,  1.0),  // right, top
-              );
+							var vsOutput: VSOutput;
+							let xy = pos[vertexIndex];
+							vsOutput.position = vec4f(xy * 2.0 - 1.0, 0.0, 1.0);
+							vsOutput.texcoord = vec2f(xy.x, 1.0 - xy.y);
+							return vsOutput;
+						}
 
-              var vsOutput: VSOutput;
-              let xy = pos[vertexIndex];
-              vsOutput.position = vec4f(xy * 2.0 - 1.0, 0.0, 1.0);
-              vsOutput.texcoord = vec2f(xy.x, 1.0 - xy.y);
-              return vsOutput;
-            }
+						@group(0) @binding(0) var ourSampler: sampler;
+						@group(0) @binding(1) var ourTexture: texture_2d<f32>;
 
-            @group(0) @binding(0) var ourSampler: sampler;
-            @group(0) @binding(1) var ourTexture: texture_2d<f32>;
-
-            @fragment fn fs(fsInput: VSOutput) -> @location(0) vec4f {
-              return textureSample(ourTexture, ourSampler, fsInput.texcoord);
-            }
-          `,
+						@fragment fn fs(fsInput: VSOutput) -> @location(0) vec4f {
+							return textureSample(ourTexture, ourSampler, fsInput.texcoord);
+						}
+					`,
 				});
 
 				sampler = device.createSampler({

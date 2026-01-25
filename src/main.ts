@@ -445,6 +445,8 @@ async function main(): Promise<void> {
 			pass.draw(meshNumVertices);
 		}
 
+		
+
 		pass.end();
 
 		const commandBuffer = encoder.finish();

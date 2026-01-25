@@ -6,7 +6,6 @@ interface TextureOptions {
 async function buildSkybox(
 	device: GPUDevice,
 	presentationFormat: GPUTextureFormat,
-	pass: GPURenderPassEncoder,
 ): Promise<void> {
 	const skyboxModule = device.createShaderModule({
 		code: /* wgsl */ `

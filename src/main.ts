@@ -1,6 +1,7 @@
 import { mat4, vec3 } from 'wgpu-matrix';
 import MainShader from './shader';
 import WireframeShader from './wireframe';
+import { initSkybox, drawSkybox, type SkyboxResources } from './skybox';
 
 import { BuildDebug, debuggerParams, stats } from './debug';
 import buildBlocks, {
@@ -180,11 +181,6 @@ async function main(): Promise<void> {
 		requestAnimationFrame(tick);
 	}
 
-	requestAnimationFrame((t) => {
-		lastT = t;
-		tick(t);
-	});
-
 	// ============================================
 	// MOVEMENT END
 	// ============================================
@@ -351,6 +347,12 @@ async function main(): Promise<void> {
 		],
 	});
 
+	// Initialize skybox
+	const skybox: SkyboxResources = await initSkybox(
+		device,
+		presentationFormat,
+	);
+
 	let depthTexture: GPUTexture;
 
 	function ensureDepthTexture(width: number, height: number) {
@@ -445,7 +447,8 @@ async function main(): Promise<void> {
 			pass.draw(meshNumVertices);
 		}
 
-		
+		// Draw skybox (after geometry, uses less-equal depth test)
+		drawSkybox(pass, device, skybox, viewMatrix, projection);
 
 		pass.end();
 
@@ -478,6 +481,12 @@ async function main(): Promise<void> {
 		}
 	});
 	observer.observe(canvas);
+
+	// Start animation loop after all initialization is complete
+	requestAnimationFrame((t) => {
+		lastT = t;
+		tick(t);
+	});
 
 	return;
 }

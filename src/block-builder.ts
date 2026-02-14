@@ -8,7 +8,7 @@ const noise = new (Noise as unknown as { Noise: typeof Noise }).Noise(
 	Math.random(),
 );
 
-const NOISE_FREQUENCY = 0.1;
+const NOISE_FREQUENCY = 0.01;
 
 function create3DArray() {
 	return Array.from({ length: CHUNK_SIZE_Y }, (_, y) =>

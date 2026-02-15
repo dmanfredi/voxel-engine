@@ -208,9 +208,9 @@ export function greedyMesh(
 
 	// Convert quads to vertex data
 	// Each quad = 2 triangles = 6 vertices
-	// Each vertex: position (3) + uv (2) + color (1 as uint32) = 6 floats
+	// Each vertex: position (3) + normal (3) + uv (2) + color (1 as uint32) = 9 floats
 	const numVertices = quads.length * 6;
-	const vertexData = new Float32Array(numVertices * 6);
+	const vertexData = new Float32Array(numVertices * 9);
 	const colorData = new Uint8Array(vertexData.buffer);
 
 	// Default color (will be replaced by texture sampling anyway)
@@ -218,6 +218,10 @@ export function greedyMesh(
 
 	let vertexOffset = 0;
 	for (const quad of quads) {
+		// Compute face normal from axis and facing direction
+		const normal: [number, number, number] = [0, 0, 0];
+		normal[quad.axis] = quad.positiveFacing ? 1 : -1;
+
 		// UVs are tiled based on quad dimensions
 		// v0 = origin, v1 = +du, v2 = +du+dv, v3 = +dv
 		//
@@ -281,16 +285,21 @@ export function greedyMesh(
 
 		for (const { pos, uv } of triangleData) {
 			// Position
-			vertexData[vertexOffset * 6 + 0] = pos[0];
-			vertexData[vertexOffset * 6 + 1] = pos[1];
-			vertexData[vertexOffset * 6 + 2] = pos[2];
+			vertexData[vertexOffset * 9 + 0] = pos[0];
+			vertexData[vertexOffset * 9 + 1] = pos[1];
+			vertexData[vertexOffset * 9 + 2] = pos[2];
+
+			// Normal
+			vertexData[vertexOffset * 9 + 3] = normal[0];
+			vertexData[vertexOffset * 9 + 4] = normal[1];
+			vertexData[vertexOffset * 9 + 5] = normal[2];
 
 			// UV (tiled)
-			vertexData[vertexOffset * 6 + 3] = uv[0];
-			vertexData[vertexOffset * 6 + 4] = uv[1];
+			vertexData[vertexOffset * 9 + 6] = uv[0];
+			vertexData[vertexOffset * 9 + 7] = uv[1];
 
 			// Color (RGBA as bytes at the correct offset)
-			const byteOffset = vertexOffset * 24 + 20;
+			const byteOffset = vertexOffset * 36 + 32;
 			colorData[byteOffset + 0] = color[0];
 			colorData[byteOffset + 1] = color[1];
 			colorData[byteOffset + 2] = color[2];

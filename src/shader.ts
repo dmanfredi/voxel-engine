@@ -5,14 +5,16 @@ const MainShader = /*wgsl*/ `
 
 	struct Vertex {
 		@location(0) position: vec4f,
-		@location(1) uv: vec2f,
-		@location(2) color: vec4f,
+		@location(1) normal: vec3f,
+		@location(2) uv: vec2f,
+		@location(3) color: vec4f,
 	}
 
 	struct VSOutput {
 		@builtin(position) position: vec4f,
 		@location(0) uv: vec2f,
 		@location(1) color: vec4f,
+		@location(2) normal: vec3f,
 	}
 
 	@group(0) @binding(0) var<uniform> uni: Uniforms;
@@ -25,11 +27,27 @@ const MainShader = /*wgsl*/ `
 		vsOut.position = uni.matrix * vert.position;
 		vsOut.uv = vert.uv;
 		vsOut.color = vert.color;
+		vsOut.normal = vert.normal;
 		return vsOut;
 	}
 
 	@fragment fn fs(vsOut: VSOutput) -> @location(0) vec4f {
-		return textureSample(myTexture, mySampler, vsOut.uv);
+		let texColor = textureSample(myTexture, mySampler, vsOut.uv);
+
+		// Per-face shading: top brightest, sides medium, bottom darkest
+		let n = vsOut.normal;
+		var brightness: f32;
+		if (n.y > 0.5) {
+			brightness = 1.0;   // top
+		} else if (n.y < -0.5) {
+			brightness = 0.5;   // bottom
+		} else if (abs(n.x) > 0.5) {
+			brightness = 0.6;   // east/west
+		} else {
+			brightness = 0.8;   // north/south
+		}
+
+		return vec4f(texColor.rgb * brightness, texColor.a);
 	}
 `;
 

@@ -210,11 +210,12 @@ async function main(): Promise<void> {
 			entryPoint: 'vs',
 			buffers: [
 				{
-					arrayStride: (3 + 2 + 1) * 4, // pos , uv, color (4 bytes each)
+					arrayStride: (3 + 3 + 2 + 1) * 4, // pos, normal, uv, color (4 bytes each)
 					attributes: [
-						{ shaderLocation: 0, offset: 0, format: 'float32x3' }, // posistion
-						{ shaderLocation: 1, offset: 12, format: 'float32x2' }, // uv
-						{ shaderLocation: 2, offset: 20, format: 'unorm8x4' }, // color
+						{ shaderLocation: 0, offset: 0, format: 'float32x3' },  // position
+						{ shaderLocation: 1, offset: 12, format: 'float32x3' }, // normal
+						{ shaderLocation: 2, offset: 24, format: 'float32x2' }, // uv
+						{ shaderLocation: 3, offset: 32, format: 'unorm8x4' },  // color
 					],
 				},
 			],

@@ -187,14 +187,7 @@ export function greedyMesh(
 						const positive = solidA;
 						// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
 						const airD = positive ? x[axis]! + 1 : x[axis]!;
-						const ao = computeFaceAO(
-							x[u],
-							x[v],
-							airD,
-							axis,
-							u,
-							v,
-						);
+						const ao = computeFaceAO(x[u], x[v], airD, axis, u, v);
 						const aoPacked =
 							ao[0] | (ao[1] << 2) | (ao[2] << 4) | (ao[3] << 6);
 						mask[n] = (positive ? 1 : -1) * (1 + aoPacked);

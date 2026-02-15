@@ -56,6 +56,10 @@ FPS-style camera with pointer lock. WASD movement, QE vertical, mouse look. Pitc
 
 Strict mode with additional flags: `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `noImplicitReturns`, `noFallthroughCasesInSwitch`. Target ES2022, ESNext modules. WebGPU types via `@webgpu/types`.
 
+## Code Style
+
+Respect the TypeScript and ESLint configurations as they are. Do not suppress lint rules with `eslint-disable` comments (e.g. `@typescript-eslint/no-non-null-assertion`). If the checker complains, fix the underlying type issue instead — use narrower types, union types, or runtime guards so the code is provably correct without escape hatches.
+
 ## Key Dependencies
 
 - **wgpu-matrix** — vec3/mat4 math

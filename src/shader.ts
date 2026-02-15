@@ -7,7 +7,8 @@ const MainShader = /*wgsl*/ `
 		@location(0) position: vec4f,
 		@location(1) normal: vec3f,
 		@location(2) uv: vec2f,
-		@location(3) color: vec4f,
+		@location(3) ao: f32,
+		@location(4) color: vec4f,
 	}
 
 	struct VSOutput {
@@ -15,6 +16,7 @@ const MainShader = /*wgsl*/ `
 		@location(0) uv: vec2f,
 		@location(1) color: vec4f,
 		@location(2) normal: vec3f,
+		@location(3) ao: f32,
 	}
 
 	@group(0) @binding(0) var<uniform> uni: Uniforms;
@@ -28,6 +30,7 @@ const MainShader = /*wgsl*/ `
 		vsOut.uv = vert.uv;
 		vsOut.color = vert.color;
 		vsOut.normal = vert.normal;
+		vsOut.ao = vert.ao;
 		return vsOut;
 	}
 
@@ -47,7 +50,7 @@ const MainShader = /*wgsl*/ `
 			brightness = 0.8;   // north/south
 		}
 
-		return vec4f(texColor.rgb * brightness, texColor.a);
+		return vec4f(texColor.rgb * brightness * vsOut.ao, texColor.a);
 	}
 `;
 

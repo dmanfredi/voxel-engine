@@ -6,14 +6,32 @@ export interface GreedyMeshResult {
 	numVertices: number;
 }
 
+type AO = 0 | 1 | 2 | 3;
+
+// AO value (0 = most occluded, 3 = fully lit) → brightness multiplier
+const AO_CURVE: readonly [number, number, number, number] = [
+	0.2, 0.45, 0.7, 1.0,
+];
+
 /**
- * Greedy meshing algorithm for voxel chunks.
+ * Computes ambient occlusion for a single vertex of a face.
+ * side1/side2 are the two edge-adjacent neighbors, corner is the diagonal.
+ * Returns 0 (fully occluded) to 3 (fully lit).
+ */
+function vertexAO(side1: boolean, side2: boolean, corner: boolean): AO {
+	if (side1 && side2) return 0;
+	return (3 - (Number(side1) + Number(side2) + Number(corner))) as AO;
+}
+
+/**
+ * Greedy meshing algorithm for voxel chunks with per-vertex ambient occlusion.
  *
  * Claude wrote 90% of this.
  *
  * Takes a 3D array of blocks and produces an optimized mesh by:
  * 1. Culling interior faces (faces between two solid blocks)
- * 2. Merging adjacent coplanar faces into larger quads
+ * 2. Computing per-vertex AO for each face
+ * 3. Merging adjacent coplanar faces with identical AO patterns
  *
  * @param blocks - 3D array indexed as [y][z][x]
  * @param dims - Dimensions [x, y, z]
@@ -38,6 +56,63 @@ export function greedyMesh(
 		return block !== null && block.type !== NOTHING;
 	}
 
+	/**
+	 * Compute AO for all 4 corners of a face.
+	 * faceU/faceV: block position in the face plane
+	 * airD: axis position on the air side of the face
+	 * axisIdx/uIdx/vIdx: which axes map to axis/u/v
+	 */
+	function computeFaceAO(
+		faceU: number,
+		faceV: number,
+		airD: number,
+		axisIdx: number,
+		uIdx: number,
+		vIdx: number,
+	): [AO, AO, AO, AO] {
+		// Corner signs: direction away from face center for each corner
+		// v0 (u-low, v-low), v1 (u-high, v-low), v2 (u-high, v-high), v3 (u-low, v-high)
+		const signs: [number, number][] = [
+			[-1, -1],
+			[1, -1],
+			[1, 1],
+			[-1, 1],
+		];
+
+		const ao: [AO, AO, AO, AO] = [0, 0, 0, 0];
+
+		for (let c = 0; c < 4; c++) {
+			// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+			const [su, sv] = signs[c]!;
+
+			// Side 1: neighbor along u-axis
+			const s1: [number, number, number] = [0, 0, 0];
+			s1[axisIdx] = airD;
+			s1[uIdx] = faceU + su;
+			s1[vIdx] = faceV;
+
+			// Side 2: neighbor along v-axis
+			const s2: [number, number, number] = [0, 0, 0];
+			s2[axisIdx] = airD;
+			s2[uIdx] = faceU;
+			s2[vIdx] = faceV + sv;
+
+			// Corner: diagonal neighbor
+			const cr: [number, number, number] = [0, 0, 0];
+			cr[axisIdx] = airD;
+			cr[uIdx] = faceU + su;
+			cr[vIdx] = faceV + sv;
+
+			ao[c] = vertexAO(
+				isSolid(getBlock(s1[0], s1[1], s1[2])),
+				isSolid(getBlock(s2[0], s2[1], s2[2])),
+				isSolid(getBlock(cr[0], cr[1], cr[2])),
+			);
+		}
+
+		return ao;
+	}
+
 	// Collect all quads, then convert to vertices at the end
 	const quads: {
 		// 4 corners in world coordinates
@@ -52,6 +127,8 @@ export function greedyMesh(
 		positiveFacing: boolean;
 		// Which axis this face is perpendicular to (0=X, 1=Y, 2=Z)
 		axis: number;
+		// Per-corner AO values (0-3), matching v0-v3
+		ao: [AO, AO, AO, AO];
 	}[] = [];
 
 	// Dimension lookup helper - returns dimension for axis 0, 1, or 2
@@ -77,8 +154,11 @@ export function greedyMesh(
 		const q: [number, number, number] = [0, 0, 0];
 		q[axis] = 1;
 
-		// Mask stores face info: 0 = no face, positive = face pointing +axis, negative = face pointing -axis
-		// The absolute value could store block type ID for multi-material support
+		// Mask stores encoded face info:
+		// 0 = no face
+		// For faces: direction * (1 + aoPacked)
+		// where aoPacked = ao0 | (ao1 << 2) | (ao2 << 4) | (ao3 << 6)
+		// This way, two faces merge only if they have the same direction AND AO pattern.
 		const mask = new Int32Array(uDim * vDim);
 
 		// Sweep through slices perpendicular to the axis
@@ -103,12 +183,21 @@ export function greedyMesh(
 					if (solidA === solidB) {
 						// Both solid or both air - no face needed
 						mask[n] = 0;
-					} else if (solidA) {
-						// Face pointing in positive axis direction
-						mask[n] = 1;
 					} else {
-						// Face pointing in negative axis direction
-						mask[n] = -1;
+						const positive = solidA;
+						// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+						const airD = positive ? x[axis]! + 1 : x[axis]!;
+						const ao = computeFaceAO(
+							x[u],
+							x[v],
+							airD,
+							axis,
+							u,
+							v,
+						);
+						const aoPacked =
+							ao[0] | (ao[1] << 2) | (ao[2] << 4) | (ao[3] << 6);
+						mask[n] = (positive ? 1 : -1) * (1 + aoPacked);
 					}
 					n++;
 				}
@@ -127,6 +216,8 @@ export function greedyMesh(
 
 					if (maskVal !== 0) {
 						// Found a face - find the largest rectangle starting here
+						// Faces with different AO patterns have different maskVals,
+						// so they won't merge (conservative AO-aware merging).
 
 						// Compute width (extend along u-axis)
 						let w = 1;
@@ -147,6 +238,14 @@ export function greedyMesh(
 							}
 							if (!done) h++;
 						}
+
+						// Unpack AO from mask value
+						const absMask = Math.abs(maskVal);
+						const aoPacked = absMask - 1;
+						const ao0 = (aoPacked & 3) as AO;
+						const ao1 = ((aoPacked >> 2) & 3) as AO;
+						const ao2 = ((aoPacked >> 4) & 3) as AO;
+						const ao3 = ((aoPacked >> 6) & 3) as AO;
 
 						// Create the quad
 						// Position in the slice plane
@@ -178,12 +277,17 @@ export function greedyMesh(
 						quads.push({
 							v0: [wx, wy, wz],
 							v1: [wx + dux, wy + duy, wz + duz],
-							v2: [wx + dux + dvx, wy + duy + dvy, wz + duz + dvz],
+							v2: [
+								wx + dux + dvx,
+								wy + duy + dvy,
+								wz + duz + dvz,
+							],
 							v3: [wx + dvx, wy + dvy, wz + dvz],
 							uvWidth: w,
 							uvHeight: h,
 							positiveFacing: maskVal > 0,
 							axis,
+							ao: [ao0, ao1, ao2, ao3],
 						});
 
 						// Zero out the mask cells we just used
@@ -208,9 +312,11 @@ export function greedyMesh(
 
 	// Convert quads to vertex data
 	// Each quad = 2 triangles = 6 vertices
-	// Each vertex: position (3) + normal (3) + uv (2) + color (1 as uint32) = 9 floats
+	// Each vertex: position (3) + normal (3) + uv (2) + ao (1) + color (1 as uint32) = 10 floats
+	const FLOATS_PER_VERTEX = 10;
+	const BYTES_PER_VERTEX = FLOATS_PER_VERTEX * 4; // 40
 	const numVertices = quads.length * 6;
-	const vertexData = new Float32Array(numVertices * 9);
+	const vertexData = new Float32Array(numVertices * FLOATS_PER_VERTEX);
 	const colorData = new Uint8Array(vertexData.buffer);
 
 	// Default color (will be replaced by texture sampling anyway)
@@ -222,24 +328,13 @@ export function greedyMesh(
 		const normal: [number, number, number] = [0, 0, 0];
 		normal[quad.axis] = quad.positiveFacing ? 1 : -1;
 
+		// Per-corner AO as floats (via curve lookup)
+		const aoF0 = AO_CURVE[quad.ao[0]];
+		const aoF1 = AO_CURVE[quad.ao[1]];
+		const aoF2 = AO_CURVE[quad.ao[2]];
+		const aoF3 = AO_CURVE[quad.ao[3]];
+
 		// UVs are tiled based on quad dimensions
-		// v0 = origin, v1 = +du, v2 = +du+dv, v3 = +dv
-		//
-		// For consistent texturing, we want world Y (up) to map to texture "up" (-V)
-		// on all vertical faces. The UV mapping depends on which axis the face is on:
-		//
-		// Axis 0 (X-facing, YZ plane): du=Y, dv=Z
-		//   - World Y should map to texture V (vertical)
-		//   - World Z should map to texture U (horizontal)
-		//   - So we swap: use uvHeight for U range, uvWidth for V range
-		//
-		// Axis 2 (Z-facing, XY plane): du=X, dv=Y
-		//   - World X maps to texture U, World Y maps to texture V
-		//   - This is already correct
-		//
-		// Axis 1 (Y-facing, horizontal): du=Z, dv=X
-		//   - Less noticeable, keep as-is
-		//
 		let uv0: [number, number];
 		let uv1: [number, number];
 		let uv2: [number, number];
@@ -259,47 +354,81 @@ export function greedyMesh(
 			uv3 = [0, 0];
 		}
 
+		// Quad triangulation flip (anisotropy fix):
+		// When AO differs on opposite corners, flip the split diagonal
+		// to avoid interpolation artifacts.
+		const flipDiag = quad.ao[0] + quad.ao[2] > quad.ao[1] + quad.ao[3];
+
 		// Two triangles with winding order based on face direction
-		// Positive facing: (v0, v1, v2), (v0, v2, v3) - counterclockwise from front
-		// Negative facing: (v0, v2, v1), (v0, v3, v2) - reversed winding
+		// Normal diagonal: v0-v2 split → (v0,v1,v2), (v0,v2,v3)
+		// Flipped diagonal: v1-v3 split → (v0,v1,v3), (v1,v2,v3)
 		const triangleData: {
 			pos: [number, number, number];
 			uv: [number, number];
-		}[] = quad.positiveFacing
-			? [
-					{ pos: quad.v0, uv: uv0 },
-					{ pos: quad.v1, uv: uv1 },
-					{ pos: quad.v2, uv: uv2 },
-					{ pos: quad.v0, uv: uv0 },
-					{ pos: quad.v2, uv: uv2 },
-					{ pos: quad.v3, uv: uv3 },
-				]
-			: [
-					{ pos: quad.v0, uv: uv0 },
-					{ pos: quad.v2, uv: uv2 },
-					{ pos: quad.v1, uv: uv1 },
-					{ pos: quad.v0, uv: uv0 },
-					{ pos: quad.v3, uv: uv3 },
-					{ pos: quad.v2, uv: uv2 },
+			ao: number;
+		}[] = (() => {
+			if (quad.positiveFacing) {
+				if (flipDiag) {
+					return [
+						{ pos: quad.v0, uv: uv0, ao: aoF0 },
+						{ pos: quad.v1, uv: uv1, ao: aoF1 },
+						{ pos: quad.v3, uv: uv3, ao: aoF3 },
+						{ pos: quad.v1, uv: uv1, ao: aoF1 },
+						{ pos: quad.v2, uv: uv2, ao: aoF2 },
+						{ pos: quad.v3, uv: uv3, ao: aoF3 },
+					];
+				}
+				return [
+					{ pos: quad.v0, uv: uv0, ao: aoF0 },
+					{ pos: quad.v1, uv: uv1, ao: aoF1 },
+					{ pos: quad.v2, uv: uv2, ao: aoF2 },
+					{ pos: quad.v0, uv: uv0, ao: aoF0 },
+					{ pos: quad.v2, uv: uv2, ao: aoF2 },
+					{ pos: quad.v3, uv: uv3, ao: aoF3 },
 				];
+			}
+			if (flipDiag) {
+				return [
+					{ pos: quad.v0, uv: uv0, ao: aoF0 },
+					{ pos: quad.v3, uv: uv3, ao: aoF3 },
+					{ pos: quad.v1, uv: uv1, ao: aoF1 },
+					{ pos: quad.v1, uv: uv1, ao: aoF1 },
+					{ pos: quad.v3, uv: uv3, ao: aoF3 },
+					{ pos: quad.v2, uv: uv2, ao: aoF2 },
+				];
+			}
+			return [
+				{ pos: quad.v0, uv: uv0, ao: aoF0 },
+				{ pos: quad.v2, uv: uv2, ao: aoF2 },
+				{ pos: quad.v1, uv: uv1, ao: aoF1 },
+				{ pos: quad.v0, uv: uv0, ao: aoF0 },
+				{ pos: quad.v3, uv: uv3, ao: aoF3 },
+				{ pos: quad.v2, uv: uv2, ao: aoF2 },
+			];
+		})();
 
-		for (const { pos, uv } of triangleData) {
+		for (const vert of triangleData) {
+			const base = vertexOffset * FLOATS_PER_VERTEX;
+
 			// Position
-			vertexData[vertexOffset * 9 + 0] = pos[0];
-			vertexData[vertexOffset * 9 + 1] = pos[1];
-			vertexData[vertexOffset * 9 + 2] = pos[2];
+			vertexData[base + 0] = vert.pos[0];
+			vertexData[base + 1] = vert.pos[1];
+			vertexData[base + 2] = vert.pos[2];
 
 			// Normal
-			vertexData[vertexOffset * 9 + 3] = normal[0];
-			vertexData[vertexOffset * 9 + 4] = normal[1];
-			vertexData[vertexOffset * 9 + 5] = normal[2];
+			vertexData[base + 3] = normal[0];
+			vertexData[base + 4] = normal[1];
+			vertexData[base + 5] = normal[2];
 
 			// UV (tiled)
-			vertexData[vertexOffset * 9 + 6] = uv[0];
-			vertexData[vertexOffset * 9 + 7] = uv[1];
+			vertexData[base + 6] = vert.uv[0];
+			vertexData[base + 7] = vert.uv[1];
+
+			// AO
+			vertexData[base + 8] = vert.ao;
 
 			// Color (RGBA as bytes at the correct offset)
-			const byteOffset = vertexOffset * 36 + 32;
+			const byteOffset = vertexOffset * BYTES_PER_VERTEX + 36;
 			colorData[byteOffset + 0] = color[0];
 			colorData[byteOffset + 1] = color[1];
 			colorData[byteOffset + 2] = color[2];

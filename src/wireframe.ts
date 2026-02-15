@@ -18,7 +18,7 @@ const WireframeShader = /*wgsl*/ `
 	) -> BarycentricCoordinateBasedVSOutput {
 		let vertNdx = vNdx % 3u;
 
-		let pNdx = vNdx * 9u; // <-- expanded vertex list (pos + normal + uv + color)
+		let pNdx = vNdx * 10u; // <-- expanded vertex list (pos + normal + uv + ao + color)
 		let position = vec4f(positions[pNdx], positions[pNdx + 1u], positions[pNdx + 2u], 1.0);
 
 		var out: BarycentricCoordinateBasedVSOutput;

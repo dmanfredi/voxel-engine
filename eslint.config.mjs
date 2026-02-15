@@ -26,7 +26,7 @@ export default defineConfig(
 
 	// misc files
 	{
-		files: ['scripts/**/*.{ts,js,mjs,cjs}'],
+		files: ['scripts/**/*.{ts,js,mjs,cjs}', 'vite.config.ts'],
 		languageOptions: {
 			globals: {
 				...globals.node,
@@ -59,5 +59,5 @@ export default defineConfig(
 			// maybe, probably shouldnt.
 			// '@typescript-eslint/no-non-null-assertion': 'off',
 		},
-	}
+	},
 );

@@ -108,8 +108,8 @@ async function main(): Promise<void> {
 			e.code === 'KeyA' ||
 			e.code === 'KeyS' ||
 			e.code === 'KeyD' ||
-			e.code === 'KeyE' ||
-			e.code === 'KeyQ'
+			e.code === 'ShiftLeft' ||
+			e.code === 'Space'
 		) {
 			e.preventDefault();
 			keysDown.add(e.code);
@@ -167,11 +167,11 @@ async function main(): Promise<void> {
 			// move
 			vec3.add(cameraPos, move, cameraPos);
 		}
-		if (keysDown.has('KeyQ')) {
+		if (keysDown.has('Space')) {
 			// move up
 			vec3.add(cameraPos, vec3.mulScalar(cameraUp, units), cameraPos);
 		}
-		if (keysDown.has('KeyE')) {
+		if (keysDown.has('ShiftLeft')) {
 			// move down
 			vec3.sub(cameraPos, vec3.mulScalar(cameraUp, units), cameraPos);
 		}
@@ -280,7 +280,7 @@ async function main(): Promise<void> {
 		});
 
 	// Load texture
-	const response = await fetch('../assets/dirt.png');
+	const response = await fetch('../assets/MarbleBase512.png');
 	const imageBitmap = await createImageBitmap(await response.blob());
 
 	const cubeTexture: GPUTexture = device.createTexture({

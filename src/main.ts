@@ -21,6 +21,7 @@ if (!navigator.gpu) {
 }
 
 const BLOCK_SIZE = 10;
+const TEXTURE_SCALE = 6; // number of blocks per texture repeat
 const blocks = buildBlocks();
 
 // Generate optimized mesh using greedy meshing algorithm
@@ -28,6 +29,7 @@ const { vertexData: meshVertexData, numVertices: meshNumVertices } = greedyMesh(
 	blocks,
 	[CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z],
 	BLOCK_SIZE,
+	TEXTURE_SCALE,
 );
 
 const degToRad = (d: number) => (d * Math.PI) / 180;

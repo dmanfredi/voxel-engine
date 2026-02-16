@@ -36,11 +36,13 @@ function vertexAO(side1: boolean, side2: boolean, corner: boolean): AO {
  * @param blocks - 3D array indexed as [y][z][x]
  * @param dims - Dimensions [x, y, z]
  * @param blockSize - Size of each block in world units
+ * @param textureScale - Number of blocks one texture repeat spans (default 1)
  */
 export function greedyMesh(
 	blocks: Block[][][],
 	dims: [number, number, number],
 	blockSize: number,
+	textureScale = 1,
 ): GreedyMeshResult {
 	const [dimX, dimY, dimZ] = dims;
 
@@ -120,7 +122,9 @@ export function greedyMesh(
 		v1: [number, number, number];
 		v2: [number, number, number];
 		v3: [number, number, number];
-		// UV dimensions for tiling
+		// UV info: block-space origin and dimensions for tiling
+		originU: number;
+		originV: number;
 		uvWidth: number;
 		uvHeight: number;
 		// Face direction: true = positive axis, false = negative axis
@@ -276,6 +280,8 @@ export function greedyMesh(
 								wz + duz + dvz,
 							],
 							v3: [wx + dvx, wy + dvy, wz + dvz],
+							originU: i,
+							originV: j,
 							uvWidth: w,
 							uvHeight: h,
 							positiveFacing: maskVal > 0,
@@ -327,7 +333,14 @@ export function greedyMesh(
 		const aoF2 = AO_CURVE[quad.ao[2]];
 		const aoF3 = AO_CURVE[quad.ao[3]];
 
-		// UVs are tiled based on quad dimensions
+		// World-aligned UVs: offset by block-space origin so adjacent quads
+		// tile seamlessly even when textureScale > 1
+		const s = textureScale;
+		const ou = quad.originU / s;
+		const ov = quad.originV / s;
+		const uw = quad.uvWidth / s;
+		const vh = quad.uvHeight / s;
+
 		let uv0: [number, number];
 		let uv1: [number, number];
 		let uv2: [number, number];
@@ -335,16 +348,17 @@ export function greedyMesh(
 
 		if (quad.axis === 0) {
 			// X-facing: rotate UVs so Y maps to texture vertical
-			uv0 = [0, quad.uvWidth];
-			uv1 = [0, 0];
-			uv2 = [quad.uvHeight, 0];
-			uv3 = [quad.uvHeight, quad.uvWidth];
+			// texture U = Z range (v-axis), texture V = Y range (u-axis)
+			uv0 = [ov, ou];
+			uv1 = [ov, ou + uw];
+			uv2 = [ov + vh, ou + uw];
+			uv3 = [ov + vh, ou];
 		} else {
 			// Default UV mapping for axis 1 and 2
-			uv0 = [0, quad.uvHeight];
-			uv1 = [quad.uvWidth, quad.uvHeight];
-			uv2 = [quad.uvWidth, 0];
-			uv3 = [0, 0];
+			uv0 = [ou, ov];
+			uv1 = [ou + uw, ov];
+			uv2 = [ou + uw, ov + vh];
+			uv3 = [ou, ov + vh];
 		}
 
 		// Quad triangulation flip (anisotropy fix):

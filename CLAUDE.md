@@ -32,13 +32,39 @@ Rendering is on-demand: frames only redraw on user input or UI changes via `requ
 
 ### Chunk & Mesh Generation
 
-- **block-builder.ts** generates a 128×128×128 block array using Perlin noise (frequency 0.1). Blocks indexed as `blocks[y][z][x]`, block size = 10 world units.
-- **greedy-mesh.ts** implements greedy meshing across all 3 axes, merging coplanar adjacent faces into larger quads. Culls interior faces between solid blocks. Output is a triangle list with vertex format: `[position(3) + uv(2) + color(1)] × 4 bytes = 24 bytes/vertex`.
+- **block-builder.ts** generates a 128×128×128 block array using Perlin noise (frequency 0.01). Blocks indexed as `blocks[y][z][x]`, block size = 10 world units.
+- **greedy-mesh.ts** — AO-aware greedy meshing. See "Greedy Mesher Details" below.
+
+### Greedy Mesher Details (src/greedy-mesh.ts)
+
+The mesher runs in three phases and has several non-obvious design decisions:
+
+**Phase 1 — Mask Building (per slice):**
+- Sweeps all 3 axes. For each axis, `u = (axis+1)%3`, `v = (axis+2)%3`.
+- Checks blockA (at `d`) vs blockB (at `d+1`) — solid/air boundary = face.
+- AO is computed here: for each face's 4 corners, checks 3 neighbor blocks on the air side (2 edge-adjacent + 1 diagonal). Standard `vertexAO` formula: both sides solid → 0, otherwise `3 - count`.
+- AO is packed into the mask value: `direction * (1 + aoPacked)` where `aoPacked` is 8 bits (2 per corner). This means merge checks (`mask[a] === mask[b]`) inherently enforce matching direction AND AO.
+
+**Phase 2 — Greedy Merge (per slice):**
+- Standard greedy rectangle expansion: extend width along u, then height along v.
+- Conservative AO merging: faces only merge if mask values are identical (same direction + same AO at all 4 corners). Stricter than edge-compatible merging but guarantees correct GPU interpolation.
+
+**Phase 3 — Quad → Vertex Conversion:**
+- **Normals**: derived from `axis` + `positiveFacing`.
+- **AO**: integer 0-3 mapped through `AO_CURVE = [0.2, 0.45, 0.7, 1.0]` to a per-vertex float.
+- **UVs** — three invariants:
+  1. *World-aligned origins*: UVs use absolute block position (`originU/scale`, `originV/scale`), not quad-relative. Adjacent quads that couldn't merge still tile seamlessly at any `textureScale`.
+  2. *No V-inversion*: UV = `position / scale` directly. Inverting V breaks world-alignment because V at a given position would depend on quad origin + size.
+  3. *Axis 0 rotation*: X-facing faces swap U/V so texture V always maps to world Y (keeps textures upright on walls).
+- **Triangulation flip**: when `ao0 + ao2 > ao1 + ao3`, splits along v1-v3 diagonal instead of v0-v2 to avoid AO interpolation artifacts.
+- **Winding order**: positive=CCW, negative=CW. Combined with flip: 4 triangle orderings total.
+
+**Vertex format**: `pos(3) + normal(3) + uv(2) + ao(1) + color(1 as u8×4) = 10 floats = 40 bytes`. The wireframe shader reads the same buffer as storage, striding by `10u`.
 
 ### Shaders
 
 All WGSL shaders are defined as TypeScript string constants:
-- **shader.ts** — main vertex/fragment with `mat4x4` view-projection uniform, nearest-filtered texture
+- **shader.ts** — main vertex/fragment with `mat4x4` view-projection uniform, per-face brightness (top=1.0, Z-sides=0.8, X-sides=0.6, bottom=0.5), per-vertex AO multiplied into final color
 - **wireframe.ts** — barycentric edge detection with smooth antialiasing
 - **skybox.ts** — cubemap sampling using `viewDirectionProjectionInverse` uniform; also handles cubemap texture loading and mipmap generation
 - **shared.ts** — reusable WGSL binding declarations

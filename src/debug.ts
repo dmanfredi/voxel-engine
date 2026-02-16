@@ -7,6 +7,7 @@ document.body.appendChild(stats.dom);
 
 export const debuggerParams = {
 	wireframe: false,
+	freecam: false,
 	vertices: 0,
 };
 
@@ -15,6 +16,9 @@ export function BuildDebug(render: () => void): void {
 	const wireframeBinding = pane.addBinding(debuggerParams, 'wireframe', {
 		label: 'Wireframe',
 	});
+	pane.addBinding(debuggerParams, 'freecam', {
+		label: 'Freecam',
+	});
 	pane.addBinding(debuggerParams, 'vertices', {
 		readonly: true,
 		label: 'Vertices',
@@ -22,14 +26,15 @@ export function BuildDebug(render: () => void): void {
 	});
 
 	wireframeBinding.on('change', () => {
-		// ev.value is the *new* value
-		// ev.last is the *previous* value
-		// engine.setWireframe(ev.value);
-
 		requestAnimationFrame(() => {
 			render();
 		});
 	});
+	// freecamBinding.on('change', () => {
+	// 	requestAnimationFrame(() => {
+	// 		render();
+	// 	});
+	// });
 	return;
 }
 

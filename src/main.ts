@@ -10,6 +10,8 @@ import buildBlocks, {
 	CHUNK_SIZE_Z,
 } from './block-builder';
 import { greedyMesh } from './greedy-mesh';
+import { DIRT } from './Block';
+import { FPSCAM, FREECAM } from './movement';
 
 // Practical TODO
 // - different blocks with different textures
@@ -35,7 +37,7 @@ const { vertexData: meshVertexData, numVertices: meshNumVertices } = greedyMesh(
 const degToRad = (d: number) => (d * Math.PI) / 180;
 const up = vec3.create(0, 1, 0);
 
-const cameraPos = vec3.create(0, 100, 300);
+const cameraPos = vec3.create(50, 50, 50);
 const cameraFront = vec3.create(0, 0, -1);
 // const cameraTarget = vec3.create(0, 0, 1);
 
@@ -128,7 +130,7 @@ async function main(): Promise<void> {
 	});
 
 	let lastT = 0;
-	const keysDown = new Set();
+	const keysDown = new Set<string>();
 
 	function tick(t: number) {
 		const dt = Math.min(0.05, (t - lastT) / 1000);
@@ -137,45 +139,41 @@ async function main(): Promise<void> {
 		const speed = 500; // units per second
 		const units = speed * dt;
 
-		if (keysDown.has('KeyW')) {
-			vec3.add(cameraPos, vec3.mulScalar(cameraFront, units), cameraPos);
-		}
-		if (keysDown.has('KeyS')) {
-			vec3.sub(cameraPos, vec3.mulScalar(cameraFront, units), cameraPos);
-		}
-		if (keysDown.has('KeyA')) {
-			// get the right vector
-			const right = vec3.cross(cameraFront, cameraUp);
+		const gravity = 500; // units per second
+		const unitsG = gravity * dt;
 
-			// normalize it
-			const normalRight = vec3.normalize(right);
+		if (debuggerParams.freecam) {
+			FREECAM(keysDown, cameraPos, cameraFront, cameraUp, units);
+		} else {
+			FPSCAM(keysDown, cameraPos, cameraFront, cameraUp, units);
 
-			// how much to move leftward on the right vector
-			const move = vec3.mulScalar(normalRight, units);
+			const worldX = cameraPos[0] ?? 0;
+			const worldY = cameraPos[1] ?? 0;
+			const worldZ = cameraPos[2] ?? 0;
+			// console.log(worldX, worldY, worldZ);
 
-			// move
-			vec3.sub(cameraPos, move, cameraPos);
-		}
-		if (keysDown.has('KeyD')) {
-			// get the right vector
-			const right = vec3.cross(cameraFront, cameraUp);
+			const playerHeight = BLOCK_SIZE * 2 * 0.9;
 
-			// normalize it
-			const normalRight = vec3.normalize(right);
+			const playerX = worldX;
+			const playerY = worldY - playerHeight;
+			const playerZ = worldZ;
 
-			// how much to move on the right vector
-			const move = vec3.mulScalar(normalRight, units);
+			const bx = Math.floor(playerX / BLOCK_SIZE);
+			const by = Math.floor(playerY / BLOCK_SIZE);
+			const bz = Math.floor(playerZ / BLOCK_SIZE);
 
-			// move
-			vec3.add(cameraPos, move, cameraPos);
-		}
-		if (keysDown.has('Space')) {
-			// move up
-			vec3.add(cameraPos, vec3.mulScalar(cameraUp, units), cameraPos);
-		}
-		if (keysDown.has('ShiftLeft')) {
-			// move down
-			vec3.sub(cameraPos, vec3.mulScalar(cameraUp, units), cameraPos);
+			const block = blocks[by]?.[bz]?.[bx];
+
+			if (block && block.type === DIRT) {
+				// stay
+			} else {
+				// force of gravity
+				vec3.sub(
+					cameraPos,
+					vec3.mulScalar(cameraUp, unitsG),
+					cameraPos,
+				);
+			}
 		}
 
 		requestRender();

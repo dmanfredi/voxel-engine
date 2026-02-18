@@ -10,8 +10,8 @@ import buildBlocks, {
 	CHUNK_SIZE_Z,
 } from './block-builder';
 import { greedyMesh } from './greedy-mesh';
-import { DIRT } from './Block';
 import { FPSCAM, FREECAM } from './movement';
+import { moveAndCollide } from './collision';
 
 // Practical TODO
 // - different blocks with different textures
@@ -136,44 +136,31 @@ async function main(): Promise<void> {
 		const dt = Math.min(0.05, (t - lastT) / 1000);
 		lastT = t;
 
-		const speed = 500; // units per second
-		const units = speed * dt;
-
 		const gravity = 500; // units per second
-		const unitsG = gravity * dt;
+		const playerHeight = BLOCK_SIZE * 2 * 0.9;
+		const playerHalfWidth = BLOCK_SIZE / 4;
 
 		if (debuggerParams.freecam) {
+			const speed = 500; // units per second
+			const units = speed * dt;
+
 			FREECAM(keysDown, cameraPos, cameraFront, cameraUp, units);
 		} else {
-			FPSCAM(keysDown, cameraPos, cameraFront, cameraUp, units);
+			const speed = 100; // units per second
+			const units = speed * dt;
 
-			const worldX = cameraPos[0] ?? 0;
-			const worldY = cameraPos[1] ?? 0;
-			const worldZ = cameraPos[2] ?? 0;
-			// console.log(worldX, worldY, worldZ);
+			const delta = FPSCAM(keysDown, cameraFront, cameraUp, units);
+			delta[1] -= gravity * dt;
 
-			const playerHeight = BLOCK_SIZE * 2 * 0.9;
-
-			const playerX = worldX;
-			const playerY = worldY - playerHeight;
-			const playerZ = worldZ;
-
-			const bx = Math.floor(playerX / BLOCK_SIZE);
-			const by = Math.floor(playerY / BLOCK_SIZE);
-			const bz = Math.floor(playerZ / BLOCK_SIZE);
-
-			const block = blocks[by]?.[bz]?.[bx];
-
-			if (block && block.type === DIRT) {
-				// stay
-			} else {
-				// force of gravity
-				vec3.sub(
-					cameraPos,
-					vec3.mulScalar(cameraUp, unitsG),
-					cameraPos,
-				);
-			}
+			moveAndCollide(
+				cameraPos,
+				delta,
+				blocks,
+				[CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z],
+				BLOCK_SIZE,
+				playerHalfWidth,
+				playerHeight,
+			);
 		}
 
 		requestRender();

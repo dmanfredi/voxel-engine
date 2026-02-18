@@ -86,6 +86,8 @@ Strict mode with additional flags: `noUncheckedIndexedAccess`, `exactOptionalPro
 
 Respect the TypeScript and ESLint configurations as they are. Do not suppress lint rules with `eslint-disable` comments (e.g. `@typescript-eslint/no-non-null-assertion`). If the checker complains, fix the underlying type issue instead — use narrower types, union types, or runtime guards so the code is provably correct without escape hatches.
 
+After making code changes, always run `npx prettier --write "src/**/*.ts"` to format before committing or finishing.
+
 ## Key Dependencies
 
 - **wgpu-matrix** — vec3/mat4 math

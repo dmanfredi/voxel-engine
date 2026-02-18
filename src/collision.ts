@@ -18,6 +18,9 @@ function isSolid(
 
 export interface CollisionResult {
 	onGround: boolean;
+	collidedX: boolean;
+	collidedZ: boolean;
+	collidedCeiling: boolean;
 }
 
 /**
@@ -41,11 +44,10 @@ export function moveAndCollide(
 	let px = pos[0] ?? 0;
 	let py = pos[1] ?? 0;
 	let pz = pos[2] ?? 0;
-	let onGround = false;
 
 	// --- X axis ---
 	px += delta[0];
-	px = resolveX(
+	const xResult = resolveX(
 		px,
 		py,
 		pz,
@@ -56,10 +58,11 @@ export function moveAndCollide(
 		height,
 		delta[0],
 	);
+	px = xResult.px;
 
 	// --- Z axis ---
 	pz += delta[2];
-	pz = resolveZ(
+	const zResult = resolveZ(
 		px,
 		py,
 		pz,
@@ -70,6 +73,7 @@ export function moveAndCollide(
 		height,
 		delta[2],
 	);
+	pz = zResult.pz;
 
 	// --- Y axis ---
 	py += delta[1];
@@ -85,13 +89,17 @@ export function moveAndCollide(
 		delta[1],
 	);
 	py = yResult.py;
-	onGround = yResult.onGround;
 
 	pos[0] = px;
 	pos[1] = py;
 	pos[2] = pz;
 
-	return { onGround };
+	return {
+		onGround: yResult.onGround,
+		collidedX: xResult.collided,
+		collidedZ: zResult.collided,
+		collidedCeiling: yResult.collidedCeiling,
+	};
 }
 
 function resolveX(
@@ -104,7 +112,7 @@ function resolveX(
 	halfWidth: number,
 	height: number,
 	direction: number,
-): number {
+): { px: number; collided: boolean } {
 	const minX = px - halfWidth;
 	const maxX = px + halfWidth;
 	const minY = py - height;
@@ -119,11 +127,14 @@ function resolveX(
 	const bzMin = Math.floor(minZ / blockSize);
 	const bzMax = Math.floor((maxZ - 1e-6) / blockSize);
 
+	let collided = false;
+
 	for (let by = byMin; by <= byMax; by++) {
 		for (let bz = bzMin; bz <= bzMax; bz++) {
 			for (let bx = bxMin; bx <= bxMax; bx++) {
 				if (!isSolid(blocks, bx, by, bz, dims)) continue;
 
+				collided = true;
 				if (direction > 0) {
 					px = bx * blockSize - halfWidth;
 				} else if (direction < 0) {
@@ -133,7 +144,7 @@ function resolveX(
 		}
 	}
 
-	return px;
+	return { px, collided };
 }
 
 function resolveZ(
@@ -146,7 +157,7 @@ function resolveZ(
 	halfWidth: number,
 	height: number,
 	direction: number,
-): number {
+): { pz: number; collided: boolean } {
 	const minX = px - halfWidth;
 	const maxX = px + halfWidth;
 	const minY = py - height;
@@ -161,11 +172,14 @@ function resolveZ(
 	const bzMin = Math.floor(minZ / blockSize);
 	const bzMax = Math.floor((maxZ - 1e-6) / blockSize);
 
+	let collided = false;
+
 	for (let by = byMin; by <= byMax; by++) {
 		for (let bz = bzMin; bz <= bzMax; bz++) {
 			for (let bx = bxMin; bx <= bxMax; bx++) {
 				if (!isSolid(blocks, bx, by, bz, dims)) continue;
 
+				collided = true;
 				if (direction > 0) {
 					pz = bz * blockSize - halfWidth;
 				} else if (direction < 0) {
@@ -175,7 +189,7 @@ function resolveZ(
 		}
 	}
 
-	return pz;
+	return { pz, collided };
 }
 
 function resolveY(
@@ -188,7 +202,7 @@ function resolveY(
 	halfWidth: number,
 	height: number,
 	direction: number,
-): { py: number; onGround: boolean } {
+): { py: number; onGround: boolean; collidedCeiling: boolean } {
 	const minX = px - halfWidth;
 	const maxX = px + halfWidth;
 	const minY = py - height;
@@ -204,6 +218,7 @@ function resolveY(
 	const bzMax = Math.floor((maxZ - 1e-6) / blockSize);
 
 	let onGround = false;
+	let collidedCeiling = false;
 
 	for (let by = byMin; by <= byMax; by++) {
 		for (let bz = bzMin; bz <= bzMax; bz++) {
@@ -211,16 +226,15 @@ function resolveY(
 				if (!isSolid(blocks, bx, by, bz, dims)) continue;
 
 				if (direction < 0) {
-					// Falling down, hit floor
 					py = (by + 1) * blockSize + height;
 					onGround = true;
 				} else if (direction > 0) {
-					// Moving up, hit ceiling
 					py = by * blockSize;
+					collidedCeiling = true;
 				}
 			}
 		}
 	}
 
-	return { py, onGround };
+	return { py, onGround, collidedCeiling };
 }

@@ -1,0 +1,150 @@
+<languages/>
+<translate>
+<!--T:1-->
+__NOTOC__
+
+==Jump Formula== <!--T:2-->
+
+<!--T:3-->
+The player's vertical speed is quite easy to calculate over the course of a jump:
+
+
+<!--T:4-->
+*<math>V\displaystyle _{Y,1} = 0.42</math>
+*<math>V\displaystyle _{Y,t} = \left (V_{Y,t-1} - \underset{gravity}{0.08}  \right ) \times \underset{drag}{0.98}</math>
+
+
+<!--T:5-->
+If <math display="inline"> \left | V\displaystyle _{Y,t} \right | < 0.005 </math>,   <math display="inline">V\displaystyle _{Y,t}</math> is set to 0 instead (the player's height doesn't change for that tick)
+
+<!--T:6-->
+In 1.9+, it's compared to 0.003 instead.
+
+
+
+<!--T:7-->
+'''Notes'''
+
+<!--T:8-->
+*<math display="inline"> V\displaystyle _{Y,0}</math> isn't assigned a value because it has no importance. By convention, the 0<sup>th</sup> tick corresponds to the player's initial velocity before jumping.
+*<math display="inline"> V\displaystyle _{Y,1}</math> corresponds to the initial jump motion. It is increased by 0.1 per level of [[Special:MyLanguage/Status Effects|Jump Boost]]
+*Jump height is slightly higher in 1.9 due to the momentum threshold being reduced (old=1.249, new=1.252)
+*Terminal velocity is -3.92 m/t
+*When the player collides vertically with a block, vertical momentum is cancelled and only the acceleration is left.
+
+
+
+==Jump duration == <!--T:9-->
+
+<!--T:10-->
+:The '''duration''' of a jump is the number of ticks between jumping and landing.
+
+<!--T:11-->
+:It also corresponds to the period of that jump's cycle when performed repeatedly.
+
+<!--T:12-->
+:This notion is linked to the notion of [[Special:MyLanguage/Tiers|Tiers]].
+
+<!--T:13-->
+:{| class="wikitable"
+!Description
+!Duration
+|-
+|Flat Jump
+|12 t
+|-
+|3bc Jump
+|11 t
+|-
+|<nowiki>+0.5 Jump</nowiki>
+|10 t
+|-
+| +1 Jump
+|9 t
+|-
+|2.5bc Jump
+|6 t
+|-
+|2bc Jump
+|3 t
+|-
+|1.8125bc Jump
+|2 t
+|}
+
+
+
+==Source code== <!--T:14-->
+
+<!--T:15-->
+'''from [[SourceCode:EntityLivingBase|EntityLivingBase]]'''
+
+<!--T:16-->
+:<syntaxhighlight lang="java">
+/* Code unrelated to vertical movement is cut out */
+
+<!--T:17-->
+protected float getJumpUpwardsMotion(){
+    return 0.42F;
+}
+
+
+<!--T:18-->
+protected void jump()
+{
+    this.motionY = this.getJumpUpwardsMotion();
+    if (this.isPotionActive(Potion.jump))
+    {
+        this.motionY += (this.getActivePotionEffect(Potion.jump).getAmplifier() + 1) * 0.1F;
+    }
+    this.isAirBorne = true;
+}
+
+
+<!--T:19-->
+public void moveEntityWithHeading(float strafe, float forward)
+{
+    ... /* also moves the player horizontally */
+
+    <!--T:20-->
+this.motionY -= 0.08;
+    this.motionY *= 0.98;
+}
+
+
+<!--T:21-->
+public void onLivingUpdate()
+{
+    if (this.jumpTicks > 0)
+        --this.jumpTicks;
+
+    <!--T:22-->
+if (Math.abs(this.motionY) < 0.005D)
+        this.motionY = 0.0D;
+
+
+    <!--T:23-->
+if (this.isJumping)
+    {
+        ... /* different if in water or lava */
+
+        <!--T:24-->
+if (this.onGround && this.jumpTicks == 0)
+        {
+            this.jump();
+            this.jumpTicks = 10; //activate autojump cooldown (0.5s)
+        }
+    }
+        
+    else
+    {
+        this.jumpTicks = 0; //reset autojump cooldown
+    }
+
+    <!--T:25-->
+...
+    
+    this.moveEntityWithHeading(this.moveStrafing, this.moveForward);
+}
+</syntaxhighlight>
+</translate>

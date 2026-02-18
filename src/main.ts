@@ -10,8 +10,7 @@ import buildBlocks, {
 	CHUNK_SIZE_Z,
 } from './block-builder';
 import { greedyMesh } from './greedy-mesh';
-import { FPSCAM, FREECAM } from './movement';
-import { moveAndCollide } from './collision';
+import { FREECAM, physicsTick, createPlayerState } from './movement';
 
 // Practical TODO
 // - different blocks with different textures
@@ -39,10 +38,6 @@ const up = vec3.create(0, 1, 0);
 
 const cameraPos = vec3.create(50, 50, 50);
 const cameraFront = vec3.create(0, 0, -1);
-// const cameraTarget = vec3.create(0, 0, 1);
-
-// const cameraDirection = vec3.normalize(vec3.subtract(cameraPos, cameraTarget));
-// const cameraRight = vec3.normalize(vec3.cross(up, cameraDirection));
 const cameraUp = up;
 
 let cameraYaw = -90;
@@ -85,12 +80,8 @@ async function main(): Promise<void> {
 			cameraYaw += e.movementX * step;
 			cameraPitch -= e.movementY * step;
 
-			// prevents doing somersaults
 			if (cameraPitch + step >= 88) cameraPitch = 88 - step;
 			if (cameraPitch - step <= -88) cameraPitch = -88 + step;
-
-			// if (cameraPitch - 0.1 <= -(Math.PI / 2))
-			// 	cameraPitch = -(Math.PI / 2) + 0.1;
 
 			const direction = vec3.create(
 				Math.cos(degToRad(cameraYaw)) * Math.cos(degToRad(cameraPitch)),
@@ -131,35 +122,29 @@ async function main(): Promise<void> {
 
 	let lastT = 0;
 	const keysDown = new Set<string>();
+	const playerState = createPlayerState();
+	const playerHeight = BLOCK_SIZE * 2 * 0.9;
+	const playerHalfWidth = BLOCK_SIZE / 4;
 
 	function tick(t: number) {
-		const dt = Math.min(0.05, (t - lastT) / 1000);
+		const dt = Math.min(0.1, (t - lastT) / 1000);
 		lastT = t;
 
-		const gravity = 500; // units per second
-		const playerHeight = BLOCK_SIZE * 2 * 0.9;
-		const playerHalfWidth = BLOCK_SIZE / 4;
-
 		if (debuggerParams.freecam) {
-			const speed = 500; // units per second
-			const units = speed * dt;
-
-			FREECAM(keysDown, cameraPos, cameraFront, cameraUp, units);
+			FREECAM(keysDown, cameraPos, cameraFront, cameraUp, dt * 500);
 		} else {
-			const speed = 100; // units per second
-			const units = speed * dt;
-
-			const delta = FPSCAM(keysDown, cameraFront, cameraUp, units);
-			delta[1] -= gravity * dt;
-
-			moveAndCollide(
+			physicsTick(
+				playerState,
+				keysDown,
+				cameraFront,
+				cameraUp,
 				cameraPos,
-				delta,
 				blocks,
 				[CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z],
 				BLOCK_SIZE,
 				playerHalfWidth,
 				playerHeight,
+				dt,
 			);
 		}
 

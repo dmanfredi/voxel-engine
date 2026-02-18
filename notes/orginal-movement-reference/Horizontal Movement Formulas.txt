@@ -1,0 +1,151 @@
+<languages/>
+<translate>
+<!--T:1-->
+__NOTOC__
+On every tick, the game does these three steps:
+
+<!--T:2-->
+#Acceleration is added to the player's velocity.
+#The player is moved (new position = position + velocity).
+#The player's velocity is reduced to simulate drag.
+
+<!--T:3-->
+We'll start by introducing Multipliers in an effort to make formulas more readable.
+
+
+
+==Multipliers== <!--T:4-->
+
+<!--T:5-->
+:'''Movement Multiplier''' (See [[Special:MyLanguage/45 Strafe|45° Strafe]])
+
+
+<!--T:6-->
+::<math>M_{t} = \begin{Bmatrix}1.3 & \textrm{Sprinting} \\ 1.0 & \textrm{Walking}\\ 0.3 & \textrm{Sneaking}\\ 0.0 & \textrm{Stopping} \end{Bmatrix} \times \begin{Bmatrix}0.98 & \textrm{Default}\\ 1.0 & 45^{\circ}~\textrm{Strafe} \\ 0.98 \sqrt{2} & 45^{\circ}~\textrm{Sneak} \end{Bmatrix}</math>
+
+
+<!--T:7-->
+:'''Effects Multiplier''' (See [[Special:MyLanguage/Status Effects|Status Effects]])
+
+
+<!--T:8-->
+::<math>E_{t} = \underset{Decreases ~ by ~ 15\% ~ per ~ level ~ of ~ Slowness}{\underset{Increases ~ by ~ 20\% ~ per ~ level ~ of ~ Speed}{\underbrace{\left ( 1 + 0.2\times Speed \right ) ~ \times ~ \left ( 1 - 0.15\times Slowness \right )}}} \geq 0</math>
+
+
+<!--T:9-->
+:'''Slipperiness Multiplier''' (See [[Special:MyLanguage/Slipperiness|Slipperiness]])
+
+
+<!--T:10-->
+::<math>S_{t} = \begin{Bmatrix}0.6 & \textrm{Default}\\ 0.8 & \textrm{Slime}\\ 0.98& \textrm{Ice} \\ 1.0 & \textrm{Airborne} \end{Bmatrix}</math>
+:
+
+<!--T:11-->
+<br />
+
+==Linear Formulas== <!--T:12-->
+
+<!--T:13-->
+These simplified formulas only apply to linear movement (no change in direction).
+While this condition might seem very restrictive, these formulas are very useful to analyze conventional jumps and momentum
+We'll later expand on these formulas by including angles.
+:<br />'''Definition''':
+:*<math>V_{H,0}</math> is the player's initial speed (default = 0).
+:*<math display="inline">V_{H,t}</math> is the player's speed on tick <math display="inline">t</math>.
+
+
+<!--T:14-->
+:'''Ground Speed''':
+
+<!--T:15-->
+::<math>V_{H,t} = \underset{Momentum}{\underbrace{\underset{ }{V_{H,t-1} \times S_{t-1} \times 0.91 }}} ~ + ~ \underset{Acceleration}{\underbrace{0.1 \times M_{t} \times E_{t} \times \left (\frac{0.6}{S_{t}} \right )^{3}}}</math>
+
+
+<!--T:16-->
+:'''Jump Speed''':
+
+<!--T:17-->
+::<math>V_{H,t} = \underset{Momentum}{\underbrace{\underset{ }{V_{H,t-1} \times S_{t-1} \times 0.91 }}} ~ + ~ \underset{Acceleration}{\underbrace{0.1 \times M_{t} \times E_{t} \times \left (\frac{0.6}{S_{t}} \right )^{3}}} + \underset{Sprintjump ~ Boost}{\underbrace{\begin{Bmatrix}0.2 & \textrm{Sprinting}\\ 0.0 & \textrm{Else}\end{Bmatrix} }}</math>
+
+
+<!--T:18-->
+:'''Air Speed''':
+
+<!--T:19-->
+::<math>V_{H,t} = \underset{Momentum}{\underbrace{\underset{ }{V_{H,t-1} \times S_{t-1} \times 0.91 }}} ~ + ~ \underset{Acceleration}{\underbrace{\underset{ }{0.02 \times M_{t}}}} </math>
+
+
+
+==Complete Formulas== <!--T:20-->
+
+<!--T:21-->
+Let's introduce two more variables:
+:*<math display="inline"> D_{t} </math> , The player's Direction in degrees (defined by their inputs and rotation)
+:*<math display="inline"> F_{t} </math> , The player's Facing in degrees (defined by their rotation only)
+
+
+<!--T:22-->
+In reality, angles aren't as simple as that, as there are a limited number of significant angles (see [[Special:MyLanguage/Facing and Angles|Facing and Angles]]).
+
+<!--T:23-->
+For the purpose of simplicity, we'll ignore this fact.
+
+
+<!--T:24-->
+:'''Definition''':
+:*<math display="inline">V_{X,0}</math> and <math display="inline">V_{Z,0}</math> correspond to the player's initial velocity.
+:*<math display="inline">V_{X,t}</math> and <math display="inline">V_{Z,t}</math> correspond to the player's velocity on tick <math display="inline">t</math>  <br />  <br />
+:'''Ground Velocity''':
+
+<!--T:25-->
+::<math>V\displaystyle _{X,t} = \underset{ }{V\displaystyle _{X,t-1} \times S_{t-1} \times 0.91 } ~ + ~ 0.1 \times M_{t} \times E_{t} \times \left (\frac{0.6}{S_{t}} \right )^{3} \times \sin (D_{t}) </math>
+::<math>V\displaystyle _{Z,t} = \underset{Momentum}{\underbrace{\underset{ }{V\displaystyle _{Z,t-1} \times S_{t-1} \times 0.91 }}} ~ + ~ \underset{Acceleration}{\underbrace{0.1 \times M_{t} \times E_{t} \times \left (\frac{0.6}{S_{t}} \right )^{3}}} \times \cos (D_{t}) </math>
+
+<!--T:26-->
+:'''Jump Velocity''':
+
+<!--T:27-->
+::<math>V\displaystyle _{X,t} = \underset{ }{V\displaystyle _{X,t-1} \times S_{t-1} \times 0.91 } ~ + ~ 0.1 \times M_{t} \times E_{t} \times \left (\frac{0.6}{S_{t}} \right )^{3} \times \sin (D_{t}) + \begin{Bmatrix} 0.2 & \textrm{Sprinting}\\ 0.0 & \textrm{Else}\end{Bmatrix} \times \sin (F_{t}) </math>
+::<math>V\displaystyle _{Z,t} = \underset{Momentum}{\underbrace{\underset{ }{V\displaystyle _{Z,t-1} \times S_{t-1} \times 0.91 }}} ~ + ~ \underset{Acceleration}{\underbrace{0.1 \times M_{t} \times E_{t} \times \left (\frac{0.6}{S_{t}} \right )^{3}}} \times \cos (D_{t}) + \underset{Sprintjump ~ Boost }{\underbrace{\begin{Bmatrix} 0.2 & \textrm{Sprinting}\\ 0.0 & \textrm{Else}\end{Bmatrix} \times \cos (F_{t})}} </math>
+
+<!--T:28-->
+:'''Air Velocity''':
+
+<!--T:29-->
+::<math>V\displaystyle _{X,t} = \underset{ }{V\displaystyle _{X,t-1} \times S_{t-1} \times 0.91 } ~ + ~ 0.02 \times M_{t} \times \sin (D_{t}) </math>
+::<math>V\displaystyle _{Z,t} = \underset{Momentum}{\underbrace{\underset{ }{V\displaystyle _{Z,t-1} \times S_{t-1} \times 0.91 }}} ~ + ~ \underset{Acceleration}{\underbrace{\underset{}{0.02 \times M_{t}}}} \times \cos (D_{t}) </math>
+
+
+==Stopping Conditions== <!--T:30-->
+
+<!--T:31-->
+Horizontal speed is set to 0 if the player hits a wall, or if the speed is considered to be negligible.
+
+
+<!--T:32-->
+:'''Wall Collision''':
+
+<!--T:33-->
+::If the player hits a X-facing wall, then momentum is cancelled, and <math display="inline">V\displaystyle _{X,t}</math> only includes acceleration.
+::If the player hits a Z-facing wall, then momentum is cancelled, and <math display="inline">V\displaystyle _{Z,t}</math> only includes acceleration.
+::In either of these case, the player stops sprinting.
+
+
+
+<!--T:34-->
+:'''Negligible Speed Threshold''':
+
+<!--T:35-->
+::If <math display="inline"> \left | V\displaystyle _{X,t-1} \times S_{t-1} \times 0.91 \right | < 0.005, </math> then momentum is cancelled, and only the acceleration is left.
+::If <math display="inline"> \left | V\displaystyle _{Z,t-1} \times S_{t-1} \times 0.91 \right | < 0.005, </math> then momentum is cancelled, and only the acceleration is left.
+
+<!--T:36-->
+::In 1.9+, they are compared to 0.003 instead.
+
+
+
+==Source Code== <!--T:37-->
+
+<!--T:38-->
+[...]
+</translate>

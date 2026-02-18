@@ -1,0 +1,139 @@
+<languages/>
+<translate>
+<!--T:1-->
+Sprinting is an essential mechanic that makes the player move faster and jump further.
+
+
+
+== Activation == <!--T:2-->
+
+<!--T:3-->
+Sprinting is activated with the '''Sprint key''', or by '''double-tapping''' '''Forward''' (on ground only).
+
+<!--T:4-->
+* It can also be activated with the help of the backward key. In any case, the activation timer is 7 ticks.
+* If the Forward key isn't held, the player stops sprinting.
+* The player stops sprinting after 30 seconds, unless the Sprint key is held.
+* Sprinting is incompatible with [[Special:MyLanguage/Sneaking|Sneaking]] (except in 1.14+).
+
+<!--T:5-->
+* Colliding with a wall causes the player to stop sprinting on the next tick.
+
+<!--T:6-->
+* Sprinting in air is delayed by one tick (activates and deactivates one tick late)
+*Sprinting cannot be activated when hungry, using an item, or being affected by Blindness.
+
+
+
+==Speed== <!--T:7-->
+
+<!--T:8-->
+Sprinting is 30% faster than walking, granting a base acceleration of '''0.13'''. The asymptotic speed on ground is ~0.286 m/t.
+
+<!--T:9-->
+Additionally, when the player jumps while sprinting, they accelerate by '''0.2''' towards their facing (regardless of whether the player is strafing)
+
+<!--T:10-->
+* This means the player accelerates quickly when sprint-jumping, making it the best way to build speed.
+*Sprint-jumping sideways is actually slower than forward, and goes off-track. But it does have applications:
+**Useful for [[Special:MyLanguage/Backward Momentum|Backward Momentum]], in cases where a regular sprint-jump would give too much speed.
+**Used in the "Sidestep" technique for jumps that require turning. ([https://youtu.be/fo2VlHOHiwo example])
+
+
+
+==Code== <!--T:11-->
+
+<!--T:12-->
+The following snippets of code deal with how sprinting is activated.<syntaxhighlight lang="java">
+/* EntityPlayerSP.java */
+public void onLivingUpdate()
+{
+    if (this.sprintingTicksLeft > 0)
+    {
+        --this.sprintingTicksLeft;
+
+        <!--T:13-->
+if (this.sprintingTicksLeft == 0)
+            this.setSprinting(false);
+    }
+
+    <!--T:14-->
+if (this.sprintToggleTimer > 0)
+    {
+        --this.sprintToggleTimer;
+    }
+
+    <!--T:15-->
+//Takes the player's actions from the previous tick.
+    boolean prevJumping = this.movementInput.jump;
+    boolean prevSneaking = this.movementInput.sneak;
+    float f = 0.8F;
+    boolean prevMovingForward = this.movementInput.moveForward >= f;
+        
+    //the movement input is updated (including moveForward - keep in mind it's multiplied by 0.3 when sneaking).
+    this.movementInput.updatePlayerMoveState();
+
+    <!--T:16-->
+[...]
+
+    <!--T:17-->
+//LEGACY METHOD: the player wasn't moving forward on the previous tick but is now. Must be on ground.
+    if (!this.isSprinting() && this.onGround && !prevSneaking && !prevMovingForward && this.movementInput.moveForward >= f && isntHungry && !this.isUsingItem() && !this.isPotionActive(Potion.blindness))
+    {
+        if (this.sprintToggleTimer <= 0 && !keyBindSprint.isKeyDown())
+            this.sprintToggleTimer = 7; //the timer is 7 ticks
+        else
+            this.setSprinting(true);
+        }
+        
+    //Activated when the player was moving forward on the previous tick
+    if (!this.isSprinting() && this.movementInput.moveForward >= f && isntHungry && !this.isUsingItem() && !this.isPotionActive(Potion.blindness) && keyBindSprint.isKeyDown())
+    {
+        this.setSprinting(true);
+    }
+
+        
+    <!--T:18-->
+if (this.isSprinting() && (this.movementInput.moveForward < f || this.isCollidedHorizontally || !isntHungry))
+    {
+        this.setSprinting(false);
+    }
+
+<!--T:19-->
+}
+
+
+
+<!--T:20-->
+/* From Entity, EntityLivingBase, EntityPlayerSP */
+public void setSprinting(boolean sprinting)
+{
+    this.setFlag(3, sprinting);
+
+    <!--T:21-->
+EntityAttribute movementSpeed = this.getEntityAttribute(movementSpeed);
+
+    <!--T:22-->
+if (movementSpeed.getModifier(sprintModifierUUID) != null)
+        movementSpeed.removeModifier(sprintModifier);
+
+    <!--T:23-->
+if (sprinting)
+        movementSpeed.applyModifier(sprintModifier); //sprintModifier adds 0.3 to the multiplier.
+
+    <!--T:24-->
+this.sprintingTicksLeft = sprinting ? 600 : 0;
+}
+</syntaxhighlight>
+
+
+<!--T:25-->
+Here is the simplified sequence of steps performed during a tick:
+#Update sprinting status
+#Calculate velocity and move the player
+#Update <code>groundMovementFactor</code> and <code>airMovementFactor</code> (multiplied by 1.3 if sprinting), which affect movement speed.
+
+
+<!--T:26-->
+The reason air sprinting activation is delayed by one tick is because the game fetches <code>airMovementFactor</code> when applying air movement (which is updated after the player has already moved). In contrast, when the player is on ground, the game gets the multiplier directly from <code>movementSpeed</code>, which is updated before moving (applies modifier in method <code>setSprinting</code>). <code>groundMovementFactor</code> is essentially useless in the case of Player entities.
+</translate>

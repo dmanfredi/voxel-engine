@@ -1,0 +1,110 @@
+<languages/>
+<translate>
+<!--T:1-->
+__NOTOC__
+Jumping is an essential mechanic that is quite self-explanatory.
+
+
+
+== Activation == <!--T:2-->
+
+<!--T:3-->
+To start a jump, the player must have been on ground the previous [[Special:MyLanguage/Ticks|tick]]. This is why the player is able to run off a block for 1 tick (e.g. with a [[Special:MyLanguage/Timings|headhitter timing]]) and still be able to jump.
+
+<!--T:4-->
+When the Jump key is held, the player jumps at most once every 10 ticks (0.5s)
+
+<!--T:5-->
+* Holding jump is not optimal when going up by more than 0.75b per jump. (consequence: towering is faster when jumping manually)
+* Releasing jump resets the cooldown, making the player able to jump again on the next tick.
+
+<!--T:6-->
+When a jump is initiated, the player's vertical speed is set to 0.42. On every following tick, it is decreased by 0.08 (gravity), then multiplied by 0.98 (drag).
+
+<!--T:7-->
+* When the player hits a ceiling, their vertical speed is set to 0 and they immediately start falling.
+* When the player hits the ground, their vertical speed is set to 0 and the <code>onGround</code> flag is set as true.
+Jumping in [[Special:MyLanguage/Water and Lava|water or lava]] makes the player move upward.
+
+
+
+== Jump Height == <!--T:8-->
+
+<!--T:9-->
+Prior to 1.9, the maximum jump height is '''1.249b'''. It is increased in 1.9+ by ~0.003b, making the player able to jump '''1.252b''' high.
+
+<!--T:10-->
+On flat ground, a jump lasts '''12 [[Special:MyLanguage/ticks|ticks]]''' (0.6s).
+
+
+
+== Speed == <!--T:11-->
+
+<!--T:12-->
+When combined with [[Special:MyLanguage/Sprinting|Sprinting]], jumping adds 0.2 units of acceleration towards the player's facing.
+
+<!--T:13-->
+In air, the player accelerates less quickly (only 20% of the base acceleration value), but conserves more speed (91% every tick, instead of 54.6%).
+
+<!--T:14-->
+Therefore, sprint-jumping is a very efficient way to build and conserve speed.
+
+
+
+== Code == <!--T:15-->
+
+<!--T:16-->
+The following snippets of code deal with how jump is activated.<syntaxhighlight lang="java">
+/* From EntityLivingBase.java, stripped of irrelevant code */
+public void onLivingUpdate()
+{
+    if (this.jumpTicks > 0)
+        --this.jumpTicks;
+
+    <!--T:17-->
+if (this.isJumping)
+    {
+        if (this.isInWater())
+            this.handleJumpWater(); //motionY += 0.04
+
+        <!--T:18-->
+else if (this.isInLava())
+            this.handleJumpLava();  //motionY += 0.04
+
+        <!--T:19-->
+else if (this.onGround && this.jumpTicks == 0)
+        {
+                this.jump();
+                this.jumpTicks = 10;
+        }
+    }
+
+    <!--T:20-->
+//releasing the jump key resets the 10 tick cooldown.
+    else
+        this.jumpTicks = 0;
+}
+
+
+<!--T:21-->
+/* From EntityLivingBase.java */
+protected void jump()
+{
+    this.motionY = 0.42; //Initial speed
+
+    <!--T:22-->
+//apply jump boost
+    if (this.isPotionActive(Potion.jump))
+        this.motionY += (this.getActivePotionEffect(Potion.jump).getAmplifier() + 1) * 0.1F;
+
+    <!--T:23-->
+//apply sprintjump boost
+    if (this.isSprinting())
+    {
+        float f = this.rotationYaw * 0.017453292F; //multiply by pi/180 to convert to radians
+        this.motionX -= MathHelper.sin(f) * 0.2F;
+        this.motionZ += MathHelper.cos(f) * 0.2F;
+    }
+}
+</syntaxhighlight>
+</translate>

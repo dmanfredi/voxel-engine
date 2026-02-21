@@ -2,13 +2,13 @@ import Block, { DIRT, NOTHING } from './Block';
 import Noise from 'noisejs';
 
 export const CHUNK_SIZE_X = 128;
-export const CHUNK_SIZE_Y = 64;
+export const CHUNK_SIZE_Y = 128;
 export const CHUNK_SIZE_Z = 128;
 const noise = new (Noise as unknown as { Noise: typeof Noise }).Noise(
 	Math.random(),
 );
 
-const NOISE_FREQUENCY = 0.081;
+const NOISE_FREQUENCY = 0.051;
 
 function create3DArray() {
 	return Array.from({ length: CHUNK_SIZE_Y }, (_, y) =>

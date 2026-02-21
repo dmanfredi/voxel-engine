@@ -36,7 +36,7 @@ const { vertexData: meshVertexData, numVertices: meshNumVertices } = greedyMesh(
 const degToRad = (d: number) => (d * Math.PI) / 180;
 const up = vec3.create(0, 1, 0);
 
-const cameraPos = vec3.create(50, 50, 50);
+const cameraPos = vec3.create(50, 2000, 50);
 const cameraFront = vec3.create(0, 0, -1);
 const cameraUp = up;
 
@@ -252,7 +252,7 @@ async function main(): Promise<void> {
 		});
 
 	// Load texture
-	const response = await fetch('../assets/MarbleBase512.png');
+	const response = await fetch('../assets/MarbleBase1024.png');
 	const imageBitmap = await createImageBitmap(await response.blob());
 
 	const cubeTexture: GPUTexture = device.createTexture({

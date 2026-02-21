@@ -8,12 +8,12 @@ const GRAVITY = 0.8;
 const VERTICAL_DRAG = 0.98;
 const TERMINAL_VELOCITY = -39.2;
 const GROUND_ACCEL = 3;
-const AIR_ACCEL = 0.26;
+const AIR_ACCEL = 0.5;
 const GROUND_DRAG = 0.546;
 const AIR_DRAG = 0.91;
-const SPRINT_JUMP_BOOST = 2.8;
+const SPRINT_JUMP_BOOST = 1.0;
 const NEGLIGIBLE_THRESHOLD = 0.05;
-const JUMP_COOLDOWN = 0.5;
+const JUMP_COOLDOWN = 0.4;
 
 export interface PlayerState {
 	velX: number;

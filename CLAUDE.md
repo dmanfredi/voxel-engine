@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Pillarman is a WebGPU-based voxel engine prototype written in TypeScript. It renders Minecraft-like voxel terrain using Perlin noise generation, greedy mesh optimization, and a skybox cubemap. Requires a WebGPU-capable browser.
+Pillarman is a WebGPU-based voxel engine prototype written in TypeScript. It renders Minecraft-like voxel terrain using 3D Perlin noise generation, greedy mesh optimization, and a skybox cubemap. Requires a WebGPU-capable browser.
 
 ## Commands
 
@@ -28,11 +28,11 @@ The application runs a single-chunk render loop with three ordered passes:
 2. **Wireframe pass** — optional barycentric debug overlay (additive blend)
 3. **Skybox pass** — cubemap rendered at depth=1.0 with `less-equal` test
 
-Rendering is on-demand: frames only redraw on user input or UI changes via `requestRender()`.
+The game loop uses `requestAnimationFrame` for continuous ticking (physics + rendering). Rendering also triggers on resize.
 
 ### Chunk & Mesh Generation
 
-- **block-builder.ts** generates a 128×128×128 block array using Perlin noise (frequency 0.01). Blocks indexed as `blocks[y][z][x]`, block size = 10 world units.
+- **block-builder.ts** generates a 128×128×128 block array using 3D Perlin noise (frequency 0.081). Blocks indexed as `blocks[y][z][x]`, block size = 10 world units. Solid blocks where `perlin3 > 0`.
 - **greedy-mesh.ts** — AO-aware greedy meshing. See "Greedy Mesher Details" below.
 
 ### Greedy Mesher Details (src/greedy-mesh.ts)
@@ -61,6 +61,12 @@ The mesher runs in three phases and has several non-obvious design decisions:
 
 **Vertex format**: `pos(3) + normal(3) + uv(2) + ao(1) + color(1 as u8×4) = 10 floats = 40 bytes`. The wireframe shader reads the same buffer as storage, striding by `10u`.
 
+### Physics & Collision (src/movement.ts, src/collision.ts)
+
+Minecraft-style physics with tick-based simulation:
+- **movement.ts** — Minecraft-like physics tick: gravity, jump velocity, ground/air drag, horizontal acceleration. Uses `MC_TICK = 0.05` as the reference timestep; all physics values scale by `dt/MC_TICK`. Two modes: physics movement (default) and freecam (`FREECAM` function, toggled via debug panel).
+- **collision.ts** — AABB-vs-voxel-grid collision. `moveAndCollide()` resolves axes independently (X → Z → Y order). Player AABB is defined relative to eye position: feet at `pos.y - height`, top at `pos.y`. Returns per-axis collision flags (`onGround`, `collidedX`, `collidedZ`, `collidedCeiling`).
+
 ### Shaders
 
 All WGSL shaders are defined as TypeScript string constants:
@@ -71,20 +77,22 @@ All WGSL shaders are defined as TypeScript string constants:
 
 ### Supporting Modules
 
-- **Block.ts** — block type enum (`DIRT`, `NOTHING`)
-- **debug.ts** — stats.js FPS counter + Tweakpane panel (wireframe toggle, vertex count)
+- **Block.ts** — block type as string constants (`DIRT`, `NOTHING`), `Block` class wrapping a type
+- **debug.ts** — stats.js FPS counter + Tweakpane panel (wireframe toggle, freecam toggle, vertex count)
 
 ### Camera & Input
 
-FPS-style camera with pointer lock. WASD movement, QE vertical, mouse look. Pitch clamped to ±88°. Speed: 500 units/sec. Uses `KeyW`-style codes (layout-independent).
+FPS-style camera with pointer lock. WASD movement, Space jump (or freecam up), Shift freecam down. Mouse look with pitch clamped to ±88°. Uses `KeyW`-style codes (layout-independent).
 
 ## TypeScript Configuration
 
-Strict mode with additional flags: `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `noImplicitReturns`, `noFallthroughCasesInSwitch`. Target ES2022, ESNext modules. WebGPU types via `@webgpu/types`.
+Strict mode with additional flags: `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `noImplicitReturns`, `noFallthroughCasesInSwitch`. Target ES2022, ESNext modules. WebGPU types via `@webgpu/types`. Uses `verbatimModuleSyntax` (requires `import type` for type-only imports).
 
 ## Code Style
 
 Respect the TypeScript and ESLint configurations as they are. Do not suppress lint rules with `eslint-disable` comments (e.g. `@typescript-eslint/no-non-null-assertion`). If the checker complains, fix the underlying type issue instead — use narrower types, union types, or runtime guards so the code is provably correct without escape hatches.
+
+ESLint uses `strictTypeChecked` + `stylisticTypeChecked` rulesets. Two rules are explicitly turned off: `prefer-optional-chain` and `no-unnecessary-condition` (due to `noUncheckedIndexedAccess` making many conditions technically necessary).
 
 After making code changes, always run `npx prettier --write "src/**/*.ts"` to format before committing or finishing.
 

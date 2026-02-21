@@ -37,7 +37,12 @@ const WATER_SHADER = /* wgsl */ `
 
 		// Schlick Fresnel: transparent near camera, mirror at horizon
 		let cosTheta = max(dot(normal, -eyeToSurface), 0.0);
-		let fresnel = mix(0.2, 1.0, pow(1.0 - cosTheta, 5.0));
+		
+		let baseReflectivity = 0.2; // how reflective the water is in general
+		
+		let fresnelExponent = 1.0; // how quickly the reflection fades as it approaches your feet
+		
+		let fresnel = mix(baseReflectivity, 1.0, pow(1.0 - cosTheta, fresnelExponent));
 
 		let reflectionColor = textureSample(skyTexture, waterSampler, direction * vec3f(1, 1, -1));
 

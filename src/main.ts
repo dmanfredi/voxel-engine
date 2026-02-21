@@ -12,9 +12,11 @@ import buildBlocks, {
 import { greedyMesh } from './greedy-mesh';
 import { FREECAM, physicsTick, createPlayerState } from './movement';
 
-// Practical TODO
+// TODO
+// - Skylights
+// - Better lighting (?)
 // - different blocks with different textures
-// - multiple chunks
+// - chunks
 
 if (!navigator.gpu) {
 	alert('WebGPU not supported on this browser.');

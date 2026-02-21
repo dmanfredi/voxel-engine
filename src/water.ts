@@ -35,14 +35,14 @@ const WATER_SHADER = /* wgsl */ `
 		let eyeToSurface = normalize(in.worldPos - uni.cameraPosition);
 		let direction = reflect(eyeToSurface, normal);
 
-		// Fresnel: high base reflectivity (salt flat with thin water layer)
+		// Schlick Fresnel: transparent near camera, mirror at horizon
 		let cosTheta = max(dot(normal, -eyeToSurface), 0.0);
-		let fresnel = mix(0.4, 1.0, pow(1.0 - cosTheta, 3.0));
+		let fresnel = mix(0.2, 1.0, pow(1.0 - cosTheta, 5.0));
 
 		let reflectionColor = textureSample(skyTexture, waterSampler, direction * vec3f(1, 1, -1));
 
-		let waterTint = vec4f(0.7, 0.75, 0.8, 1.0);
-		return mix(waterTint, reflectionColor, fresnel);
+		// Alpha = fresnel: transparent underfoot (ground shows through), opaque reflection at edges
+		return vec4f(reflectionColor.rgb, fresnel);
 	}
 `;
 
@@ -80,13 +80,27 @@ export function initWater(
 		},
 		fragment: {
 			module,
-			targets: [{ format: presentationFormat }],
+			targets: [
+				{
+					format: presentationFormat,
+					blend: {
+						color: {
+							srcFactor: 'src-alpha',
+							dstFactor: 'one-minus-src-alpha',
+						},
+						alpha: {
+							srcFactor: 'one',
+							dstFactor: 'one-minus-src-alpha',
+						},
+					},
+				},
+			],
 		},
 		primitive: {
 			cullMode: 'back',
 		},
 		depthStencil: {
-			depthWriteEnabled: true,
+			depthWriteEnabled: false,
 			depthCompare: 'less',
 			format: 'depth24plus',
 		},

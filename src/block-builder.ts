@@ -1,27 +1,16 @@
 import Block, { DIRT, NOTHING } from './Block';
-import Noise from 'noisejs';
 
 export const CHUNK_SIZE_X = 128;
 export const CHUNK_SIZE_Y = 128;
 export const CHUNK_SIZE_Z = 128;
-const noise = new (Noise as unknown as { Noise: typeof Noise }).Noise(
-	Math.random(),
-);
-
-const NOISE_FREQUENCY = 0.051;
 
 function create3DArray() {
 	return Array.from({ length: CHUNK_SIZE_Y }, (_, y) =>
-		Array.from({ length: CHUNK_SIZE_Z }, (_, z) =>
-			Array.from({ length: CHUNK_SIZE_X }, (_, x) => {
-				const value = noise.perlin3(
-					x * NOISE_FREQUENCY,
-					y * NOISE_FREQUENCY,
-					z * NOISE_FREQUENCY,
-				);
-				// return new Block(DIRT);
-				return new Block(value > 0 ? DIRT : NOTHING);
-			}),
+		Array.from({ length: CHUNK_SIZE_Z }, () =>
+			Array.from(
+				{ length: CHUNK_SIZE_X },
+				() => new Block(y === 0 ? DIRT : NOTHING),
+			),
 		),
 	);
 }

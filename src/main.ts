@@ -2,6 +2,7 @@ import { mat4, vec3 } from 'wgpu-matrix';
 import MainShader from './shader';
 import WireframeShader from './wireframe';
 import { initSkybox, drawSkybox, type SkyboxResources } from './skybox';
+import { initWater, drawWater } from './water';
 
 import { BuildDebug, debuggerParams, stats } from './debug';
 import buildBlocks, {
@@ -38,7 +39,7 @@ const { vertexData: meshVertexData, numVertices: meshNumVertices } = greedyMesh(
 const degToRad = (d: number) => (d * Math.PI) / 180;
 const up = vec3.create(0, 1, 0);
 
-const cameraPos = vec3.create(50, 2000, 50);
+const cameraPos = vec3.create(50, BLOCK_SIZE * 3, 50);
 const cameraFront = vec3.create(0, 0, -1);
 const cameraUp = up;
 
@@ -329,6 +330,17 @@ async function main(): Promise<void> {
 		presentationFormat,
 	);
 
+	// Initialize water plane (reuses skybox cubemap for reflection)
+	const water = initWater(
+		device,
+		presentationFormat,
+		skybox.texture,
+		skybox.sampler,
+		CHUNK_SIZE_X,
+		CHUNK_SIZE_Z,
+		BLOCK_SIZE,
+	);
+
 	let depthTexture: GPUTexture;
 
 	function ensureDepthTexture(width: number, height: number) {
@@ -422,6 +434,9 @@ async function main(): Promise<void> {
 			pass.setBindGroup(0, wireframeBindGroup);
 			pass.draw(meshNumVertices);
 		}
+
+		// Draw water plane (reflective surface above terrain)
+		drawWater(pass, device, water, viewProjectionMatrix, cameraPos);
 
 		// Draw skybox (after geometry, uses less-equal depth test)
 		drawSkybox(pass, device, skybox, viewMatrix, projection);

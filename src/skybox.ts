@@ -5,6 +5,8 @@ export interface SkyboxResources {
 	bindGroup: GPUBindGroup;
 	uniformBuffer: GPUBuffer;
 	uniformValues: Float32Array<ArrayBuffer>;
+	texture: GPUTexture;
+	sampler: GPUSampler;
 }
 
 interface TextureOptions {
@@ -274,7 +276,14 @@ export async function initSkybox(
 		],
 	});
 
-	return { pipeline, bindGroup, uniformBuffer, uniformValues };
+	return {
+		pipeline,
+		bindGroup,
+		uniformBuffer,
+		uniformValues,
+		texture,
+		sampler,
+	};
 }
 
 export function drawSkybox(

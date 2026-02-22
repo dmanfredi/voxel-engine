@@ -1,8 +1,8 @@
 import Block, { DIRT, NOTHING } from './Block';
 
-export const CHUNK_SIZE_X = 512;
+export const CHUNK_SIZE_X = 1024;
 export const CHUNK_SIZE_Y = 1;
-export const CHUNK_SIZE_Z = 512;
+export const CHUNK_SIZE_Z = 1024;
 
 function create3DArray() {
 	return Array.from({ length: CHUNK_SIZE_Y }, (_, y) =>

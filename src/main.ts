@@ -40,9 +40,9 @@ const degToRad = (d: number) => (d * Math.PI) / 180;
 const up = vec3.create(0, 1, 0);
 
 const cameraPos = vec3.create(
-	BLOCK_SIZE * 100,
+	(CHUNK_SIZE_X / 2) * BLOCK_SIZE,
 	BLOCK_SIZE * 3,
-	BLOCK_SIZE * 100,
+	(CHUNK_SIZE_Z / 2) * BLOCK_SIZE,
 );
 const cameraFront = vec3.create(0, 0, -1);
 const cameraUp = up;

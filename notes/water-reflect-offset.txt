@@ -1,0 +1,23 @@
+	@fragment fn fs(in: VSOutput) -> @location(0) vec4f {
+		let normal = vec3f(0.0, 1.0, 0.0);
+		let eyeToSurface = normalize(in.worldPos - uni.cameraPosition);
+		let direction = reflect(eyeToSurface, normal);
+
+		// Schlick Fresnel: transparent near camera, mirror at horizon
+		let cosTheta = max(dot(normal, -eyeToSurface), 0.0);
+		
+		let baseReflectivity = 0.2; // how reflective the water is in general
+		
+		let fresnelExponent = 1.0; // how quickly the reflection fades as it approaches your feet
+		
+		let fresnel = mix(baseReflectivity, 1.0, pow(1.0 - cosTheta, fresnelExponent));
+
+		// Offset reflection to match skybox vertical shift
+		let skyboxYOffset = 0.0; // keeps things right with viewRotationOnly[13] = -500;
+		let sampleDir = normalize(direction + vec3f(0.0, skyboxYOffset, 0.0));
+
+		let reflectionColor = textureSample(skyTexture, waterSampler, sampleDir * vec3f(1, 1, -1));
+
+		// Alpha = fresnel: transparent underfoot (ground shows through), opaque reflection at edges
+		return vec4f(reflectionColor.rgb, fresnel);
+	}

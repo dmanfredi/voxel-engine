@@ -242,12 +242,12 @@ export async function initSkybox(
 	const texture = await loadCubemapTexture(
 		device,
 		[
-			'assets/skybox/px.png',
-			'assets/skybox/nx.png',
-			'assets/skybox/py.png',
-			'assets/skybox/ny.png',
-			'assets/skybox/pz.png',
-			'assets/skybox/nz.png',
+			'assets/skybox-sunny/px.png',
+			'assets/skybox-sunny/nx.png',
+			'assets/skybox-sunny/py.png',
+			'assets/skybox-sunny/ny.png',
+			'assets/skybox-sunny/pz.png',
+			'assets/skybox-sunny/nz.png',
 		],
 		{ mips: true },
 	);

@@ -50,7 +50,10 @@ const MainShader = /*wgsl*/ `
 			brightness = 0.8;   // north/south
 		}
 
-		return vec4f(texColor.rgb * brightness * vsOut.ao, texColor.a);
+		// a nice blue vec3f(0.49, 0.55, 0.68)
+		let shadowColor = vec3f(0.2, 0.2, 0.25); // AO shadow tint
+		let lit = texColor.rgb * brightness;
+		return vec4f(mix(shadowColor, lit, vsOut.ao), texColor.a);
 	}
 `;
 

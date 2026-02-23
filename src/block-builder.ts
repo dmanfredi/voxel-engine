@@ -1,9 +1,9 @@
 import Block, { DIRT, NOTHING } from './Block';
 const MAX_CUBE_SIZE = 8;
 
-export const CHUNK_SIZE_X = 2048;
+export const CHUNK_SIZE_X = 1024;
 export const CHUNK_SIZE_Y = MAX_CUBE_SIZE;
-export const CHUNK_SIZE_Z = 2048;
+export const CHUNK_SIZE_Z = 1024;
 
 function create3DArray() {
 	return Array.from({ length: CHUNK_SIZE_Y }, (_, y) =>

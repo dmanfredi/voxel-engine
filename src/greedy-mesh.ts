@@ -116,6 +116,8 @@ export function greedyMesh(world: World, textureScale = 1): GreedyMeshResult {
 		axis: number;
 		// Per-corner AO values (0-3), matching v0-v3
 		ao: [AO, AO, AO, AO];
+		// Block type ID (used as texture array layer index)
+		blockType: number;
 	}[] = [];
 
 	// Dimension lookup helper - returns dimension for axis 0, 1, or 2
@@ -219,13 +221,14 @@ export function greedyMesh(world: World, textureScale = 1): GreedyMeshResult {
 							if (!done) h++;
 						}
 
-						// Unpack AO from mask value
+						// Unpack AO + block type from mask value
 						const absMask = Math.abs(maskVal);
-						const aoPacked = absMask - 1;
-						const ao0 = (aoPacked & 3) as AO;
-						const ao1 = ((aoPacked >> 2) & 3) as AO;
-						const ao2 = ((aoPacked >> 4) & 3) as AO;
-						const ao3 = ((aoPacked >> 6) & 3) as AO;
+						const packed = absMask - 1;
+						const ao0 = (packed & 3) as AO;
+						const ao1 = ((packed >> 2) & 3) as AO;
+						const ao2 = ((packed >> 4) & 3) as AO;
+						const ao3 = ((packed >> 6) & 3) as AO;
+						const blockType = packed >> 8;
 
 						// Create the quad
 						// Position in the slice plane
@@ -270,6 +273,7 @@ export function greedyMesh(world: World, textureScale = 1): GreedyMeshResult {
 							positiveFacing: maskVal > 0,
 							axis,
 							ao: [ao0, ao1, ao2, ao3],
+							blockType,
 						});
 
 						// Zero out the mask cells we just used
@@ -294,15 +298,11 @@ export function greedyMesh(world: World, textureScale = 1): GreedyMeshResult {
 
 	// Convert quads to vertex data
 	// Each quad = 2 triangles = 6 vertices
-	// Each vertex: position (3) + normal (3) + uv (2) + ao (1) + color (1 as uint32) = 10 floats
+	// Each vertex: position (3) + normal (3) + uv (2) + ao (1) + texLayer (1 as u32) = 10 floats
 	const FLOATS_PER_VERTEX = 10;
-	const BYTES_PER_VERTEX = FLOATS_PER_VERTEX * 4; // 40
 	const numVertices = quads.length * 6;
 	const vertexData = new Float32Array(numVertices * FLOATS_PER_VERTEX);
-	const colorData = new Uint8Array(vertexData.buffer);
-
-	// Default color (will be replaced by texture sampling anyway)
-	const color: [number, number, number] = [200, 150, 100];
+	const uint32View = new Uint32Array(vertexData.buffer);
 
 	let vertexOffset = 0;
 	for (const quad of quads) {
@@ -417,12 +417,8 @@ export function greedyMesh(world: World, textureScale = 1): GreedyMeshResult {
 			// AO
 			vertexData[base + 8] = vert.ao;
 
-			// Color (RGBA as bytes at the correct offset)
-			const byteOffset = vertexOffset * BYTES_PER_VERTEX + 36;
-			colorData[byteOffset + 0] = color[0];
-			colorData[byteOffset + 1] = color[1];
-			colorData[byteOffset + 2] = color[2];
-			colorData[byteOffset + 3] = 255;
+			// Texture layer index (block type ID)
+			uint32View[base + 9] = quad.blockType;
 
 			vertexOffset++;
 		}

@@ -184,24 +184,24 @@ async function main(): Promise<void> {
 		code: WireframeShader,
 	});
 
+	const vertexBufferLayout: GPUVertexBufferLayout = {
+		arrayStride: (3 + 3 + 2 + 1 + 1) * 4, // pos, normal, uv, ao, texLayer (4 bytes each)
+		attributes: [
+			{ shaderLocation: 0, offset: 0, format: 'float32x3' }, // position
+			{ shaderLocation: 1, offset: 12, format: 'float32x3' }, // normal
+			{ shaderLocation: 2, offset: 24, format: 'float32x2' }, // uv
+			{ shaderLocation: 3, offset: 32, format: 'float32' }, // ao
+			{ shaderLocation: 4, offset: 36, format: 'uint32' }, // texLayer
+		],
+	};
+
 	const pipeline = device.createRenderPipeline({
 		label: '3 attributes',
 		layout: 'auto',
 		vertex: {
 			module,
 			entryPoint: 'vs',
-			buffers: [
-				{
-					arrayStride: (3 + 3 + 2 + 1 + 1) * 4, // pos, normal, uv, ao, color (4 bytes each)
-					attributes: [
-						{ shaderLocation: 0, offset: 0, format: 'float32x3' }, // position
-						{ shaderLocation: 1, offset: 12, format: 'float32x3' }, // normal
-						{ shaderLocation: 2, offset: 24, format: 'float32x2' }, // uv
-						{ shaderLocation: 3, offset: 32, format: 'float32' }, // ao
-						{ shaderLocation: 4, offset: 36, format: 'unorm8x4' }, // color
-					],
-				},
-			],
+			buffers: [vertexBufferLayout],
 		},
 		fragment: {
 			module,
@@ -261,22 +261,37 @@ async function main(): Promise<void> {
 			},
 		});
 
-	// Load texture
-	const response = await fetch('../assets/MarbleBase1024.png');
-	const imageBitmap = await createImageBitmap(await response.blob());
+	// Load block textures into a texture array (one layer per block type)
+	const TEXTURE_SIZE = 256;
+	const blockTextureSources: { layer: number; src: string }[] = [
+		{ layer: 0, src: '../assets/MarbleBase256.png' }, // AIR placeholder (never sampled)
+		{ layer: 1, src: '../assets/MarbleBase256.png' }, // DIRT
+	];
 
-	const cubeTexture: GPUTexture = device.createTexture({
-		size: [imageBitmap.width, imageBitmap.height, 1],
+	const numLayers = blockTextureSources.length;
+	const blockTextureArray = device.createTexture({
+		label: 'block texture array',
+		size: [TEXTURE_SIZE, TEXTURE_SIZE, numLayers],
 		format: 'rgba8unorm',
 		usage:
 			GPUTextureUsage.TEXTURE_BINDING |
 			GPUTextureUsage.COPY_DST |
 			GPUTextureUsage.RENDER_ATTACHMENT,
 	});
-	device.queue.copyExternalImageToTexture(
-		{ source: imageBitmap },
-		{ texture: cubeTexture },
-		[imageBitmap.width, imageBitmap.height],
+
+	await Promise.all(
+		blockTextureSources.map(async ({ layer, src }) => {
+			const response = await fetch(src);
+			const bitmap = await createImageBitmap(await response.blob(), {
+				resizeWidth: TEXTURE_SIZE,
+				resizeHeight: TEXTURE_SIZE,
+			});
+			device.queue.copyExternalImageToTexture(
+				{ source: bitmap },
+				{ texture: blockTextureArray, origin: { z: layer } },
+				[TEXTURE_SIZE, TEXTURE_SIZE],
+			);
+		}),
 	);
 
 	// nearest filtering for crisp textures.
@@ -309,13 +324,16 @@ async function main(): Promise<void> {
 	device.queue.writeBuffer(vertexBuffer, 0, meshVertexData);
 
 	// Single bind group for the entire chunk
+	const blockTextureView = blockTextureArray.createView({
+		dimension: '2d-array',
+	});
 	const bindGroup = device.createBindGroup({
 		label: 'bind group for chunk',
 		layout: pipeline.getBindGroupLayout(0),
 		entries: [
 			{ binding: 0, resource: { buffer: uniformBuffer } },
 			{ binding: 1, resource: sampler },
-			{ binding: 2, resource: cubeTexture.createView() },
+			{ binding: 2, resource: blockTextureView },
 		],
 	});
 

@@ -1,4 +1,4 @@
-import Block, { DIRT, NOTHING } from './Block';
+import { AIR, MARBLE } from './block';
 import Noise from 'noisejs';
 
 export const CHUNK_SIZE_X = 128;
@@ -10,24 +10,24 @@ const noise = new (Noise as unknown as { Noise: typeof Noise }).Noise(
 
 const NOISE_FREQUENCY = 0.051;
 
-function create3DArray() {
-	return Array.from({ length: CHUNK_SIZE_Y }, (_, y) =>
-		Array.from({ length: CHUNK_SIZE_Z }, (_, z) =>
-			Array.from({ length: CHUNK_SIZE_X }, (_, x) => {
+function buildBlocks(): Uint8Array {
+	const blocks = new Uint8Array(CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z);
+
+	for (let y = 0; y < CHUNK_SIZE_Y; y++) {
+		for (let z = 0; z < CHUNK_SIZE_Z; z++) {
+			for (let x = 0; x < CHUNK_SIZE_X; x++) {
 				const value = noise.perlin3(
 					x * NOISE_FREQUENCY,
 					y * NOISE_FREQUENCY,
 					z * NOISE_FREQUENCY,
 				);
-				// return new Block(DIRT);
-				return new Block(value > 0 ? DIRT : NOTHING);
-			}),
-		),
-	);
-}
+				const index =
+					y * CHUNK_SIZE_Z * CHUNK_SIZE_X + z * CHUNK_SIZE_X + x;
+				blocks[index] = value > 0 ? MARBLE : AIR;
+			}
+		}
+	}
 
-function buildBlocks() {
-	const blocks = create3DArray();
 	return blocks;
 }
 

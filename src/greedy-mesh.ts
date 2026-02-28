@@ -1,3 +1,4 @@
+import { AIR } from './block';
 import type { World } from './world';
 
 export interface GreedyMeshResult {
@@ -142,9 +143,10 @@ export function greedyMesh(world: World, textureScale = 1): GreedyMeshResult {
 
 		// Mask stores encoded face info:
 		// 0 = no face
-		// For faces: direction * (1 + aoPacked)
-		// where aoPacked = ao0 | (ao1 << 2) | (ao2 << 4) | (ao3 << 6)
-		// This way, two faces merge only if they have the same direction AND AO pattern.
+		// For faces: direction * (1 + aoPacked + (blockType << 8))
+		// where aoPacked = ao0 | (ao1 << 2) | (ao2 << 4) | (ao3 << 6) (bits 0-7)
+		// and blockType occupies bits 8+ of the absolute value.
+		// Two faces merge only if they have the same direction, AO pattern, AND block type.
 		const mask = new Int32Array(uDim * vDim);
 
 		// Sweep through slices perpendicular to the axis
@@ -154,24 +156,30 @@ export function greedyMesh(world: World, textureScale = 1): GreedyMeshResult {
 			let n = 0;
 			for (x[v] = 0; x[v] < vDim; x[v]++) {
 				for (x[u] = 0; x[u] < uDim; x[u]++) {
-					// Get blocks on either side of this potential face
-					const solidA = world.isSolid(x[0], x[1], x[2]);
-					const solidB = world.isSolid(
+					// Get block IDs on either side of this potential face
+					const blockA = world.getBlock(x[0], x[1], x[2]);
+					const blockB = world.getBlock(
 						x[0] + q[0],
 						x[1] + q[1],
 						x[2] + q[2],
 					);
+
+					const solidA = blockA !== AIR;
+					const solidB = blockB !== AIR;
 
 					if (solidA === solidB) {
 						// Both solid or both air - no face needed
 						mask[n] = 0;
 					} else {
 						const positive = solidA;
+						const blockType = positive ? blockA : blockB;
 						const airD = positive ? x[axis] + 1 : x[axis];
 						const ao = computeFaceAO(x[u], x[v], airD, axis, u, v);
 						const aoPacked =
 							ao[0] | (ao[1] << 2) | (ao[2] << 4) | (ao[3] << 6);
-						mask[n] = (positive ? 1 : -1) * (1 + aoPacked);
+						mask[n] =
+							(positive ? 1 : -1) *
+							(1 + aoPacked + (blockType << 8));
 					}
 					n++;
 				}

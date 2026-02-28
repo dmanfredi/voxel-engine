@@ -1,4 +1,4 @@
-import Block, { DIRT, NOTHING } from './Block';
+import Block, { MARBLE, NOTHING } from './Block';
 import Noise from 'noisejs';
 
 export const CHUNK_SIZE_X = 128;
@@ -19,8 +19,8 @@ function create3DArray() {
 					y * NOISE_FREQUENCY,
 					z * NOISE_FREQUENCY,
 				);
-				// return new Block(DIRT);
-				return new Block(value > 0 ? DIRT : NOTHING);
+				// return new Block(MARBLE);
+				return new Block(value > 0 ? MARBLE : NOTHING);
 			}),
 		),
 	);

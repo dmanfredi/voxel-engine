@@ -1,15 +1,14 @@
-import type Block from './Block';
-import { NOTHING } from './Block';
+import { type BlockId, AIR, blockRegistry } from './block';
 
 export class World {
 	readonly sizeX: number;
 	readonly sizeY: number;
 	readonly sizeZ: number;
 	readonly blockSize: number;
-	private blocks: Block[][][]; // [y][z][x]
+	private blocks: Uint8Array;
 
 	constructor(
-		blocks: Block[][][],
+		blocks: Uint8Array,
 		sizeX: number,
 		sizeY: number,
 		sizeZ: number,
@@ -22,7 +21,11 @@ export class World {
 		this.blockSize = blockSize;
 	}
 
-	getBlock(x: number, y: number, z: number): Block | null {
+	private index(x: number, y: number, z: number): number {
+		return y * this.sizeZ * this.sizeX + z * this.sizeX + x;
+	}
+
+	getBlock(x: number, y: number, z: number): BlockId {
 		if (
 			x < 0 ||
 			x >= this.sizeX ||
@@ -31,12 +34,12 @@ export class World {
 			z < 0 ||
 			z >= this.sizeZ
 		) {
-			return null;
+			return AIR;
 		}
-		return this.blocks[y]?.[z]?.[x] ?? null;
+		return this.blocks[this.index(x, y, z)] ?? AIR;
 	}
 
-	setBlock(x: number, y: number, z: number, block: Block): boolean {
+	setBlock(x: number, y: number, z: number, id: BlockId): boolean {
 		if (
 			x < 0 ||
 			x >= this.sizeX ||
@@ -47,14 +50,11 @@ export class World {
 		) {
 			return false;
 		}
-		const row = this.blocks[y]?.[z];
-		if (!row) return false;
-		row[x] = block;
+		this.blocks[this.index(x, y, z)] = id;
 		return true;
 	}
 
 	isSolid(x: number, y: number, z: number): boolean {
-		const block = this.getBlock(x, y, z);
-		return block !== null && block.type !== NOTHING;
+		return blockRegistry.isSolid(this.getBlock(x, y, z));
 	}
 }

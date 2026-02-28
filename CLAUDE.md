@@ -24,6 +24,7 @@ No test framework is configured.
 ### Render Pipeline (src/main.ts)
 
 The application runs a single-chunk render loop with three ordered passes:
+
 1. **Main geometry pass** — textured voxel mesh with depth write
 2. **Wireframe pass** — optional barycentric debug overlay (additive blend)
 3. **Skybox pass** — cubemap rendered at depth=1.0 with `less-equal` test
@@ -40,22 +41,25 @@ The game loop uses `requestAnimationFrame` for continuous ticking (physics + ren
 The mesher runs in three phases and has several non-obvious design decisions:
 
 **Phase 1 — Mask Building (per slice):**
+
 - Sweeps all 3 axes. For each axis, `u = (axis+1)%3`, `v = (axis+2)%3`.
 - Checks blockA (at `d`) vs blockB (at `d+1`) — solid/air boundary = face.
 - AO is computed here: for each face's 4 corners, checks 3 neighbor blocks on the air side (2 edge-adjacent + 1 diagonal). Standard `vertexAO` formula: both sides solid → 0, otherwise `3 - count`.
 - AO is packed into the mask value: `direction * (1 + aoPacked)` where `aoPacked` is 8 bits (2 per corner). This means merge checks (`mask[a] === mask[b]`) inherently enforce matching direction AND AO.
 
 **Phase 2 — Greedy Merge (per slice):**
+
 - Standard greedy rectangle expansion: extend width along u, then height along v.
 - Conservative AO merging: faces only merge if mask values are identical (same direction + same AO at all 4 corners). Stricter than edge-compatible merging but guarantees correct GPU interpolation.
 
 **Phase 3 — Quad → Vertex Conversion:**
+
 - **Normals**: derived from `axis` + `positiveFacing`.
 - **AO**: integer 0-3 mapped through `AO_CURVE = [0.2, 0.45, 0.7, 1.0]` to a per-vertex float.
 - **UVs** — three invariants:
-  1. *World-aligned origins*: UVs use absolute block position (`originU/scale`, `originV/scale`), not quad-relative. Adjacent quads that couldn't merge still tile seamlessly at any `textureScale`.
-  2. *No V-inversion*: UV = `position / scale` directly. Inverting V breaks world-alignment because V at a given position would depend on quad origin + size.
-  3. *Axis 0 rotation*: X-facing faces swap U/V so texture V always maps to world Y (keeps textures upright on walls).
+    1. _World-aligned origins_: UVs use absolute block position (`originU/scale`, `originV/scale`), not quad-relative. Adjacent quads that couldn't merge still tile seamlessly at any `textureScale`.
+    2. _No V-inversion_: UV = `position / scale` directly. Inverting V breaks world-alignment because V at a given position would depend on quad origin + size.
+    3. _Axis 0 rotation_: X-facing faces swap U/V so texture V always maps to world Y (keeps textures upright on walls).
 - **Triangulation flip**: when `ao0 + ao2 > ao1 + ao3`, splits along v1-v3 diagonal instead of v0-v2 to avoid AO interpolation artifacts.
 - **Winding order**: positive=CCW, negative=CW. Combined with flip: 4 triangle orderings total.
 
@@ -64,12 +68,14 @@ The mesher runs in three phases and has several non-obvious design decisions:
 ### Physics & Collision (src/movement.ts, src/collision.ts)
 
 Minecraft-style physics with tick-based simulation:
+
 - **movement.ts** — Minecraft-like physics tick: gravity, jump velocity, ground/air drag, horizontal acceleration. Uses `MC_TICK = 0.05` as the reference timestep; all physics values scale by `dt/MC_TICK`. Two modes: physics movement (default) and freecam (`FREECAM` function, toggled via debug panel).
 - **collision.ts** — AABB-vs-voxel-grid collision. `moveAndCollide()` resolves axes independently (X → Z → Y order). Player AABB is defined relative to eye position: feet at `pos.y - height`, top at `pos.y`. Returns per-axis collision flags (`onGround`, `collidedX`, `collidedZ`, `collidedCeiling`).
 
 ### Shaders
 
 All WGSL shaders are defined as TypeScript string constants:
+
 - **shader.ts** — main vertex/fragment with `mat4x4` view-projection uniform, per-face brightness (top=1.0, Z-sides=0.8, X-sides=0.6, bottom=0.5), per-vertex AO multiplied into final color
 - **wireframe.ts** — barycentric edge detection with smooth antialiasing
 - **skybox.ts** — cubemap sampling using `viewDirectionProjectionInverse` uniform; also handles cubemap texture loading and mipmap generation
@@ -77,7 +83,7 @@ All WGSL shaders are defined as TypeScript string constants:
 
 ### Supporting Modules
 
-- **Block.ts** — block type as string constants (`DIRT`, `NOTHING`), `Block` class wrapping a type
+- **Block.ts** — block type as string constants (`MARBLE`, `NOTHING`), `Block` class wrapping a type
 - **debug.ts** — stats.js FPS counter + Tweakpane panel (wireframe toggle, freecam toggle, vertex count)
 
 ### Camera & Input

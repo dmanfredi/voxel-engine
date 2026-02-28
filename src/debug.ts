@@ -9,6 +9,7 @@ export const debuggerParams = {
 	wireframe: false,
 	freecam: false,
 	vertices: 0,
+	targetBlock: 'none',
 };
 
 export function BuildDebug(render: () => void): void {
@@ -23,6 +24,10 @@ export function BuildDebug(render: () => void): void {
 		readonly: true,
 		label: 'Vertices',
 		format: (v) => v.toFixed(0),
+	});
+	pane.addBinding(debuggerParams, 'targetBlock', {
+		readonly: true,
+		label: 'Target',
 	});
 
 	wireframeBinding.on('change', () => {

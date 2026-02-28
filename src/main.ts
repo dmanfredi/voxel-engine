@@ -13,6 +13,8 @@ import buildBlocks, {
 import { greedyMesh } from './greedy-mesh';
 import { FREECAM, physicsTick, createPlayerState } from './movement';
 import { World } from './world';
+import { raycast, type RaycastHit } from './raycast';
+import { initHighlight, drawHighlight } from './highlight';
 
 // TODO
 // - Skylights
@@ -54,6 +56,8 @@ const cameraUp = up;
 
 let cameraYaw = -90;
 let cameraPitch = 0;
+let currentHit: RaycastHit | null = null;
+const MAX_REACH = 100; // 10 blocks
 
 async function main(): Promise<void> {
 	const canvas = document.querySelector<HTMLCanvasElement>('canvas');
@@ -75,7 +79,31 @@ async function main(): Promise<void> {
 
 	let renderRequestId: number;
 	canvas.addEventListener('click', () => {
-		void canvas.requestPointerLock();
+		if (document.pointerLockElement !== canvas) {
+			void canvas.requestPointerLock();
+			return;
+		}
+		// Left click = break block (TODO: block destruction + remesh)
+		if (currentHit) {
+			console.log(
+				'break',
+				currentHit.blockPos,
+				'face',
+				currentHit.faceNormal,
+			);
+		}
+	});
+
+	canvas.addEventListener('contextmenu', (e) => {
+		e.preventDefault();
+		if (document.pointerLockElement !== canvas) return;
+		// Right click = place block (TODO: block placement + remesh)
+		if (currentHit) {
+			const px = currentHit.blockPos[0] + currentHit.faceNormal[0];
+			const py = currentHit.blockPos[1] + currentHit.faceNormal[1];
+			const pz = currentHit.blockPos[2] + currentHit.faceNormal[2];
+			console.log('place at', [px, py, pz]);
+		}
 	});
 
 	// ============================================
@@ -157,6 +185,12 @@ async function main(): Promise<void> {
 				dt,
 			);
 		}
+
+		// Raycast from camera to find targeted block
+		currentHit = raycast(cameraPos, cameraFront, world, MAX_REACH);
+		debuggerParams.targetBlock = currentHit
+			? currentHit.blockPos.join(', ')
+			: 'none';
 
 		requestRender();
 
@@ -355,6 +389,9 @@ async function main(): Promise<void> {
 		presentationFormat,
 	);
 
+	// Initialize block highlight outline
+	const highlight = initHighlight(device, presentationFormat);
+
 	// Initialize water plane (reuses skybox cubemap for reflection)
 	const water = initWater(
 		device,
@@ -458,6 +495,20 @@ async function main(): Promise<void> {
 			pass.setPipeline(barycentricCoordinatesBasedWireframePipeline);
 			pass.setBindGroup(0, wireframeBindGroup);
 			pass.draw(meshNumVertices);
+		}
+
+		// Draw block highlight outline on targeted block
+		if (currentHit) {
+			drawHighlight(
+				pass,
+				device,
+				highlight,
+				viewProjectionMatrix,
+				currentHit.blockPos[0],
+				currentHit.blockPos[1],
+				currentHit.blockPos[2],
+				BLOCK_SIZE,
+			);
 		}
 
 		// Draw water plane (reflective surface above terrain)

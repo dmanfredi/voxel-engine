@@ -12,6 +12,7 @@ import buildBlocks, {
 } from './block-builder';
 import { greedyMesh } from './greedy-mesh';
 import { FREECAM, physicsTick, createPlayerState } from './movement';
+import { World } from './world';
 
 // TODO
 // - Skylights
@@ -26,13 +27,17 @@ if (!navigator.gpu) {
 
 const BLOCK_SIZE = 10;
 const TEXTURE_SCALE = 6; // number of blocks per texture repeat
-const blocks = buildBlocks();
+const world = new World(
+	buildBlocks(),
+	CHUNK_SIZE_X,
+	CHUNK_SIZE_Y,
+	CHUNK_SIZE_Z,
+	BLOCK_SIZE,
+);
 
 // Generate optimized mesh using greedy meshing algorithm
 const { vertexData: meshVertexData, numVertices: meshNumVertices } = greedyMesh(
-	blocks,
-	[CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z],
-	BLOCK_SIZE,
+	world,
 	TEXTURE_SCALE,
 );
 
@@ -146,9 +151,7 @@ async function main(): Promise<void> {
 				cameraFront,
 				cameraUp,
 				cameraPos,
-				blocks,
-				[CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z],
-				BLOCK_SIZE,
+				world,
 				playerHalfWidth,
 				playerHeight,
 				dt,

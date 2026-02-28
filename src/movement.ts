@@ -1,5 +1,5 @@
 import { vec3, type Vec3 } from 'wgpu-matrix';
-import type Block from './Block';
+import type { World } from './world';
 import { moveAndCollide } from './collision';
 
 const MC_TICK = 0.05;
@@ -75,9 +75,7 @@ export function physicsTick(
 	cameraFront: Vec3,
 	cameraUp: Vec3,
 	pos: Float32Array,
-	blocks: Block[][][],
-	dims: [number, number, number],
-	blockSize: number,
+	world: World,
 	halfWidth: number,
 	height: number,
 	dt: number,
@@ -148,9 +146,7 @@ export function physicsTick(
 	const result = moveAndCollide(
 		pos,
 		[state.velX * t, state.velY * t, state.velZ * t],
-		blocks,
-		dims,
-		blockSize,
+		world,
 		halfWidth,
 		height,
 	);

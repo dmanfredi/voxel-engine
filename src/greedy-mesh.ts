@@ -1,5 +1,4 @@
-import type Block from './Block';
-import { NOTHING } from './Block';
+import type { World } from './world';
 
 export interface GreedyMeshResult {
 	vertexData: Float32Array<ArrayBuffer>;
@@ -28,35 +27,19 @@ function vertexAO(side1: boolean, side2: boolean, corner: boolean): AO {
  *
  * Claude wrote 90% of this.
  *
- * Takes a 3D array of blocks and produces an optimized mesh by:
+ * Takes a World and produces an optimized mesh by:
  * 1. Culling interior faces (faces between two solid blocks)
  * 2. Computing per-vertex AO for each face
  * 3. Merging adjacent coplanar faces with identical AO patterns
  *
- * @param blocks - 3D array indexed as [y][z][x]
- * @param dims - Dimensions [x, y, z]
- * @param blockSize - Size of each block in world units
+ * @param world - World instance providing block access
  * @param textureScale - Number of blocks one texture repeat spans (default 1)
  */
-export function greedyMesh(
-	blocks: Block[][][],
-	dims: [number, number, number],
-	blockSize: number,
-	textureScale = 1,
-): GreedyMeshResult {
-	const [dimX, dimY, dimZ] = dims;
-
-	// Helper to get block at position, returns null for out-of-bounds (treated as air)
-	function getBlock(x: number, y: number, z: number): Block | null {
-		if (x < 0 || x >= dimX || y < 0 || y >= dimY || z < 0 || z >= dimZ) {
-			return null;
-		}
-		return blocks[y]?.[z]?.[x] ?? null;
-	}
-
-	function isSolid(block: Block | null): boolean {
-		return block !== null && block.type !== NOTHING;
-	}
+export function greedyMesh(world: World, textureScale = 1): GreedyMeshResult {
+	const dimX = world.sizeX;
+	const dimY = world.sizeY;
+	const dimZ = world.sizeZ;
+	const blockSize = world.blockSize;
 
 	/**
 	 * Compute AO for all 4 corners of a face.
@@ -84,8 +67,7 @@ export function greedyMesh(
 		const ao: [AO, AO, AO, AO] = [0, 0, 0, 0];
 
 		for (let c = 0; c < 4; c++) {
-			// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-			const [su, sv] = signs[c]!;
+			const [su, sv] = signs[c];
 
 			// Side 1: neighbor along u-axis
 			const s1: [number, number, number] = [0, 0, 0];
@@ -106,9 +88,9 @@ export function greedyMesh(
 			cr[vIdx] = faceV + sv;
 
 			ao[c] = vertexAO(
-				isSolid(getBlock(s1[0], s1[1], s1[2])),
-				isSolid(getBlock(s2[0], s2[1], s2[2])),
-				isSolid(getBlock(cr[0], cr[1], cr[2])),
+				world.isSolid(s1[0], s1[1], s1[2]),
+				world.isSolid(s2[0], s2[1], s2[2]),
+				world.isSolid(cr[0], cr[1], cr[2]),
 			);
 		}
 
@@ -167,30 +149,25 @@ export function greedyMesh(
 
 		// Sweep through slices perpendicular to the axis
 		// We go from -1 to axisDim-1 to catch boundary faces
-		// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-		for (x[axis] = -1; x[axis]! < axisDim; ) {
+		for (x[axis] = -1; x[axis] < axisDim; ) {
 			// Build the mask for this slice
 			let n = 0;
 			for (x[v] = 0; x[v] < vDim; x[v]++) {
 				for (x[u] = 0; x[u] < uDim; x[u]++) {
 					// Get blocks on either side of this potential face
-					const blockA = getBlock(x[0], x[1], x[2]);
-					const blockB = getBlock(
+					const solidA = world.isSolid(x[0], x[1], x[2]);
+					const solidB = world.isSolid(
 						x[0] + q[0],
 						x[1] + q[1],
 						x[2] + q[2],
 					);
-
-					const solidA = isSolid(blockA);
-					const solidB = isSolid(blockB);
 
 					if (solidA === solidB) {
 						// Both solid or both air - no face needed
 						mask[n] = 0;
 					} else {
 						const positive = solidA;
-						// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-						const airD = positive ? x[axis]! + 1 : x[axis]!;
+						const airD = positive ? x[axis] + 1 : x[axis];
 						const ao = computeFaceAO(x[u], x[v], airD, axis, u, v);
 						const aoPacked =
 							ao[0] | (ao[1] << 2) | (ao[2] << 4) | (ao[3] << 6);
@@ -201,15 +178,13 @@ export function greedyMesh(
 			}
 
 			// Move to the next slice position (the face position in world coords)
-			// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-			x[axis]!++;
+			x[axis]++;
 
 			// Now greedy merge the mask into rectangles
 			n = 0;
 			for (let j = 0; j < vDim; j++) {
 				for (let i = 0; i < uDim; ) {
-					// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-					const maskVal = mask[n]!;
+					const maskVal = mask[n];
 
 					if (maskVal !== 0) {
 						// Found a face - find the largest rectangle starting here

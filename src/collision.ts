@@ -1,20 +1,4 @@
-import type Block from './Block';
-import { NOTHING } from './Block';
-
-function isSolid(
-	blocks: Block[][][],
-	bx: number,
-	by: number,
-	bz: number,
-	dims: [number, number, number],
-): boolean {
-	const [dimX, dimY, dimZ] = dims;
-	if (bx < 0 || bx >= dimX || by < 0 || by >= dimY || bz < 0 || bz >= dimZ) {
-		return false;
-	}
-	const block = blocks[by]?.[bz]?.[bx];
-	return block !== undefined && block.type !== NOTHING;
-}
+import type { World } from './world';
 
 export interface CollisionResult {
 	onGround: boolean;
@@ -35,12 +19,11 @@ export interface CollisionResult {
 export function moveAndCollide(
 	pos: Float32Array,
 	delta: [number, number, number],
-	blocks: Block[][][],
-	dims: [number, number, number],
-	blockSize: number,
+	world: World,
 	halfWidth: number,
 	height: number,
 ): CollisionResult {
+	const blockSize = world.blockSize;
 	let px = pos[0] ?? 0;
 	let py = pos[1] ?? 0;
 	let pz = pos[2] ?? 0;
@@ -51,8 +34,7 @@ export function moveAndCollide(
 		px,
 		py,
 		pz,
-		blocks,
-		dims,
+		world,
 		blockSize,
 		halfWidth,
 		height,
@@ -66,8 +48,7 @@ export function moveAndCollide(
 		px,
 		py,
 		pz,
-		blocks,
-		dims,
+		world,
 		blockSize,
 		halfWidth,
 		height,
@@ -81,8 +62,7 @@ export function moveAndCollide(
 		px,
 		py,
 		pz,
-		blocks,
-		dims,
+		world,
 		blockSize,
 		halfWidth,
 		height,
@@ -106,8 +86,7 @@ function resolveX(
 	px: number,
 	py: number,
 	pz: number,
-	blocks: Block[][][],
-	dims: [number, number, number],
+	world: World,
 	blockSize: number,
 	halfWidth: number,
 	height: number,
@@ -132,7 +111,7 @@ function resolveX(
 	for (let by = byMin; by <= byMax; by++) {
 		for (let bz = bzMin; bz <= bzMax; bz++) {
 			for (let bx = bxMin; bx <= bxMax; bx++) {
-				if (!isSolid(blocks, bx, by, bz, dims)) continue;
+				if (!world.isSolid(bx, by, bz)) continue;
 
 				collided = true;
 				if (direction > 0) {
@@ -151,8 +130,7 @@ function resolveZ(
 	px: number,
 	py: number,
 	pz: number,
-	blocks: Block[][][],
-	dims: [number, number, number],
+	world: World,
 	blockSize: number,
 	halfWidth: number,
 	height: number,
@@ -177,7 +155,7 @@ function resolveZ(
 	for (let by = byMin; by <= byMax; by++) {
 		for (let bz = bzMin; bz <= bzMax; bz++) {
 			for (let bx = bxMin; bx <= bxMax; bx++) {
-				if (!isSolid(blocks, bx, by, bz, dims)) continue;
+				if (!world.isSolid(bx, by, bz)) continue;
 
 				collided = true;
 				if (direction > 0) {
@@ -196,8 +174,7 @@ function resolveY(
 	px: number,
 	py: number,
 	pz: number,
-	blocks: Block[][][],
-	dims: [number, number, number],
+	world: World,
 	blockSize: number,
 	halfWidth: number,
 	height: number,
@@ -223,7 +200,7 @@ function resolveY(
 	for (let by = byMin; by <= byMax; by++) {
 		for (let bz = bzMin; bz <= bzMax; bz++) {
 			for (let bx = bxMin; bx <= bxMax; bx++) {
-				if (!isSolid(blocks, bx, by, bz, dims)) continue;
+				if (!world.isSolid(bx, by, bz)) continue;
 
 				if (direction < 0) {
 					py = (by + 1) * blockSize + height;

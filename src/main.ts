@@ -78,156 +78,8 @@ async function main(): Promise<void> {
 		throw new Error('No appropriate GPUAdapter found.');
 	}
 
-	let renderRequestId: number;
-	canvas.addEventListener('click', () => {
-		if (document.pointerLockElement !== canvas) {
-			void canvas.requestPointerLock();
-		}
-	});
-
-	// Suppress context menu so right-click doesn't open a menu
-	canvas.addEventListener('contextmenu', (e) => {
-		e.preventDefault();
-	});
-
-	canvas.addEventListener('mousedown', (e) => {
-		if (document.pointerLockElement !== canvas) return;
-		if (!currentHit) return;
-
-		if (e.button === 0) {
-			// Left click = break block
-			const [bx, by, bz] = currentHit.blockPos;
-			world.setBlock(bx, by, bz, AIR);
-			remesh();
-		} else if (e.button === 2) {
-			// Right click = place block
-			const px = currentHit.blockPos[0] + currentHit.faceNormal[0];
-			const py = currentHit.blockPos[1] + currentHit.faceNormal[1];
-			const pz = currentHit.blockPos[2] + currentHit.faceNormal[2];
-
-			// Don't place a block where the player is standing
-			const camX = cameraPos[0] / BLOCK_SIZE;
-			const camY = cameraPos[1] / BLOCK_SIZE;
-			const camZ = cameraPos[2] / BLOCK_SIZE;
-			const feetY = camY - playerHeight / BLOCK_SIZE;
-			const hw = playerHalfWidth / BLOCK_SIZE;
-
-			const playerMinBX = Math.floor(camX - hw);
-			const playerMaxBX = Math.floor(camX + hw - 1e-6);
-			const playerMinBY = Math.floor(feetY);
-			const playerMaxBY = Math.floor(camY - 1e-6);
-			const playerMinBZ = Math.floor(camZ - hw);
-			const playerMaxBZ = Math.floor(camZ + hw - 1e-6);
-
-			if (
-				px >= playerMinBX &&
-				px <= playerMaxBX &&
-				py >= playerMinBY &&
-				py <= playerMaxBY &&
-				pz >= playerMinBZ &&
-				pz <= playerMaxBZ
-			) {
-				return; // would trap the player
-			}
-
-			world.setBlock(px, py, pz, MARBLE);
-			remesh();
-		}
-	});
-
 	// ============================================
-	// MOVEMENT START
-	// ============================================
-
-	document.addEventListener(
-		'mousemove',
-		(e) => {
-			if (document.pointerLockElement !== canvas) return;
-
-			const sensitivity = 40;
-			const step = sensitivity * 0.001;
-			cameraYaw += e.movementX * step;
-			cameraPitch -= e.movementY * step;
-
-			if (cameraPitch + step >= 88) cameraPitch = 88 - step;
-			if (cameraPitch - step <= -88) cameraPitch = -88 + step;
-
-			const direction = vec3.create(
-				Math.cos(degToRad(cameraYaw)) * Math.cos(degToRad(cameraPitch)),
-				Math.sin(degToRad(cameraPitch)),
-				Math.sin(degToRad(cameraYaw)) * Math.cos(degToRad(cameraPitch)),
-			);
-
-			vec3.normalize(direction, cameraFront);
-
-			requestRender();
-		},
-		false,
-	);
-
-	document.addEventListener('keydown', (e) => {
-		// Use e.code so it's layout-independent ("KeyW" stays KeyW on AZERTY, etc.)
-		if (
-			e.code === 'KeyW' ||
-			e.code === 'KeyA' ||
-			e.code === 'KeyS' ||
-			e.code === 'KeyD' ||
-			e.code === 'ShiftLeft' ||
-			e.code === 'Space'
-		) {
-			e.preventDefault();
-			keysDown.add(e.code);
-		}
-	});
-
-	document.addEventListener('keyup', (e) => {
-		keysDown.delete(e.code);
-	});
-
-	// Prevent "stuck key" if the tab loses focus mid-press
-	window.addEventListener('blur', () => {
-		keysDown.clear();
-	});
-
-	let lastT = 0;
-	const keysDown = new Set<string>();
-	const playerState = createPlayerState();
-	const playerHeight = BLOCK_SIZE * 2 * 0.9;
-	const playerHalfWidth = BLOCK_SIZE / 4;
-
-	function tick(t: number) {
-		const dt = Math.min(0.1, (t - lastT) / 1000);
-		lastT = t;
-
-		if (debuggerParams.freecam) {
-			FREECAM(keysDown, cameraPos, cameraFront, cameraUp, dt * 500);
-		} else {
-			physicsTick(
-				playerState,
-				keysDown,
-				cameraFront,
-				cameraUp,
-				cameraPos,
-				world,
-				playerHalfWidth,
-				playerHeight,
-				dt,
-			);
-		}
-
-		// Raycast from camera to find targeted block
-		currentHit = raycast(cameraPos, cameraFront, world, MAX_REACH);
-		debuggerParams.targetBlock = currentHit
-			? currentHit.blockPos.join(', ')
-			: 'none';
-
-		requestRender();
-
-		requestAnimationFrame(tick);
-	}
-
-	// ============================================
-	// MOVEMENT END
+	// GPU PIPELINES & RESOURCES
 	// ============================================
 
 	const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
@@ -279,12 +131,6 @@ async function main(): Promise<void> {
 			depthCompare: 'less',
 			format: 'depth24plus',
 		},
-		// wire frame everywhere mode
-		// depthStencil: {
-		// 	depthWriteEnabled: false,
-		// 	depthCompare: 'always',
-		// 	format: 'depth24plus',
-		// },
 	});
 
 	const barycentricCoordinatesBasedWireframePipeline =
@@ -410,36 +256,6 @@ async function main(): Promise<void> {
 		],
 	});
 
-	/** Regenerate the greedy mesh from current world state and re-upload to GPU. */
-	function remesh(): void {
-		const result = greedyMesh(world, TEXTURE_SCALE);
-		meshVertexData = result.vertexData;
-		meshNumVertices = result.numVertices;
-
-		vertexBuffer.destroy();
-		vertexBuffer = device.createBuffer({
-			label: 'greedy mesh vertex buffer',
-			size: meshVertexData.byteLength,
-			usage:
-				GPUBufferUsage.VERTEX |
-				GPUBufferUsage.STORAGE |
-				GPUBufferUsage.COPY_DST,
-		});
-		device.queue.writeBuffer(vertexBuffer, 0, meshVertexData);
-
-		// Wireframe reads the vertex buffer as storage — must rebind
-		wireframeBindGroup = device.createBindGroup({
-			label: 'wireframe bindgroup',
-			layout: barycentricCoordinatesBasedWireframePipeline.getBindGroupLayout(
-				0,
-			),
-			entries: [
-				{ binding: 0, resource: { buffer: uniformBuffer } },
-				{ binding: 1, resource: { buffer: vertexBuffer } },
-			],
-		});
-	}
-
 	// Initialize skybox
 	const skybox: SkyboxResources = await initSkybox(
 		device,
@@ -477,12 +293,84 @@ async function main(): Promise<void> {
 		}
 	}
 
+	// ============================================
+	// GAME STATE & FUNCTIONS
+	// ============================================
+
+	let renderRequestId: number;
+	let lastT = 0;
+	const keysDown = new Set<string>();
+	const playerState = createPlayerState();
+	const playerHeight = BLOCK_SIZE * 2 * 0.9;
+	const playerHalfWidth = BLOCK_SIZE / 4;
+
+	/** Regenerate the greedy mesh from current world state and re-upload to GPU. */
+	function remesh(): void {
+		const result = greedyMesh(world, TEXTURE_SCALE);
+		meshVertexData = result.vertexData;
+		meshNumVertices = result.numVertices;
+
+		vertexBuffer.destroy();
+		vertexBuffer = device.createBuffer({
+			label: 'greedy mesh vertex buffer',
+			size: meshVertexData.byteLength,
+			usage:
+				GPUBufferUsage.VERTEX |
+				GPUBufferUsage.STORAGE |
+				GPUBufferUsage.COPY_DST,
+		});
+		device.queue.writeBuffer(vertexBuffer, 0, meshVertexData);
+
+		// Wireframe reads the vertex buffer as storage — must rebind
+		wireframeBindGroup = device.createBindGroup({
+			label: 'wireframe bindgroup',
+			layout: barycentricCoordinatesBasedWireframePipeline.getBindGroupLayout(
+				0,
+			),
+			entries: [
+				{ binding: 0, resource: { buffer: uniformBuffer } },
+				{ binding: 1, resource: { buffer: vertexBuffer } },
+			],
+		});
+	}
+
 	function requestRender() {
 		if (!renderRequestId) {
 			renderRequestId = requestAnimationFrame(() => {
 				render();
 			});
 		}
+	}
+
+	function tick(t: number) {
+		const dt = Math.min(0.1, (t - lastT) / 1000);
+		lastT = t;
+
+		if (debuggerParams.freecam) {
+			FREECAM(keysDown, cameraPos, cameraFront, cameraUp, dt * 500);
+		} else {
+			physicsTick(
+				playerState,
+				keysDown,
+				cameraFront,
+				cameraUp,
+				cameraPos,
+				world,
+				playerHalfWidth,
+				playerHeight,
+				dt,
+			);
+		}
+
+		// Raycast from camera to find targeted block
+		currentHit = raycast(cameraPos, cameraFront, world, MAX_REACH);
+		debuggerParams.targetBlock = currentHit
+			? currentHit.blockPos.join(', ')
+			: 'none';
+
+		requestRender();
+
+		requestAnimationFrame(tick);
 	}
 
 	BuildDebug(render);
@@ -582,6 +470,120 @@ async function main(): Promise<void> {
 		stats.end();
 	}
 
+	// ============================================
+	// INPUT HANDLERS
+	// ============================================
+
+	canvas.addEventListener('click', () => {
+		if (document.pointerLockElement !== canvas) {
+			void canvas.requestPointerLock();
+		}
+	});
+
+	// Suppress context menu so right-click doesn't open a menu
+	canvas.addEventListener('contextmenu', (e) => {
+		e.preventDefault();
+	});
+
+	canvas.addEventListener('mousedown', (e) => {
+		if (document.pointerLockElement !== canvas) return;
+		if (!currentHit) return;
+
+		if (e.button === 0) {
+			// Left click = break block
+			const [bx, by, bz] = currentHit.blockPos;
+			world.setBlock(bx, by, bz, AIR);
+			remesh();
+		} else if (e.button === 2) {
+			// Right click = place block
+			const px = currentHit.blockPos[0] + currentHit.faceNormal[0];
+			const py = currentHit.blockPos[1] + currentHit.faceNormal[1];
+			const pz = currentHit.blockPos[2] + currentHit.faceNormal[2];
+
+			// Don't place a block where the player is standing
+			const camX = cameraPos[0] / BLOCK_SIZE;
+			const camY = cameraPos[1] / BLOCK_SIZE;
+			const camZ = cameraPos[2] / BLOCK_SIZE;
+			const feetY = camY - playerHeight / BLOCK_SIZE;
+			const hw = playerHalfWidth / BLOCK_SIZE;
+
+			const playerMinBX = Math.floor(camX - hw);
+			const playerMaxBX = Math.floor(camX + hw - 1e-6);
+			const playerMinBY = Math.floor(feetY);
+			const playerMaxBY = Math.floor(camY - 1e-6);
+			const playerMinBZ = Math.floor(camZ - hw);
+			const playerMaxBZ = Math.floor(camZ + hw - 1e-6);
+
+			if (
+				px >= playerMinBX &&
+				px <= playerMaxBX &&
+				py >= playerMinBY &&
+				py <= playerMaxBY &&
+				pz >= playerMinBZ &&
+				pz <= playerMaxBZ
+			) {
+				return; // would trap the player
+			}
+
+			world.setBlock(px, py, pz, MARBLE);
+			remesh();
+		}
+	});
+
+	document.addEventListener(
+		'mousemove',
+		(e) => {
+			if (document.pointerLockElement !== canvas) return;
+
+			const sensitivity = 40;
+			const step = sensitivity * 0.001;
+			cameraYaw += e.movementX * step;
+			cameraPitch -= e.movementY * step;
+
+			if (cameraPitch + step >= 88) cameraPitch = 88 - step;
+			if (cameraPitch - step <= -88) cameraPitch = -88 + step;
+
+			const direction = vec3.create(
+				Math.cos(degToRad(cameraYaw)) * Math.cos(degToRad(cameraPitch)),
+				Math.sin(degToRad(cameraPitch)),
+				Math.sin(degToRad(cameraYaw)) * Math.cos(degToRad(cameraPitch)),
+			);
+
+			vec3.normalize(direction, cameraFront);
+
+			requestRender();
+		},
+		false,
+	);
+
+	document.addEventListener('keydown', (e) => {
+		// Use e.code so it's layout-independent ("KeyW" stays KeyW on AZERTY, etc.)
+		if (
+			e.code === 'KeyW' ||
+			e.code === 'KeyA' ||
+			e.code === 'KeyS' ||
+			e.code === 'KeyD' ||
+			e.code === 'ShiftLeft' ||
+			e.code === 'Space'
+		) {
+			e.preventDefault();
+			keysDown.add(e.code);
+		}
+	});
+
+	document.addEventListener('keyup', (e) => {
+		keysDown.delete(e.code);
+	});
+
+	// Prevent "stuck key" if the tab loses focus mid-press
+	window.addEventListener('blur', () => {
+		keysDown.clear();
+	});
+
+	// ============================================
+	// RESIZE OBSERVER & START
+	// ============================================
+
 	const observer = new ResizeObserver((entries) => {
 		for (const entry of entries) {
 			const canvas = entry.target as HTMLCanvasElement;
@@ -611,7 +613,5 @@ async function main(): Promise<void> {
 		lastT = t;
 		tick(t);
 	});
-
-	return;
 }
 await main();

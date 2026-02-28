@@ -101,4 +101,6 @@ temp/
 # TypeScript cache
 *.tsbuildinfo
 
+TECHNICAL-ROADMAP.md
+GAME-DESIGN.md
 .claude/

@@ -1,5 +1,5 @@
 import Block, { DIRT, NOTHING } from './Block';
-const MAX_CUBE_SIZE = 8;
+const MAX_CUBE_SIZE = 7;
 
 export const CHUNK_SIZE_X = 1024;
 export const CHUNK_SIZE_Y = MAX_CUBE_SIZE;

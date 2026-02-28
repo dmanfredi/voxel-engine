@@ -3,7 +3,7 @@ import type Block from './Block';
 import { moveAndCollide } from './collision';
 
 const MC_TICK = 0.05;
-const JUMP_VELOCITY = 4.2;
+const JUMP_VELOCITY = 4.8; // worth fine tuning some more
 const GRAVITY = 0.8;
 const VERTICAL_DRAG = 0.98;
 const TERMINAL_VELOCITY = -39.2;

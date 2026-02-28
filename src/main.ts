@@ -13,6 +13,7 @@ import buildBlocks, {
 import { greedyMesh } from './greedy-mesh';
 import { FREECAM, physicsTick, createPlayerState } from './movement';
 import { World } from './world';
+import { AIR, MARBLE } from './block';
 import { raycast, type RaycastHit } from './raycast';
 import { initHighlight, drawHighlight } from './highlight';
 
@@ -38,7 +39,7 @@ const world = new World(
 );
 
 // Generate optimized mesh using greedy meshing algorithm
-const { vertexData: meshVertexData, numVertices: meshNumVertices } = greedyMesh(
+let { vertexData: meshVertexData, numVertices: meshNumVertices } = greedyMesh(
 	world,
 	TEXTURE_SCALE,
 );
@@ -81,28 +82,56 @@ async function main(): Promise<void> {
 	canvas.addEventListener('click', () => {
 		if (document.pointerLockElement !== canvas) {
 			void canvas.requestPointerLock();
-			return;
-		}
-		// Left click = break block (TODO: block destruction + remesh)
-		if (currentHit) {
-			console.log(
-				'break',
-				currentHit.blockPos,
-				'face',
-				currentHit.faceNormal,
-			);
 		}
 	});
 
+	// Suppress context menu so right-click doesn't open a menu
 	canvas.addEventListener('contextmenu', (e) => {
 		e.preventDefault();
+	});
+
+	canvas.addEventListener('mousedown', (e) => {
 		if (document.pointerLockElement !== canvas) return;
-		// Right click = place block (TODO: block placement + remesh)
-		if (currentHit) {
+		if (!currentHit) return;
+
+		if (e.button === 0) {
+			// Left click = break block
+			const [bx, by, bz] = currentHit.blockPos;
+			world.setBlock(bx, by, bz, AIR);
+			remesh();
+		} else if (e.button === 2) {
+			// Right click = place block
 			const px = currentHit.blockPos[0] + currentHit.faceNormal[0];
 			const py = currentHit.blockPos[1] + currentHit.faceNormal[1];
 			const pz = currentHit.blockPos[2] + currentHit.faceNormal[2];
-			console.log('place at', [px, py, pz]);
+
+			// Don't place a block where the player is standing
+			const camX = cameraPos[0] / BLOCK_SIZE;
+			const camY = cameraPos[1] / BLOCK_SIZE;
+			const camZ = cameraPos[2] / BLOCK_SIZE;
+			const feetY = camY - playerHeight / BLOCK_SIZE;
+			const hw = playerHalfWidth / BLOCK_SIZE;
+
+			const playerMinBX = Math.floor(camX - hw);
+			const playerMaxBX = Math.floor(camX + hw - 1e-6);
+			const playerMinBY = Math.floor(feetY);
+			const playerMaxBY = Math.floor(camY - 1e-6);
+			const playerMinBZ = Math.floor(camZ - hw);
+			const playerMaxBZ = Math.floor(camZ + hw - 1e-6);
+
+			if (
+				px >= playerMinBX &&
+				px <= playerMaxBX &&
+				py >= playerMinBY &&
+				py <= playerMaxBY &&
+				pz >= playerMinBZ &&
+				pz <= playerMaxBZ
+			) {
+				return; // would trap the player
+			}
+
+			world.setBlock(px, py, pz, MARBLE);
+			remesh();
 		}
 	});
 
@@ -346,8 +375,8 @@ async function main(): Promise<void> {
 	});
 	const uniformValues = new Float32Array(uniformBufferSize / 4);
 
-	// Single vertex buffer for the entire greedy-meshed chunk
-	const vertexBuffer = device.createBuffer({
+	// Vertex buffer and wireframe bind group are recreated on remesh
+	let vertexBuffer = device.createBuffer({
 		label: 'greedy mesh vertex buffer',
 		size: meshVertexData.byteLength,
 		usage:
@@ -357,7 +386,6 @@ async function main(): Promise<void> {
 	});
 	device.queue.writeBuffer(vertexBuffer, 0, meshVertexData);
 
-	// Single bind group for the entire chunk
 	const blockTextureView = blockTextureArray.createView({
 		dimension: '2d-array',
 	});
@@ -371,8 +399,7 @@ async function main(): Promise<void> {
 		],
 	});
 
-	// Wireframe bind group
-	const wireframeBindGroup = device.createBindGroup({
+	let wireframeBindGroup = device.createBindGroup({
 		label: 'wireframe bindgroup',
 		layout: barycentricCoordinatesBasedWireframePipeline.getBindGroupLayout(
 			0,
@@ -382,6 +409,36 @@ async function main(): Promise<void> {
 			{ binding: 1, resource: { buffer: vertexBuffer } },
 		],
 	});
+
+	/** Regenerate the greedy mesh from current world state and re-upload to GPU. */
+	function remesh(): void {
+		const result = greedyMesh(world, TEXTURE_SCALE);
+		meshVertexData = result.vertexData;
+		meshNumVertices = result.numVertices;
+
+		vertexBuffer.destroy();
+		vertexBuffer = device.createBuffer({
+			label: 'greedy mesh vertex buffer',
+			size: meshVertexData.byteLength,
+			usage:
+				GPUBufferUsage.VERTEX |
+				GPUBufferUsage.STORAGE |
+				GPUBufferUsage.COPY_DST,
+		});
+		device.queue.writeBuffer(vertexBuffer, 0, meshVertexData);
+
+		// Wireframe reads the vertex buffer as storage — must rebind
+		wireframeBindGroup = device.createBindGroup({
+			label: 'wireframe bindgroup',
+			layout: barycentricCoordinatesBasedWireframePipeline.getBindGroupLayout(
+				0,
+			),
+			entries: [
+				{ binding: 0, resource: { buffer: uniformBuffer } },
+				{ binding: 1, resource: { buffer: vertexBuffer } },
+			],
+		});
+	}
 
 	// Initialize skybox
 	const skybox: SkyboxResources = await initSkybox(

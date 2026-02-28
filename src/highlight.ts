@@ -23,7 +23,7 @@ const HIGHLIGHT_SHADER = /* wgsl */ `
 	}
 
 	@fragment fn fs() -> @location(0) vec4f {
-		return vec4f(0.0, 1.0, 0.0, 1.0);
+		return vec4f(0.54, 0.15, 0.15, 1.0);
 	}
 `;
 
@@ -63,7 +63,7 @@ export function initHighlight(
 		},
 		depthStencil: {
 			depthWriteEnabled: false,
-			depthCompare: 'less-equal',
+			depthCompare: 'always',
 			format: 'depth24plus',
 		},
 	});

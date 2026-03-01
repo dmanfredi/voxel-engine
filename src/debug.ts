@@ -12,8 +12,14 @@ export const debuggerParams = {
 	targetBlock: 'none',
 };
 
+let pane: Pane | null = null;
+
+export function refreshDebug(): void {
+	pane?.refresh();
+}
+
 export function BuildDebug(render: () => void): void {
-	const pane = new Pane({ title: 'Debug' });
+	pane = new Pane({ title: 'Debug' });
 	const wireframeBinding = pane.addBinding(debuggerParams, 'wireframe', {
 		label: 'Wireframe',
 	});
@@ -35,12 +41,6 @@ export function BuildDebug(render: () => void): void {
 			render();
 		});
 	});
-	// freecamBinding.on('change', () => {
-	// 	requestAnimationFrame(() => {
-	// 		render();
-	// 	});
-	// });
-	return;
 }
 
 // class Debugger {

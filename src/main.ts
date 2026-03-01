@@ -4,7 +4,7 @@ import WireframeShader from './wireframe';
 import { initSkybox, drawSkybox, type SkyboxResources } from './skybox';
 import { initWater, drawWater } from './water';
 
-import { BuildDebug, debuggerParams, stats } from './debug';
+import { BuildDebug, refreshDebug, debuggerParams, stats } from './debug';
 import buildBlocks, {
 	CHUNK_SIZE_X,
 	CHUNK_SIZE_Y,
@@ -22,6 +22,10 @@ import { initHighlight, drawHighlight } from './highlight';
 // - Better lighting (?)
 // - different blocks with different textures
 // - chunks
+
+// NOTE TO SELF
+// in minecraft, when I jump, my camera almost jiggles a little? vertically. Creates a nice sense of impulse,
+// how can I recreate that?
 
 if (!navigator.gpu) {
 	alert('WebGPU not supported on this browser.');
@@ -568,6 +572,10 @@ async function main(): Promise<void> {
 		) {
 			e.preventDefault();
 			keysDown.add(e.code);
+		}
+		if (e.code === 'KeyF') {
+			debuggerParams.freecam = !debuggerParams.freecam;
+			refreshDebug();
 		}
 	});
 

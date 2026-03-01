@@ -1,9 +1,9 @@
 import { AIR, MARBLE } from './block';
 import Noise from 'noisejs';
 
-export const CHUNK_SIZE_X = 128;
-export const CHUNK_SIZE_Y = 128;
-export const CHUNK_SIZE_Z = 128;
+export const CHUNK_SIZE_X = 32;
+export const CHUNK_SIZE_Y = 32;
+export const CHUNK_SIZE_Z = 32;
 const noise = new (Noise as unknown as { Noise: typeof Noise }).Noise(
 	Math.random(),
 );

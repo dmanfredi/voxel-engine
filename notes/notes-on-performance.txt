@@ -1,0 +1,93 @@
+❯ I ASKED: Gotcha. Since we are on the topic of performance, im curious about other metrics, like FPS. Not to mention graphical fidelity and its realationship to fps. Ive played plenty of video games in my life, but come to think of it ive never really considered what          
+  causes lag. I have a vauge understanding of the topic by viture of being a programmer. But in the case of a video game its fuzzy, I normally just do web development, so Its a very different mindeset. Thoughts?                                                         
+
+● CLAUDE SAID: Good question. Let me reframe it from the web dev mindset since that's where you're coming from.
+  In web dev, you think about "is the page responsive?" The browser does layout, paint, composite — mostly once, then idle. JS runs in response to events. If something takes 300ms, the page feels janky but it's not a crisis.                                                
+  In a game, you're rendering a full image from scratch 60+ times per second. Every single frame, your code runs, the GPU draws every triangle, and the result gets displayed. If any frame takes too long, the player sees it — a stutter, a hitch, input feeling mushy.    
+  
+  What FPS actually means:
+  ┌──────┬──────────────┬───────────────────────────────────────────────────────────────────────────┐
+  │ FPS  │ Frame budget │                                   Feel                                    │
+  ├──────┼──────────────┼───────────────────────────────────────────────────────────────────────────┤
+  │ 60   │ 16.6ms       │ Smooth standard. What most monitors run at.                               │
+  ├──────┼──────────────┼───────────────────────────────────────────────────────────────────────────┤
+  │ 30   │ 33.3ms       │ Playable but noticeably less responsive. Acceptable for slow-paced games. │
+  ├──────┼──────────────┼───────────────────────────────────────────────────────────────────────────┤
+  │ 144+ │ <7ms         │ Competitive/enthusiast. Diminishing returns for most people.              │
+  └──────┴──────────────┴───────────────────────────────────────────────────────────────────────────┘
+  Your frame budget is the time you have to do everything — physics, input, game logic, GPU rendering — before the next frame needs to be on screen. At 60 FPS, that's 16.6ms. Miss it and you drop a frame.
+
+  The two clocks: CPU and GPU
+
+  This is the part that's probably fuzziest coming from web dev. Your game has two processors working in parallel:
+
+  CPU (your TypeScript, running on the main thread):
+  - Physics tick
+  - Raycast
+  - Input processing
+  - Game logic (entity updates, BP changes, etc.)
+  - Building command buffers (your encoder.beginRenderPass(), pass.draw() calls)
+  - Meshing (greedy mesh is CPU work — and expensive)
+
+  GPU (the hardware, running asynchronously):
+  - Vertex processing (transform every vertex by the view-projection matrix)
+  - Rasterization (turn triangles into pixels)
+  - Fragment shading (texture sampling, lighting, AO)
+  - Depth testing, blending
+  - All your passes: geometry, wireframe, highlight, water, skybox
+
+  The key insight: CPU and GPU work in parallel. Your CPU submits commands, then the GPU executes them while the CPU starts working on the next frame. Your frame rate is limited by whichever one is slower:
+
+  - CPU-bound: GPU finishes fast but is waiting for the CPU to submit work. Common cause: expensive game logic, meshing, too many draw calls.
+  - GPU-bound: CPU submits fast but the GPU can't draw everything in time. Common cause: too many triangles, expensive shaders, high resolution, overdraw.
+
+  What actually causes "lag" in practice:
+
+  Steady low FPS (consistently 30 instead of 60):
+  - Too many vertices per frame (GPU-bound)
+  - Shader too expensive (GPU-bound)
+  - Too much game logic per tick (CPU-bound)
+  - This is "my machine can't keep up" — you optimize or reduce quality
+
+  Stutters/hitches (mostly smooth, then periodic freezes):
+  - This is the insidious one. In your game, the most likely cause will be meshing. When a block is placed or destroyed, you call remesh() which rebuilds the entire chunk's vertex data synchronously. Right now that's one 32x32x32 chunk — fast. With cubic chunks, if    
+  placing a block triggers a remesh of one chunk, that's fine. But if it touches a chunk boundary and you remesh two chunks in one frame, or if the mesh is large, you'll get a visible hitch.
+  - Garbage collection pauses (JS creating lots of temporary objects — your mesher allocates arrays)
+  - Chunk loading (generating block data + meshing a new chunk as the player climbs)
+
+  Input lag (moving the mouse feels delayed):
+  - Frame rate too low (each frame of delay = 16ms of latency at 60 FPS)
+  - Too much work before the render actually happens
+
+  How graphical fidelity relates to FPS:
+
+  Every visual feature costs something. The question is always "how much does this cost per frame?"
+  ┌──────────────────────────────┬────────────────────────────────────────────┬──────────────────────────────────────────────────────────────────────────────────────┐
+  │           Feature            │                 Cost type                  │                                    Your situation                                    │
+  ├──────────────────────────────┼────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────┤
+  │ More triangles               │ GPU vertex + raster                        │ Greedy meshing keeps this low. Your biggest win already.                             │
+  ├──────────────────────────────┼────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────┤
+  │ Texture resolution           │ GPU memory + bandwidth                     │ 256x256 per block type is very reasonable.                                           │
+  ├──────────────────────────────┼────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────┤
+  │ Lighting (Phase 4)           │ CPU (light propagation) + GPU (if dynamic) │ Baked per-vertex like AO = nearly free at render time. Propagation is the CPU cost.  │
+  ├──────────────────────────────┼────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────┤
+  │ Shadows                      │ GPU (extra render pass)                    │ Expensive. Not on your roadmap. AO fakes it.                                         │
+  ├──────────────────────────────┼────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────┤
+  │ Water reflections            │ GPU (renders scene twice)                  │ You already have this — it literally doubles your draw calls for reflected geometry. │
+  ├──────────────────────────────┼────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────┤
+  │ Post-processing (bloom, DoF) │ GPU (fullscreen passes)                    │ Each effect = one full-screen quad. Cheap individually, adds up.                     │
+  ├──────────────────────────────┼────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────┤
+  │ Draw calls                   │ CPU overhead                               │ One per chunk. With 500 chunks, this matters. Frustum culling helps.                 │
+  └──────────────────────────────┴────────────────────────────────────────────┴──────────────────────────────────────────────────────────────────────────────────────┘
+  The practical takeaway for Pillarman:
+
+  Your likely bottlenecks as the game grows, in order:
+
+  1. Meshing cost (CPU, stutters) — when chunks need rebuilding. Solution: mesh on a worker thread so it doesn't block the frame. This is the single most important optimization in any voxel engine.
+  2. Draw calls (CPU) — one per visible chunk. Frustum culling is the first fix. At ~200 visible chunks you're fine. At 1000+ it starts to matter.
+  3. Vertex count (GPU) — greedy meshing already handles this. You're in good shape.
+  4. Water reflections (GPU) — your reflection pass re-renders geometry. If performance is ever tight, this is the first thing to make optional or simplify.
+
+  You'll know which side you're bottlenecked on by watching your stats.js panel. If the frame time spikes when you place a block, that's CPU (meshing). If it's steady but high when looking at dense terrain, that's GPU (too many triangles in view).
+
+  60 FPS is your target.

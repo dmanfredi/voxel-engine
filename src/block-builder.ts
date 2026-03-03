@@ -8,7 +8,7 @@ const noise = new (Noise as unknown as { Noise: typeof Noise }).Noise(
 	Math.random(),
 );
 
-const NOISE_FREQUENCY = 0.051;
+const NOISE_FREQUENCY = 0.061;
 
 function buildBlocks(): Uint8Array {
 	const blocks = new Uint8Array(CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z);

@@ -575,6 +575,11 @@ async function main(): Promise<void> {
 		}
 		if (e.code === 'KeyF') {
 			debuggerParams.freecam = !debuggerParams.freecam;
+			if (!debuggerParams.freecam) {
+				playerState.velX = 0;
+				playerState.velY = 0;
+				playerState.velZ = 0;
+			}
 			refreshDebug();
 		}
 	});

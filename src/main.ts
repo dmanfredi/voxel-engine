@@ -33,7 +33,6 @@ if (!navigator.gpu) {
 }
 
 const BLOCK_SIZE = 10;
-const TEXTURE_SCALE = 6; // number of blocks per texture repeat
 const world = new World(
 	buildBlocks(),
 	CHUNK_SIZE_X,
@@ -43,10 +42,8 @@ const world = new World(
 );
 
 // Generate optimized mesh using greedy meshing algorithm
-let { vertexData: meshVertexData, numVertices: meshNumVertices } = greedyMesh(
-	world,
-	TEXTURE_SCALE,
-);
+let { vertexData: meshVertexData, numVertices: meshNumVertices } =
+	greedyMesh(world);
 
 const degToRad = (d: number) => (d * Math.PI) / 180;
 const up = vec3.create(0, 1, 0);
@@ -175,10 +172,10 @@ async function main(): Promise<void> {
 		});
 
 	// Load block textures into a texture array (one layer per block type)
-	const TEXTURE_SIZE = 256;
+	const TEXTURE_SIZE = 1024;
 	const blockTextureSources: { layer: number; src: string }[] = [
-		{ layer: 0, src: '../assets/MarbleBase256.png' }, // AIR placeholder (never sampled)
-		{ layer: 1, src: '../assets/MarbleBase256.png' }, // DIRT
+		{ layer: 0, src: '../assets/MarbleBase1024.png' }, // AIR placeholder (never sampled)
+		{ layer: 1, src: '../assets/MarbleBase1024.png' }, // DIRT
 	];
 
 	const numLayers = blockTextureSources.length;
@@ -210,8 +207,8 @@ async function main(): Promise<void> {
 	// nearest filtering for crisp textures.
 	// repeat mode for tiling across greedy-meshed quads
 	const sampler = device.createSampler({
-		magFilter: 'nearest',
-		minFilter: 'nearest',
+		magFilter: 'linear',
+		minFilter: 'linear',
 		addressModeU: 'repeat',
 		addressModeV: 'repeat',
 	});
@@ -310,7 +307,7 @@ async function main(): Promise<void> {
 
 	/** Regenerate the greedy mesh from current world state and re-upload to GPU. */
 	function remesh(): void {
-		const result = greedyMesh(world, TEXTURE_SCALE);
+		const result = greedyMesh(world);
 		meshVertexData = result.vertexData;
 		meshNumVertices = result.numVertices;
 

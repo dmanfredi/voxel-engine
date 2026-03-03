@@ -1,4 +1,4 @@
-import { AIR } from './block';
+import { AIR, blockRegistry } from './block';
 import type { World } from './world';
 
 export interface GreedyMeshResult {
@@ -34,9 +34,8 @@ function vertexAO(side1: boolean, side2: boolean, corner: boolean): AO {
  * 3. Merging adjacent coplanar faces with identical AO patterns
  *
  * @param world - World instance providing block access
- * @param textureScale - Number of blocks one texture repeat spans (default 1)
  */
-export function greedyMesh(world: World, textureScale = 1): GreedyMeshResult {
+export function greedyMesh(world: World): GreedyMeshResult {
 	const dimX = world.sizeX;
 	const dimY = world.sizeY;
 	const dimZ = world.sizeZ;
@@ -318,7 +317,7 @@ export function greedyMesh(world: World, textureScale = 1): GreedyMeshResult {
 
 		// World-aligned UVs: offset by block-space origin so adjacent quads
 		// tile seamlessly even when textureScale > 1
-		const s = textureScale;
+		const s = blockRegistry.get(quad.blockType)?.textureScale ?? 1;
 		const ou = quad.originU / s;
 		const ov = quad.originV / s;
 		const uw = quad.uvWidth / s;

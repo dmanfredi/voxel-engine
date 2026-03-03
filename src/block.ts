@@ -6,6 +6,7 @@ export const MARBLE: BlockId = 1;
 export interface BlockProperties {
 	name: string;
 	solid: boolean;
+	textureScale: number;
 }
 
 export class BlockRegistry {
@@ -25,5 +26,9 @@ export class BlockRegistry {
 }
 
 export const blockRegistry = new BlockRegistry();
-blockRegistry.register(AIR, { name: 'air', solid: false });
-blockRegistry.register(MARBLE, { name: 'marble', solid: true });
+blockRegistry.register(AIR, { name: 'air', solid: false, textureScale: 1 });
+blockRegistry.register(MARBLE, {
+	name: 'marble',
+	solid: true,
+	textureScale: 6,
+});

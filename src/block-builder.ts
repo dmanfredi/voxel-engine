@@ -1,28 +1,32 @@
 import { AIR, MARBLE } from './block';
+import { CHUNK_SIZE } from './chunk';
 import Noise from 'noisejs';
 
-export const CHUNK_SIZE_X = 32;
-export const CHUNK_SIZE_Y = 32;
-export const CHUNK_SIZE_Z = 32;
 const noise = new (Noise as unknown as { Noise: typeof Noise }).Noise(
 	Math.random(),
 );
 
 const NOISE_FREQUENCY = 0.061;
 
-function buildBlocks(): Uint8Array {
-	const blocks = new Uint8Array(CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z);
+export default function buildChunkBlocks(
+	cx: number,
+	cy: number,
+	cz: number,
+): Uint8Array {
+	const blocks = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE);
 
-	for (let y = 0; y < CHUNK_SIZE_Y; y++) {
-		for (let z = 0; z < CHUNK_SIZE_Z; z++) {
-			for (let x = 0; x < CHUNK_SIZE_X; x++) {
+	for (let y = 0; y < CHUNK_SIZE; y++) {
+		for (let z = 0; z < CHUNK_SIZE; z++) {
+			for (let x = 0; x < CHUNK_SIZE; x++) {
+				const wx = cx * CHUNK_SIZE + x;
+				const wy = cy * CHUNK_SIZE + y;
+				const wz = cz * CHUNK_SIZE + z;
 				const value = noise.perlin3(
-					x * NOISE_FREQUENCY,
-					y * NOISE_FREQUENCY,
-					z * NOISE_FREQUENCY,
+					wx * NOISE_FREQUENCY,
+					wy * NOISE_FREQUENCY,
+					wz * NOISE_FREQUENCY,
 				);
-				const index =
-					y * CHUNK_SIZE_Z * CHUNK_SIZE_X + z * CHUNK_SIZE_X + x;
+				const index = y * CHUNK_SIZE * CHUNK_SIZE + z * CHUNK_SIZE + x;
 				blocks[index] = value > 0 ? MARBLE : AIR;
 			}
 		}
@@ -30,7 +34,3 @@ function buildBlocks(): Uint8Array {
 
 	return blocks;
 }
-
-export const NUM_BLOCKS = CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z;
-
-export default buildBlocks;

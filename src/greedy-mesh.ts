@@ -1,4 +1,5 @@
 import { AIR, blockRegistry } from './block';
+import { CHUNK_SIZE } from './chunk';
 import type { World } from './world';
 
 export interface GreedyMeshResult {
@@ -24,27 +25,41 @@ function vertexAO(side1: boolean, side2: boolean, corner: boolean): AO {
 }
 
 /**
- * Greedy meshing algorithm for voxel chunks with per-vertex ambient occlusion.
+ * Greedy meshing algorithm for a single chunk with per-vertex ambient occlusion.
  *
  * Claude wrote 90% of this.
  *
- * Takes a World and produces an optimized mesh by:
+ * Takes a World and chunk coordinates, produces an optimized mesh by:
  * 1. Culling interior faces (faces between two solid blocks)
  * 2. Computing per-vertex AO for each face
  * 3. Merging adjacent coplanar faces with identical AO patterns
  *
+ * Block lookups go through World, so AO at chunk boundaries reads neighbor
+ * chunks automatically.
+ *
  * @param world - World instance providing block access
+ * @param cx - Chunk X coordinate
+ * @param cy - Chunk Y coordinate
+ * @param cz - Chunk Z coordinate
  */
-export function greedyMesh(world: World): GreedyMeshResult {
-	const dimX = world.sizeX;
-	const dimY = world.sizeY;
-	const dimZ = world.sizeZ;
+export function greedyMesh(
+	world: World,
+	cx: number,
+	cy: number,
+	cz: number,
+): GreedyMeshResult {
 	const blockSize = world.blockSize;
+
+	// World-block offset for this chunk
+	const ox = cx * CHUNK_SIZE;
+	const oy = cy * CHUNK_SIZE;
+	const oz = cz * CHUNK_SIZE;
+	const offsets: [number, number, number] = [ox, oy, oz];
 
 	/**
 	 * Compute AO for all 4 corners of a face.
-	 * faceU/faceV: block position in the face plane
-	 * airD: axis position on the air side of the face
+	 * faceU/faceV: block position in the face plane (chunk-local)
+	 * airD: axis position on the air side of the face (chunk-local)
 	 * axisIdx/uIdx/vIdx: which axes map to axis/u/v
 	 */
 	function computeFaceAO(
@@ -88,9 +103,9 @@ export function greedyMesh(world: World): GreedyMeshResult {
 			cr[vIdx] = faceV + sv;
 
 			ao[c] = vertexAO(
-				world.isSolid(s1[0], s1[1], s1[2]),
-				world.isSolid(s2[0], s2[1], s2[2]),
-				world.isSolid(cr[0], cr[1], cr[2]),
+				world.isSolid(ox + s1[0], oy + s1[1], oz + s1[2]),
+				world.isSolid(ox + s2[0], oy + s2[1], oz + s2[2]),
+				world.isSolid(ox + cr[0], oy + cr[1], oz + cr[2]),
 			);
 		}
 
@@ -104,7 +119,7 @@ export function greedyMesh(world: World): GreedyMeshResult {
 		v1: [number, number, number];
 		v2: [number, number, number];
 		v3: [number, number, number];
-		// UV info: block-space origin and dimensions for tiling
+		// UV info: world-block-space origin and dimensions for tiling
 		originU: number;
 		originV: number;
 		uvWidth: number;
@@ -119,25 +134,13 @@ export function greedyMesh(world: World): GreedyMeshResult {
 		blockType: number;
 	}[] = [];
 
-	// Dimension lookup helper - returns dimension for axis 0, 1, or 2
-	const getDim = (axis: number): number => {
-		if (axis === 0) return dimX;
-		if (axis === 1) return dimY;
-		return dimZ;
-	};
-
 	// Sweep over 3 axes
 	for (let axis = 0; axis < 3; axis++) {
 		// u and v are the two axes perpendicular to the sweep axis
 		const u = (axis + 1) % 3;
 		const v = (axis + 2) % 3;
 
-		// Dimension sizes along each axis
-		const axisDim = getDim(axis);
-		const uDim = getDim(u);
-		const vDim = getDim(v);
-
-		// x is our position vector, q is the step vector along the sweep axis
+		// x is our position vector (chunk-local), q is the step vector along the sweep axis
 		const x: [number, number, number] = [0, 0, 0];
 		const q: [number, number, number] = [0, 0, 0];
 		q[axis] = 1;
@@ -148,21 +151,26 @@ export function greedyMesh(world: World): GreedyMeshResult {
 		// where aoPacked = ao0 | (ao1 << 2) | (ao2 << 4) | (ao3 << 6) (bits 0-7)
 		// and blockType occupies bits 8+ of the absolute value.
 		// Two faces merge only if they have the same direction, AO pattern, AND block type.
-		const mask = new Int32Array(uDim * vDim);
+		const mask = new Int32Array(CHUNK_SIZE * CHUNK_SIZE);
 
 		// Sweep through slices perpendicular to the axis
-		// We go from -1 to axisDim-1 to catch boundary faces
-		for (x[axis] = -1; x[axis] < axisDim; ) {
+		// We go from -1 to CHUNK_SIZE-1 to catch boundary faces
+		for (x[axis] = -1; x[axis] < CHUNK_SIZE; ) {
 			// Build the mask for this slice
 			let n = 0;
-			for (x[v] = 0; x[v] < vDim; x[v]++) {
-				for (x[u] = 0; x[u] < uDim; x[u]++) {
+			for (x[v] = 0; x[v] < CHUNK_SIZE; x[v]++) {
+				for (x[u] = 0; x[u] < CHUNK_SIZE; x[u]++) {
 					// Get block IDs on either side of this potential face
-					const blockA = world.getBlock(x[0], x[1], x[2]);
+					// Offset by chunk world position for correct cross-chunk lookups
+					const blockA = world.getBlock(
+						ox + x[0],
+						oy + x[1],
+						oz + x[2],
+					);
 					const blockB = world.getBlock(
-						x[0] + q[0],
-						x[1] + q[1],
-						x[2] + q[2],
+						ox + x[0] + q[0],
+						oy + x[1] + q[1],
+						oz + x[2] + q[2],
 					);
 
 					const solidA = blockA !== AIR;
@@ -191,8 +199,8 @@ export function greedyMesh(world: World): GreedyMeshResult {
 
 			// Now greedy merge the mask into rectangles
 			n = 0;
-			for (let j = 0; j < vDim; j++) {
-				for (let i = 0; i < uDim; ) {
+			for (let j = 0; j < CHUNK_SIZE; j++) {
+				for (let i = 0; i < CHUNK_SIZE; ) {
 					const maskVal = mask[n];
 
 					if (maskVal !== 0) {
@@ -202,17 +210,17 @@ export function greedyMesh(world: World): GreedyMeshResult {
 
 						// Compute width (extend along u-axis)
 						let w = 1;
-						while (i + w < uDim && mask[n + w] === maskVal) {
+						while (i + w < CHUNK_SIZE && mask[n + w] === maskVal) {
 							w++;
 						}
 
 						// Compute height (extend along v-axis)
 						let h = 1;
 						let done = false;
-						while (j + h < vDim && !done) {
+						while (j + h < CHUNK_SIZE && !done) {
 							// Check if entire row of width w matches
 							for (let k = 0; k < w; k++) {
-								if (mask[n + k + h * uDim] !== maskVal) {
+								if (mask[n + k + h * CHUNK_SIZE] !== maskVal) {
 									done = true;
 									break;
 								}
@@ -230,7 +238,7 @@ export function greedyMesh(world: World): GreedyMeshResult {
 						const blockType = packed >> 8;
 
 						// Create the quad
-						// Position in the slice plane
+						// Position in the slice plane (chunk-local)
 						x[u] = i;
 						x[v] = j;
 
@@ -240,10 +248,10 @@ export function greedyMesh(world: World): GreedyMeshResult {
 						du[u] = w;
 						dv[v] = h;
 
-						// Convert to world coordinates
-						const wx = x[0] * blockSize;
-						const wy = x[1] * blockSize;
-						const wz = x[2] * blockSize;
+						// Convert to world coordinates (add chunk offset)
+						const wx = (ox + x[0]) * blockSize;
+						const wy = (oy + x[1]) * blockSize;
+						const wz = (oz + x[2]) * blockSize;
 
 						const dux = du[0] * blockSize;
 						const duy = du[1] * blockSize;
@@ -265,8 +273,9 @@ export function greedyMesh(world: World): GreedyMeshResult {
 								wz + duz + dvz,
 							],
 							v3: [wx + dvx, wy + dvy, wz + dvz],
-							originU: i,
-							originV: j,
+							// World-block-space UV origin for seamless cross-chunk tiling
+							originU: offsets[u] + i,
+							originV: offsets[v] + j,
 							uvWidth: w,
 							uvHeight: h,
 							positiveFacing: maskVal > 0,
@@ -278,7 +287,7 @@ export function greedyMesh(world: World): GreedyMeshResult {
 						// Zero out the mask cells we just used
 						for (let l = 0; l < h; l++) {
 							for (let k = 0; k < w; k++) {
-								mask[n + k + l * uDim] = 0;
+								mask[n + k + l * CHUNK_SIZE] = 0;
 							}
 						}
 

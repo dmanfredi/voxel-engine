@@ -1,56 +1,52 @@
 import { type BlockId, AIR, blockRegistry } from './block';
+import { Chunk, CHUNK_SIZE, chunkKey } from './chunk';
 
 export class World {
-	readonly sizeX: number;
-	readonly sizeY: number;
-	readonly sizeZ: number;
 	readonly blockSize: number;
-	private blocks: Uint8Array;
+	private chunks = new Map<string, Chunk>();
 
-	constructor(
-		blocks: Uint8Array,
-		sizeX: number,
-		sizeY: number,
-		sizeZ: number,
-		blockSize: number,
-	) {
-		this.blocks = blocks;
-		this.sizeX = sizeX;
-		this.sizeY = sizeY;
-		this.sizeZ = sizeZ;
+	constructor(blockSize: number) {
 		this.blockSize = blockSize;
 	}
 
-	private index(x: number, y: number, z: number): number {
-		return y * this.sizeZ * this.sizeX + z * this.sizeX + x;
+	addChunk(chunk: Chunk): void {
+		this.chunks.set(chunkKey(chunk.cx, chunk.cy, chunk.cz), chunk);
+	}
+
+	getChunk(cx: number, cy: number, cz: number): Chunk | undefined {
+		return this.chunks.get(chunkKey(cx, cy, cz));
+	}
+
+	forEachChunk(cb: (chunk: Chunk) => void): void {
+		for (const chunk of this.chunks.values()) {
+			cb(chunk);
+		}
 	}
 
 	getBlock(x: number, y: number, z: number): BlockId {
-		if (
-			x < 0 ||
-			x >= this.sizeX ||
-			y < 0 ||
-			y >= this.sizeY ||
-			z < 0 ||
-			z >= this.sizeZ
-		) {
-			return AIR;
-		}
-		return this.blocks[this.index(x, y, z)] ?? AIR;
+		const cx = Math.floor(x / CHUNK_SIZE);
+		const cy = Math.floor(y / CHUNK_SIZE);
+		const cz = Math.floor(z / CHUNK_SIZE);
+		const chunk = this.chunks.get(chunkKey(cx, cy, cz));
+		if (!chunk) return AIR;
+
+		const lx = ((x % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+		const ly = ((y % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+		const lz = ((z % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+		return chunk.blocks[chunk.index(lx, ly, lz)] ?? AIR;
 	}
 
 	setBlock(x: number, y: number, z: number, id: BlockId): boolean {
-		if (
-			x < 0 ||
-			x >= this.sizeX ||
-			y < 0 ||
-			y >= this.sizeY ||
-			z < 0 ||
-			z >= this.sizeZ
-		) {
-			return false;
-		}
-		this.blocks[this.index(x, y, z)] = id;
+		const cx = Math.floor(x / CHUNK_SIZE);
+		const cy = Math.floor(y / CHUNK_SIZE);
+		const cz = Math.floor(z / CHUNK_SIZE);
+		const chunk = this.chunks.get(chunkKey(cx, cy, cz));
+		if (!chunk) return false;
+
+		const lx = ((x % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+		const ly = ((y % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+		const lz = ((z % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+		chunk.blocks[chunk.index(lx, ly, lz)] = id;
 		return true;
 	}
 

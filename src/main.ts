@@ -2,17 +2,13 @@ import { mat4, vec3 } from 'wgpu-matrix';
 import MainShader from './shader';
 import WireframeShader from './wireframe';
 import { initSkybox, drawSkybox, type SkyboxResources } from './skybox';
-import { initWater, drawWater } from './water';
 
 import { BuildDebug, refreshDebug, debuggerParams, stats } from './debug';
-import buildBlocks, {
-	CHUNK_SIZE_X,
-	CHUNK_SIZE_Y,
-	CHUNK_SIZE_Z,
-} from './block-builder';
+import buildChunkBlocks from './block-builder';
 import { greedyMesh } from './greedy-mesh';
 import { FREECAM, physicsTick, createPlayerState } from './movement';
 import { World } from './world';
+import { Chunk, CHUNK_SIZE, chunkKey } from './chunk';
 import { AIR, MARBLE } from './block';
 import { raycast, type RaycastHit } from './raycast';
 import { initHighlight, drawHighlight } from './highlight';
@@ -21,7 +17,6 @@ import { initHighlight, drawHighlight } from './highlight';
 // - Skylights
 // - Better lighting (?)
 // - different blocks with different textures
-// - chunks
 
 // NOTE TO SELF
 // in minecraft, when I jump, my camera almost jiggles a little? vertically. Creates a nice sense of impulse,
@@ -33,26 +28,22 @@ if (!navigator.gpu) {
 }
 
 const BLOCK_SIZE = 10;
-const world = new World(
-	buildBlocks(),
-	CHUNK_SIZE_X,
-	CHUNK_SIZE_Y,
-	CHUNK_SIZE_Z,
-	BLOCK_SIZE,
-);
+const RENDER_DISTANCE = 8; // 4x4x4 chunk grid
 
-// Generate optimized mesh using greedy meshing algorithm
-let { vertexData: meshVertexData, numVertices: meshNumVertices } =
-	greedyMesh(world);
+const world = new World(BLOCK_SIZE);
+for (let cy = 0; cy < RENDER_DISTANCE; cy++) {
+	for (let cz = 0; cz < RENDER_DISTANCE; cz++) {
+		for (let cx = 0; cx < RENDER_DISTANCE; cx++) {
+			world.addChunk(new Chunk(cx, cy, cz, buildChunkBlocks(cx, cy, cz)));
+		}
+	}
+}
 
 const degToRad = (d: number) => (d * Math.PI) / 180;
 const up = vec3.create(0, 1, 0);
 
-const cameraPos = vec3.create(
-	(CHUNK_SIZE_X / 2) * BLOCK_SIZE,
-	BLOCK_SIZE * 3,
-	(CHUNK_SIZE_Z / 2) * BLOCK_SIZE,
-);
+const worldCenter = (RENDER_DISTANCE * CHUNK_SIZE * BLOCK_SIZE) / 2;
+const cameraPos = vec3.create(worldCenter, worldCenter, worldCenter);
 const cameraFront = vec3.create(0, 0, -1);
 const cameraUp = up;
 
@@ -60,6 +51,12 @@ let cameraYaw = -90;
 let cameraPitch = 0;
 let currentHit: RaycastHit | null = null;
 const MAX_REACH = 100; // 10 blocks
+
+interface ChunkRenderData {
+	vertexBuffer: GPUBuffer;
+	wireframeBindGroup: GPUBindGroup;
+	numVertices: number;
+}
 
 async function main(): Promise<void> {
 	const canvas = document.querySelector<HTMLCanvasElement>('canvas');
@@ -223,17 +220,6 @@ async function main(): Promise<void> {
 	});
 	const uniformValues = new Float32Array(uniformBufferSize / 4);
 
-	// Vertex buffer and wireframe bind group are recreated on remesh
-	let vertexBuffer = device.createBuffer({
-		label: 'greedy mesh vertex buffer',
-		size: meshVertexData.byteLength,
-		usage:
-			GPUBufferUsage.VERTEX |
-			GPUBufferUsage.STORAGE |
-			GPUBufferUsage.COPY_DST,
-	});
-	device.queue.writeBuffer(vertexBuffer, 0, meshVertexData);
-
 	const blockTextureView = blockTextureArray.createView({
 		dimension: '2d-array',
 	});
@@ -247,15 +233,57 @@ async function main(): Promise<void> {
 		],
 	});
 
-	let wireframeBindGroup = device.createBindGroup({
-		label: 'wireframe bindgroup',
-		layout: barycentricCoordinatesBasedWireframePipeline.getBindGroupLayout(
-			0,
-		),
-		entries: [
-			{ binding: 0, resource: { buffer: uniformBuffer } },
-			{ binding: 1, resource: { buffer: vertexBuffer } },
-		],
+	// Per-chunk GPU resources
+	const chunkRenderMap = new Map<string, ChunkRenderData>();
+
+	/** Build or rebuild GPU resources for a single chunk. */
+	function meshChunk(cx: number, cy: number, cz: number): void {
+		const key = chunkKey(cx, cy, cz);
+
+		// Destroy old buffer if it exists
+		const old = chunkRenderMap.get(key);
+		if (old) {
+			old.vertexBuffer.destroy();
+		}
+
+		const { vertexData, numVertices } = greedyMesh(world, cx, cy, cz);
+
+		if (numVertices === 0) {
+			chunkRenderMap.delete(key);
+			return;
+		}
+
+		const vertexBuffer = device.createBuffer({
+			label: `chunk ${key} vertex buffer`,
+			size: vertexData.byteLength,
+			usage:
+				GPUBufferUsage.VERTEX |
+				GPUBufferUsage.STORAGE |
+				GPUBufferUsage.COPY_DST,
+		});
+		device.queue.writeBuffer(vertexBuffer, 0, vertexData);
+
+		const wireframeBindGroup = device.createBindGroup({
+			label: `chunk ${key} wireframe bindgroup`,
+			layout: barycentricCoordinatesBasedWireframePipeline.getBindGroupLayout(
+				0,
+			),
+			entries: [
+				{ binding: 0, resource: { buffer: uniformBuffer } },
+				{ binding: 1, resource: { buffer: vertexBuffer } },
+			],
+		});
+
+		chunkRenderMap.set(key, {
+			vertexBuffer,
+			wireframeBindGroup,
+			numVertices,
+		});
+	}
+
+	// Initial mesh for all chunks
+	world.forEachChunk((chunk) => {
+		meshChunk(chunk.cx, chunk.cy, chunk.cz);
 	});
 
 	// Initialize skybox
@@ -267,16 +295,7 @@ async function main(): Promise<void> {
 	// Initialize block highlight outline
 	const highlight = initHighlight(device, presentationFormat);
 
-	// Initialize water plane (reuses skybox cubemap for reflection)
-	const water = initWater(
-		device,
-		presentationFormat,
-		skybox.texture,
-		skybox.sampler,
-		CHUNK_SIZE_X,
-		CHUNK_SIZE_Z,
-		BLOCK_SIZE,
-	);
+	// TODO: re-enable water once it supports chunked worlds
 
 	let depthTexture: GPUTexture;
 
@@ -306,34 +325,24 @@ async function main(): Promise<void> {
 	const playerHeight = BLOCK_SIZE * 2 * 0.9;
 	const playerHalfWidth = BLOCK_SIZE / 4;
 
-	/** Regenerate the greedy mesh from current world state and re-upload to GPU. */
-	function remesh(): void {
-		const result = greedyMesh(world);
-		meshVertexData = result.vertexData;
-		meshNumVertices = result.numVertices;
+	/** Remesh a single chunk and any boundary neighbors affected by a block change. */
+	function onBlockChanged(bx: number, by: number, bz: number): void {
+		const cx = Math.floor(bx / CHUNK_SIZE);
+		const cy = Math.floor(by / CHUNK_SIZE);
+		const cz = Math.floor(bz / CHUNK_SIZE);
+		meshChunk(cx, cy, cz);
 
-		vertexBuffer.destroy();
-		vertexBuffer = device.createBuffer({
-			label: 'greedy mesh vertex buffer',
-			size: meshVertexData.byteLength,
-			usage:
-				GPUBufferUsage.VERTEX |
-				GPUBufferUsage.STORAGE |
-				GPUBufferUsage.COPY_DST,
-		});
-		device.queue.writeBuffer(vertexBuffer, 0, meshVertexData);
+		// If the block is on a chunk boundary, remesh the neighbor for correct AO
+		const lx = ((bx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+		const ly = ((by % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+		const lz = ((bz % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
 
-		// Wireframe reads the vertex buffer as storage — must rebind
-		wireframeBindGroup = device.createBindGroup({
-			label: 'wireframe bindgroup',
-			layout: barycentricCoordinatesBasedWireframePipeline.getBindGroupLayout(
-				0,
-			),
-			entries: [
-				{ binding: 0, resource: { buffer: uniformBuffer } },
-				{ binding: 1, resource: { buffer: vertexBuffer } },
-			],
-		});
+		if (lx === 0) meshChunk(cx - 1, cy, cz);
+		if (lx === CHUNK_SIZE - 1) meshChunk(cx + 1, cy, cz);
+		if (ly === 0) meshChunk(cx, cy - 1, cz);
+		if (ly === CHUNK_SIZE - 1) meshChunk(cx, cy + 1, cz);
+		if (lz === 0) meshChunk(cx, cy, cz - 1);
+		if (lz === CHUNK_SIZE - 1) meshChunk(cx, cy, cz + 1);
 	}
 
 	function requestRender() {
@@ -409,8 +418,6 @@ async function main(): Promise<void> {
 
 		const encoder = device.createCommandEncoder();
 		const pass = encoder.beginRenderPass(renderPassDescriptor);
-		pass.setPipeline(pipeline);
-		pass.setVertexBuffer(0, vertexBuffer);
 
 		const aspect = canvas.clientWidth / canvas.clientHeight;
 		const projection = mat4.perspective(
@@ -432,16 +439,22 @@ async function main(): Promise<void> {
 		uniformValues.set(viewProjectionMatrix);
 		device.queue.writeBuffer(uniformBuffer, 0, uniformValues);
 
-		// Single draw call for the entire greedy-meshed chunk
+		// Draw all chunk meshes
+		pass.setPipeline(pipeline);
 		pass.setBindGroup(0, bindGroup);
-		pass.draw(meshNumVertices);
-		debuggerParams.vertices = meshNumVertices;
+		for (const chunkRender of chunkRenderMap.values()) {
+			pass.setVertexBuffer(0, chunkRender.vertexBuffer);
+			pass.draw(chunkRender.numVertices);
+			debuggerParams.vertices += chunkRender.numVertices;
+		}
 
 		// Draw wireframes
 		if (debuggerParams.wireframe) {
 			pass.setPipeline(barycentricCoordinatesBasedWireframePipeline);
-			pass.setBindGroup(0, wireframeBindGroup);
-			pass.draw(meshNumVertices);
+			for (const chunkRender of chunkRenderMap.values()) {
+				pass.setBindGroup(0, chunkRender.wireframeBindGroup);
+				pass.draw(chunkRender.numVertices);
+			}
 		}
 
 		// Draw block highlight outline on targeted block
@@ -457,9 +470,6 @@ async function main(): Promise<void> {
 				BLOCK_SIZE,
 			);
 		}
-
-		// Draw water plane (reflective surface above terrain)
-		drawWater(pass, device, water, viewProjectionMatrix, cameraPos);
 
 		// Draw skybox (after geometry, uses less-equal depth test)
 		drawSkybox(pass, device, skybox, viewMatrix, projection);
@@ -495,7 +505,7 @@ async function main(): Promise<void> {
 			// Left click = break block
 			const [bx, by, bz] = currentHit.blockPos;
 			world.setBlock(bx, by, bz, AIR);
-			remesh();
+			onBlockChanged(bx, by, bz);
 		} else if (e.button === 2) {
 			// Right click = place block
 			const px = currentHit.blockPos[0] + currentHit.faceNormal[0];
@@ -528,7 +538,7 @@ async function main(): Promise<void> {
 			}
 
 			world.setBlock(px, py, pz, MARBLE);
-			remesh();
+			onBlockChanged(px, py, pz);
 		}
 	});
 

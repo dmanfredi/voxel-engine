@@ -238,6 +238,8 @@ async function main(): Promise<void> {
 
 	/** Build or rebuild GPU resources for a single chunk. */
 	function meshChunk(cx: number, cy: number, cz: number): void {
+		if (!world.getChunk(cx, cy, cz)) return;
+
 		const key = chunkKey(cx, cy, cz);
 
 		// Destroy old buffer if it exists
@@ -330,12 +332,15 @@ async function main(): Promise<void> {
 		const cx = Math.floor(bx / CHUNK_SIZE);
 		const cy = Math.floor(by / CHUNK_SIZE);
 		const cz = Math.floor(bz / CHUNK_SIZE);
+		// console.log("C's: ", cx, cy, cz);
 		meshChunk(cx, cy, cz);
 
 		// If the block is on a chunk boundary, remesh the neighbor for correct AO
 		const lx = ((bx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
 		const ly = ((by % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
 		const lz = ((bz % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+
+		// console.log("L's: ", lx, ly, lz);
 
 		if (lx === 0) meshChunk(cx - 1, cy, cz);
 		if (lx === CHUNK_SIZE - 1) meshChunk(cx + 1, cy, cz);

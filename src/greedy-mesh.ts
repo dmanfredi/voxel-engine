@@ -1,4 +1,4 @@
-import { AIR, blockRegistry } from './block';
+import { type BlockId, AIR, blockRegistry } from './block';
 import { CHUNK_SIZE } from './chunk';
 import type { World } from './world';
 
@@ -13,6 +13,10 @@ type AO = 0 | 1 | 2 | 3;
 const AO_CURVE: readonly [number, number, number, number] = [
 	0.2, 0.45, 0.7, 1.0,
 ];
+
+// CHUNK_SIZE = 32 = 2^5
+const CHUNK_SHIFT = 5;
+const CHUNK_MASK = CHUNK_SIZE - 1; // 31
 
 /**
  * Computes ambient occlusion for a single vertex of a face.
@@ -34,8 +38,8 @@ function vertexAO(side1: boolean, side2: boolean, corner: boolean): AO {
  * 2. Computing per-vertex AO for each face
  * 3. Merging adjacent coplanar faces with identical AO patterns
  *
- * Block lookups go through World, so AO at chunk boundaries reads neighbor
- * chunks automatically.
+ * Block lookups use a fast path for interior blocks (direct array access)
+ * and fall through to World for cross-chunk boundary reads.
  *
  * @param world - World instance providing block access
  * @param cx - Chunk X coordinate
@@ -55,6 +59,36 @@ export function greedyMesh(
 	const oy = cy * CHUNK_SIZE;
 	const oz = cz * CHUNK_SIZE;
 	const offsets: [number, number, number] = [ox, oy, oz];
+
+	// Grab the chunk's block array for direct access (fast path).
+	// ~97% of lookups during the sweep are interior to this chunk —
+	// only boundary slices (local coord -1 or CHUNK_SIZE) need World.
+	const chunk = world.getChunk(cx, cy, cz);
+	if (!chunk) {
+		return { vertexData: new Float32Array(0), numVertices: 0 };
+	}
+	const blocks = chunk.blocks;
+
+	/**
+	 * Fast block lookup using chunk-local coordinates.
+	 * If in bounds [0, 31] on all axes: direct array read (no Map lookup).
+	 * Otherwise: falls through to world.getBlock for cross-chunk access.
+	 */
+	function getBlockFast(lx: number, ly: number, lz: number): BlockId {
+		// Single branch: if any coord has bits outside 0-4 (negative or >= 32),
+		// the OR will have bits set above CHUNK_MASK.
+		if (((lx | ly | lz) & ~CHUNK_MASK) === 0) {
+			return (
+				blocks[(ly << (CHUNK_SHIFT * 2)) + (lz << CHUNK_SHIFT) + lx] ??
+				AIR
+			);
+		}
+		return world.getBlock(ox + lx, oy + ly, oz + lz);
+	}
+
+	function isSolidFast(lx: number, ly: number, lz: number): boolean {
+		return blockRegistry.isSolid(getBlockFast(lx, ly, lz));
+	}
 
 	/**
 	 * Compute AO for all 4 corners of a face.
@@ -103,9 +137,9 @@ export function greedyMesh(
 			cr[vIdx] = faceV + sv;
 
 			ao[c] = vertexAO(
-				world.isSolid(ox + s1[0], oy + s1[1], oz + s1[2]),
-				world.isSolid(ox + s2[0], oy + s2[1], oz + s2[2]),
-				world.isSolid(ox + cr[0], oy + cr[1], oz + cr[2]),
+				isSolidFast(s1[0], s1[1], s1[2]),
+				isSolidFast(s2[0], s2[1], s2[2]),
+				isSolidFast(cr[0], cr[1], cr[2]),
 			);
 		}
 
@@ -160,17 +194,14 @@ export function greedyMesh(
 			let n = 0;
 			for (x[v] = 0; x[v] < CHUNK_SIZE; x[v]++) {
 				for (x[u] = 0; x[u] < CHUNK_SIZE; x[u]++) {
-					// Get block IDs on either side of this potential face
-					// Offset by chunk world position for correct cross-chunk lookups
-					const blockA = world.getBlock(
-						ox + x[0],
-						oy + x[1],
-						oz + x[2],
-					);
-					const blockB = world.getBlock(
-						ox + x[0] + q[0],
-						oy + x[1] + q[1],
-						oz + x[2] + q[2],
+					// Get block IDs on either side of this potential face.
+					// Uses fast path (direct array read) for interior blocks,
+					// falls through to World for boundary slices.
+					const blockA = getBlockFast(x[0], x[1], x[2]);
+					const blockB = getBlockFast(
+						x[0] + q[0],
+						x[1] + q[1],
+						x[2] + q[2],
 					);
 
 					const solidA = blockA !== AIR;

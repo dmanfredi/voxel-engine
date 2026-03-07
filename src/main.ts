@@ -28,7 +28,7 @@ if (!navigator.gpu) {
 }
 
 const BLOCK_SIZE = 10;
-const RENDER_DISTANCE = 8; // 4x4x4 chunk grid
+const RENDER_DISTANCE = 2; // 4x4x4 chunk grid
 
 const world = new World(BLOCK_SIZE);
 for (let cy = 0; cy < RENDER_DISTANCE; cy++) {

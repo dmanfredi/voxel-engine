@@ -28,12 +28,12 @@ if (!navigator.gpu) {
 }
 
 const BLOCK_SIZE = 10;
-const RENDER_DISTANCE = 2; // 4x4x4 chunk grid
+const CHUNKS = 8;
 
 const world = new World(BLOCK_SIZE);
-for (let cy = 0; cy < RENDER_DISTANCE; cy++) {
-	for (let cz = 0; cz < RENDER_DISTANCE; cz++) {
-		for (let cx = 0; cx < RENDER_DISTANCE; cx++) {
+for (let cy = 0; cy < CHUNKS; cy++) {
+	for (let cz = 0; cz < CHUNKS; cz++) {
+		for (let cx = 0; cx < CHUNKS; cx++) {
 			world.addChunk(new Chunk(cx, cy, cz, buildChunkBlocks(cx, cy, cz)));
 		}
 	}
@@ -42,7 +42,7 @@ for (let cy = 0; cy < RENDER_DISTANCE; cy++) {
 const degToRad = (d: number) => (d * Math.PI) / 180;
 const up = vec3.create(0, 1, 0);
 
-const worldCenter = (RENDER_DISTANCE * CHUNK_SIZE * BLOCK_SIZE) / 2;
+const worldCenter = (CHUNKS * CHUNK_SIZE * BLOCK_SIZE) / 2;
 const cameraPos = vec3.create(worldCenter, worldCenter, worldCenter);
 const cameraFront = vec3.create(0, 0, -1);
 const cameraUp = up;

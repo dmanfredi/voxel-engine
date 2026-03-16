@@ -16,9 +16,7 @@
 	"description": "",
 	"devDependencies": {
 		"@eslint/js": "^9.39.2",
-		"@tweakpane/core": "^2.0.5",
 		"@types/noisejs": "^2.1.0",
-		"@types/stats.js": "^0.17.4",
 		"@webgpu/types": "^0.1.68",
 		"eslint": "^9.39.2",
 		"globals": "^16.5.0",
@@ -28,8 +26,6 @@
 	},
 	"dependencies": {
 		"noisejs": "^2.1.0",
-		"stats.js": "^0.17.0",
-		"tweakpane": "^4.0.5",
 		"wgpu-matrix": "^3.4.0"
 	}
 }

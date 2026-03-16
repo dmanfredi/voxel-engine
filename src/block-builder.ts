@@ -2,10 +2,11 @@ import { AIR, MARBLE } from './block';
 import { CHUNK_SIZE } from './chunk';
 import Noise from 'noisejs';
 
-const noise = new (Noise as unknown as { Noise: typeof Noise }).Noise(
-	Math.random(),
-);
-
+const noise = new (Noise as unknown as { Noise: typeof Noise }).Noise(59);
+//48
+//59
+// 76 eh
+// 99
 const NOISE_FREQUENCY = 0.02;
 
 export default function buildChunkBlocks(

@@ -49,5 +49,16 @@
 		"skipLibCheck": true
 	},
 	"include": ["src/**/*", "vite.config.ts"],
-	"exclude": ["dist", "node_modules"]
+	"exclude": [
+		"dist",
+		"node_modules",
+		"src/debug.ts",
+		"src/highlight.ts",
+		"src/wireframe.ts",
+		"src/movement.ts",
+		"src/collision.ts",
+		"src/raycast.ts",
+		"src/water.ts",
+		"src/basic.vert.ts"
+	]
 }

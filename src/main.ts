@@ -226,6 +226,78 @@ async function main(): Promise<void> {
 	}
 
 	// ============================================
+	// CAMERA CONTROL
+	// ============================================
+
+	const AUTO_ROTATE_SPEED = 7;
+	const RESUME_DELAY = 1.5; // seconds before auto-rotate resumes
+	const EASE_IN_DURATION = 3; // seconds to ease back to full speed
+	const DRAG_SENSITIVITY = 0.3;
+
+	let isDragging = false;
+	let lastInteractionTime = -Infinity;
+	let autoRotateSpeed = AUTO_ROTATE_SPEED;
+
+	canvas.addEventListener('mousedown', (e) => {
+		if (e.button === 0) isDragging = true;
+	});
+	window.addEventListener('mouseup', () => {
+		isDragging = false;
+	});
+	canvas.addEventListener('mousemove', (e) => {
+		if (!isDragging) return;
+		cameraYaw += e.movementX * DRAG_SENSITIVITY;
+		cameraPitch -= e.movementY * DRAG_SENSITIVITY;
+		cameraPitch = Math.max(-85, Math.min(85, cameraPitch));
+		lastInteractionTime = performance.now() / 1000;
+		autoRotateSpeed = 0;
+	});
+
+	canvas.addEventListener(
+		'touchstart',
+		(e) => {
+			isDragging = true;
+			e.preventDefault();
+		},
+		{ passive: false },
+	);
+	canvas.addEventListener('touchend', () => {
+		isDragging = false;
+	});
+	canvas.addEventListener(
+		'touchmove',
+		(e) => {
+			if (!isDragging || !e.touches[0]) return;
+			const touch = e.touches[0];
+			if (lastTouchX !== null && lastTouchY !== null) {
+				cameraYaw += (touch.clientX - lastTouchX) * DRAG_SENSITIVITY;
+				cameraPitch -= (touch.clientY - lastTouchY) * DRAG_SENSITIVITY;
+				cameraPitch = Math.max(-85, Math.min(85, cameraPitch));
+				lastInteractionTime = performance.now() / 1000;
+				autoRotateSpeed = 0;
+			}
+			lastTouchX = touch.clientX;
+			lastTouchY = touch.clientY;
+			e.preventDefault();
+		},
+		{ passive: false },
+	);
+	canvas.addEventListener('touchend', () => {
+		lastTouchX = null;
+		lastTouchY = null;
+	});
+	let lastTouchX: number | null = null;
+	let lastTouchY: number | null = null;
+
+	canvas.style.cursor = 'grab';
+	canvas.addEventListener('mousedown', () => {
+		canvas.style.cursor = 'grabbing';
+	});
+	window.addEventListener('mouseup', () => {
+		canvas.style.cursor = 'grab';
+	});
+
+	// ============================================
 	// RENDER LOOP
 	// ============================================
 
@@ -244,9 +316,27 @@ async function main(): Promise<void> {
 		const dt = Math.min(0.1, (t - lastT) / 1000);
 		lastT = t;
 
-		// Auto-rotate camera
-		cameraYaw += dt * 7;
-		cameraPitch = -10 + Math.sin(t * 0.0003) * 5;
+		const now = t / 1000;
+		const timeSinceInteraction = now - lastInteractionTime;
+
+		// Ease auto-rotate back in after delay
+		if (timeSinceInteraction > RESUME_DELAY) {
+			const easeProgress = Math.min(
+				(timeSinceInteraction - RESUME_DELAY) / EASE_IN_DURATION,
+				1,
+			);
+			autoRotateSpeed = AUTO_ROTATE_SPEED * easeProgress;
+		}
+
+		// Auto-rotate (speed is 0 while dragging, eases back up after)
+		cameraYaw += dt * autoRotateSpeed;
+
+		// Gently blend pitch back toward the oscillation target
+		if (autoRotateSpeed > 0) {
+			const targetPitch = -10 + Math.sin(t * 0.0003) * 5;
+			const blendRate = (autoRotateSpeed / AUTO_ROTATE_SPEED) * 0.5 * dt;
+			cameraPitch += (targetPitch - cameraPitch) * blendRate;
+		}
 
 		const direction = vec3.create(
 			Math.cos(degToRad(cameraYaw)) * Math.cos(degToRad(cameraPitch)),

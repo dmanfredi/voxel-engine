@@ -330,7 +330,7 @@ async function main(): Promise<void> {
 	const playerHalfWidth = BLOCK_SIZE / 4;
 	const gameState = createGameState();
 
-	const bpOrb = document.querySelector<HTMLElement>('.bp-orb');
+	const bpOrb = document.querySelector<HTMLElement>('.bp-orb-value');
 	if (!bpOrb) throw new Error('BP orb element not found');
 	const bpOrbEl: HTMLElement = bpOrb;
 

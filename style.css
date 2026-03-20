@@ -48,8 +48,8 @@ canvas {
 		height: 150px;
 		border-radius: 50%;
 
-		background: rgba(10, 15, 35, 0.88);
-		border: 3px solid rgba(130, 180, 255, 0.75);
+		background: #28292e;
+		border: 3px solid rgba(187, 188, 196, 0.34);
 
 		display: flex;
 		align-items: center;
@@ -59,9 +59,10 @@ canvas {
 			font-size: 32px;
 			font-weight: bold;
 			font-family: sans-serif;
-			color: rgba(210, 230, 255, 0.95);
+			color: rgba(255, 255, 255, 0.95);
 			user-select: none;
 			padding-bottom: 40px;
+			letter-spacing: 1.5px;
 		}
 	}
 }

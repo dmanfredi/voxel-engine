@@ -12,6 +12,8 @@ import { Chunk, CHUNK_SIZE, chunkKey } from './chunk';
 import { AIR, MARBLE } from './block';
 import { raycast, type RaycastHit } from './raycast';
 import { initHighlight, drawHighlight } from './highlight';
+import { createGameState } from './game-state';
+import { autoClimb } from './auto-climb';
 
 // TODO
 // - Skylights
@@ -326,6 +328,16 @@ async function main(): Promise<void> {
 	const playerState = createPlayerState();
 	const playerHeight = BLOCK_SIZE * 2 * 0.9;
 	const playerHalfWidth = BLOCK_SIZE / 4;
+	const gameState = createGameState();
+
+	const bpOrb = document.querySelector<HTMLElement>('.bp-orb');
+	if (!bpOrb) throw new Error('BP orb element not found');
+	const bpOrbEl: HTMLElement = bpOrb;
+
+	function updateBPDisplay(): void {
+		bpOrbEl.textContent = String(gameState.bp);
+	}
+	updateBPDisplay();
 
 	/** Remesh a single chunk and any boundary neighbors affected by a block change. */
 	function onBlockChanged(bx: number, by: number, bz: number): void {
@@ -376,6 +388,19 @@ async function main(): Promise<void> {
 				playerHeight,
 				dt,
 			);
+		}
+
+		// Auto-climb: place a block beneath feet whenever there's air there
+		const climbed = autoClimb(
+			cameraPos,
+			playerHeight,
+			BLOCK_SIZE,
+			world,
+			gameState,
+		);
+		if (climbed) {
+			onBlockChanged(climbed.x, climbed.y, climbed.z);
+			updateBPDisplay();
 		}
 
 		// Raycast from camera to find targeted block
@@ -507,12 +532,15 @@ async function main(): Promise<void> {
 		if (!currentHit) return;
 
 		if (e.button === 0) {
-			// Left click = break block
+			// Left click = break block (gains 1 BP)
 			const [bx, by, bz] = currentHit.blockPos;
 			world.setBlock(bx, by, bz, AIR);
 			onBlockChanged(bx, by, bz);
+			gameState.bp++;
+			updateBPDisplay();
 		} else if (e.button === 2) {
-			// Right click = place block
+			// Right click = place block (costs 1 BP)
+			if (gameState.bp <= 0) return;
 			const px = currentHit.blockPos[0] + currentHit.faceNormal[0];
 			const py = currentHit.blockPos[1] + currentHit.faceNormal[1];
 			const pz = currentHit.blockPos[2] + currentHit.faceNormal[2];
@@ -544,6 +572,8 @@ async function main(): Promise<void> {
 
 			world.setBlock(px, py, pz, MARBLE);
 			onBlockChanged(px, py, pz);
+			gameState.bp--;
+			updateBPDisplay();
 		}
 	});
 

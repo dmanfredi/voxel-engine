@@ -38,4 +38,29 @@ canvas {
 		border: 2px solid rgb(255, 255, 255);
 		border-radius: 5px;
 	}
+
+	.bp-orb {
+		position: absolute;
+		bottom: -60px;
+		left: 50%;
+		transform: translateX(-50%);
+
+		width: 150px;
+		height: 150px;
+		border-radius: 50%;
+
+		background: rgba(10, 15, 35, 0.88);
+		border: 3px solid rgba(130, 180, 255, 0.75);
+
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		margin-bottom: 60px; /* shift number into the visible portion */
+
+		font-size: 32px;
+		font-weight: bold;
+		font-family: sans-serif;
+		color: rgba(210, 230, 255, 0.95);
+		user-select: none;
+	}
 }

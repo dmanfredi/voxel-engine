@@ -3,5 +3,5 @@ export interface GameState {
 }
 
 export function createGameState(): GameState {
-	return { bp: 50 };
+	return { bp: 500 };
 }

@@ -390,17 +390,20 @@ async function main(): Promise<void> {
 			);
 		}
 
-		// Auto-climb: place a block beneath feet whenever there's air there
-		const climbed = autoClimb(
-			cameraPos,
-			playerHeight,
-			BLOCK_SIZE,
-			world,
-			gameState,
-		);
-		if (climbed) {
-			onBlockChanged(climbed.x, climbed.y, climbed.z);
-			updateBPDisplay();
+		// Auto-climb: place a block beneath feet whenever there's air there.
+		// Suppressed when holding Shift or in freecam.
+		if (!debuggerParams.freecam && !keysDown.has('ShiftLeft')) {
+			const climbed = autoClimb(
+				cameraPos,
+				playerHeight,
+				BLOCK_SIZE,
+				world,
+				gameState,
+			);
+			if (climbed) {
+				onBlockChanged(climbed.x, climbed.y, climbed.z);
+				updateBPDisplay();
+			}
 		}
 
 		// Raycast from camera to find targeted block

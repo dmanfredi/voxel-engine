@@ -12,7 +12,13 @@ const AO_CURVE: readonly [number, number, number, number] = [
 const CHUNK_SHIFT = 5;
 const CHUNK_MASK = CHUNK_SIZE - 1;
 const FLOATS_PER_VERTEX = 10;
-const MAX_VERTS_PER_SURFACE_BLOCK = 132; // 6×6 face + 12×6 chamfer + 8×3 corner
+type FaceFold = {
+	corner: number;
+	shoulderToPrev: [number, number, number];
+	shoulderToNext: [number, number, number];
+	foldPoint: [number, number, number];
+};
+const MAX_VERTS_PER_SURFACE_BLOCK = 168; // 6x12 face (fold case) + 12x6 chamfer + 8x3 corner
 
 // Face directions indexed 0-5: +X, -X, +Y, -Y, +Z, -Z
 const FACE_DIRS: readonly (readonly [number, number, number])[] = [
@@ -198,17 +204,6 @@ export function bevelMesh(
 		vOffset++;
 	}
 
-	function samePos(
-		a: readonly [number, number, number],
-		b: readonly [number, number, number],
-	): boolean {
-		return (
-			Math.abs(a[0] - b[0]) < 1e-6 &&
-			Math.abs(a[1] - b[1]) < 1e-6 &&
-			Math.abs(a[2] - b[2]) < 1e-6
-		);
-	}
-
 	function writeTriangle(
 		p0: readonly [number, number, number],
 		p1: readonly [number, number, number],
@@ -244,14 +239,34 @@ export function bevelMesh(
 		}
 	}
 
+	function isEdgeBeveledAt(
+		lx: number,
+		ly: number,
+		lz: number,
+		fA: number,
+		fB: number,
+	): boolean {
+		if (!isSolidFast(lx, ly, lz)) return false;
+		const dA = FACE_DIRS[fA];
+		const dB = FACE_DIRS[fB];
+		if (!dA || !dB) return false;
+		return (
+			!isSolidFast(lx + dA[0], ly + dA[1], lz + dA[2]) &&
+			!isSolidFast(lx + dB[0], ly + dB[1], lz + dB[2]) &&
+			!isSolidFast(
+				lx + dA[0] + dB[0],
+				ly + dA[1] + dB[1],
+				lz + dA[2] + dB[2],
+			)
+		);
+	}
+
 	// Reusable arrays to reduce allocations
 	const exposed: boolean[] = [false, false, false, false, false, false];
 	const edgeBev: boolean[][] = Array.from({ length: 6 }, () =>
 		Array.from({ length: 6 }, () => false),
 	);
-	const edgeEndBev: boolean[][][] = Array.from({ length: 6 }, () =>
-		Array.from({ length: 6 }, () => [false, false]),
-	);
+	const faceFolds: (FaceFold | null)[] = [null, null, null, null, null, null];
 	const aoSigns: [number, number][] = [
 		[-1, -1],
 		[1, -1],
@@ -289,8 +304,6 @@ export function bevelMesh(
 				for (let ei = 0; ei < 6; ei++) {
 					for (let ej = 0; ej < 6; ej++) {
 						edgeBev[ei][ej] = false;
-						edgeEndBev[ei][ej][0] = false;
-						edgeEndBev[ei][ej][1] = false;
 					}
 				}
 				for (const pair of EDGE_PAIRS) {
@@ -308,34 +321,7 @@ export function bevelMesh(
 						);
 						edgeBev[fA][fB] = diagAir;
 						edgeBev[fB][fA] = diagAir;
-
-						if (diagAir) {
-							const edgeAx = 3 - faceAxis(fA) - faceAxis(fB);
-							for (const endDir of [-1, 1] as const) {
-								const fC = faceIndex(edgeAx, endDir);
-								const dC = FACE_DIRS[fC];
-								if (dC === undefined) continue;
-								const cornerAir =
-									exposed[fC] &&
-									!isSolidFast(
-										lx + dA[0] + dB[0] + dC[0],
-										ly + dA[1] + dB[1] + dC[1],
-										lz + dA[2] + dB[2] + dC[2],
-									);
-								const endIndex = endDir > 0 ? 1 : 0;
-								edgeEndBev[fA][fB][endIndex] = cornerAir;
-								edgeEndBev[fB][fA][endIndex] = cornerAir;
-							}
-						}
 					}
-				}
-
-				function edgeEndpointBeveled(
-					fA: number,
-					fB: number,
-					positiveEnd: boolean,
-				): boolean {
-					return edgeEndBev[fA][fB][positiveEnd ? 1 : 0] ?? false;
 				}
 
 				// --- Compute inset face corners and AO ---
@@ -355,6 +341,9 @@ export function bevelMesh(
 					null,
 					null,
 				];
+				for (let f = 0; f < 6; f++) {
+					faceFolds[f] = null;
+				}
 
 				for (let f = 0; f < 6; f++) {
 					if (!exposed[f]) continue;
@@ -371,31 +360,26 @@ export function bevelMesh(
 					const vMinF = faceIndex(v, -1);
 					const vMaxF = faceIndex(v, 1);
 
+					const uMinB = edgeBev[f][uMinF];
+					const uMaxB = edgeBev[f][uMaxF];
+					const vMinB = edgeBev[f][vMinF];
+					const vMaxB = edgeBev[f][vMaxF];
+
 					// v0(u-min,v-min) v1(u-max,v-min) v2(u-max,v-max) v3(u-min,v-max)
 					const corners: [number, number, number][] = [];
 					for (let c = 0; c < 4; c++) {
 						const isUMax = c === 1 || c === 2;
 						const isVMax = c === 2 || c === 3;
-						const bevelU = edgeEndpointBeveled(
-							f,
-							isUMax ? uMaxF : uMinF,
-							isVMax,
-						);
-						const bevelV = edgeEndpointBeveled(
-							f,
-							isVMax ? vMaxF : vMinF,
-							isUMax,
-						);
 
 						const pos: [number, number, number] = [0, 0, 0];
 						pos[axis] = facePos;
 						pos[u] = isUMax ? base[u] + S : base[u];
 						pos[v] = isVMax ? base[v] + S : base[v];
 
-						if (isUMax && bevelU) pos[u] -= b;
-						if (!isUMax && bevelU) pos[u] += b;
-						if (isVMax && bevelV) pos[v] -= b;
-						if (!isVMax && bevelV) pos[v] += b;
+						if (isUMax && uMaxB) pos[u] -= b;
+						if (!isUMax && uMinB) pos[u] += b;
+						if (isVMax && vMaxB) pos[v] -= b;
+						if (!isVMax && vMinB) pos[v] += b;
 
 						corners.push(pos);
 					}
@@ -432,6 +416,65 @@ export function bevelMesh(
 						);
 					}
 					faceAO[f] = ao;
+
+					for (let c = 0; c < 4; c++) {
+						const isUMax = c === 1 || c === 2;
+						const isVMax = c === 2 || c === 3;
+						const uDir = isUMax ? 1 : -1;
+						const vDir = isVMax ? 1 : -1;
+						const uFace = faceIndex(u, uDir);
+						const vFace = faceIndex(v, vDir);
+
+						if (edgeBev[f][uFace] || edgeBev[f][vFace]) continue;
+						if (exposed[uFace] || exposed[vFace]) continue;
+
+						const uOffset: [number, number, number] = [0, 0, 0];
+						uOffset[u] = uDir;
+						const vOffset: [number, number, number] = [0, 0, 0];
+						vOffset[v] = vDir;
+
+						if (
+							!isEdgeBeveledAt(
+								lx + uOffset[0],
+								ly + uOffset[1],
+								lz + uOffset[2],
+								f,
+								vFace,
+							) ||
+							!isEdgeBeveledAt(
+								lx + vOffset[0],
+								ly + vOffset[1],
+								lz + vOffset[2],
+								f,
+								uFace,
+							)
+						) {
+							continue;
+						}
+
+						const cornerPos: [number, number, number] = [0, 0, 0];
+						cornerPos[axis] = facePos;
+						cornerPos[u] = isUMax ? base[u] + S : base[u];
+						cornerPos[v] = isVMax ? base[v] + S : base[v];
+
+						const shoulderAlongU: [number, number, number] = [...cornerPos];
+						const shoulderAlongV: [number, number, number] = [...cornerPos];
+						shoulderAlongU[u] += isUMax ? -b : b;
+						shoulderAlongV[v] += isVMax ? -b : b;
+
+						const foldPoint: [number, number, number] = [...cornerPos];
+						foldPoint[axis] -= dir * b;
+
+						faceFolds[f] = {
+							corner: c,
+							shoulderToPrev:
+								c === 0 || c === 2 ? shoulderAlongV : shoulderAlongU,
+							shoulderToNext:
+								c === 0 || c === 2 ? shoulderAlongU : shoulderAlongV,
+							foldPoint,
+						};
+						break;
+					}
 				}
 
 				// --- Emit face quads ---
@@ -453,17 +496,20 @@ export function bevelMesh(
 					const aoF1 = AO_CURVE[ao[1]];
 					const aoF2 = AO_CURVE[ao[2]];
 					const aoF3 = AO_CURVE[ao[3]];
+					const aoFloats = [aoF0, aoF1, aoF2, aoF3];
 
 					// World-aligned UVs from vertex positions
+					const projectUv = (
+						p: readonly [number, number, number],
+					): [number, number] =>
+						axis === 0
+							? [p[v] / uvDenom, p[u] / uvDenom]
+							: [p[u] / uvDenom, p[v] / uvDenom];
 					const uvs: [number, number][] = [];
 					for (let c = 0; c < 4; c++) {
 						const p = corners[c];
 						if (p === undefined) continue;
-						if (axis === 0) {
-							uvs.push([p[v] / uvDenom, p[u] / uvDenom]);
-						} else {
-							uvs.push([p[u] / uvDenom, p[v] / uvDenom]);
-						}
+						uvs.push(projectUv(p));
 					}
 
 					const flipDiag = ao[0] + ao[2] > ao[1] + ao[3];
@@ -478,6 +524,112 @@ export function bevelMesh(
 					const u3 = uvs[3];
 					if (!c0 || !c1 || !c2 || !c3 || !u0 || !u1 || !u2 || !u3)
 						continue;
+
+					const faceFold = faceFolds[f];
+					if (faceFold) {
+						const prevCorner = (faceFold.corner + 3) & 3;
+						const nextCorner = (faceFold.corner + 1) & 3;
+						const insetT = Math.max(0, Math.min(1, b / S));
+						const shoulderPrevAo =
+							aoFloats[faceFold.corner] * (1 - insetT) +
+							aoFloats[prevCorner] * insetT;
+						const shoulderNextAo =
+							aoFloats[faceFold.corner] * (1 - insetT) +
+							aoFloats[nextCorner] * insetT;
+
+						const polyPositions: [number, number, number][] = [];
+						const polyUvs: [number, number][] = [];
+						const polyAo: number[] = [];
+						for (let c = 0; c < 4; c++) {
+							if (c === faceFold.corner) {
+								polyPositions.push(faceFold.shoulderToPrev);
+								polyUvs.push(projectUv(faceFold.shoulderToPrev));
+								polyAo.push(shoulderPrevAo);
+
+								polyPositions.push(faceFold.shoulderToNext);
+								polyUvs.push(projectUv(faceFold.shoulderToNext));
+								polyAo.push(shoulderNextAo);
+								continue;
+							}
+
+							const p = corners[c];
+							const uv = uvs[c];
+							const aoValue = aoFloats[c];
+							if (!p || !uv || aoValue === undefined) continue;
+							polyPositions.push(p);
+							polyUvs.push(uv);
+							polyAo.push(aoValue);
+						}
+
+						for (let i = 1; i < polyPositions.length - 1; i++) {
+							const pA = polyPositions[0];
+							const pB = polyPositions[i];
+							const pC = polyPositions[i + 1];
+							const uvA = polyUvs[0];
+							const uvB = polyUvs[i];
+							const uvC = polyUvs[i + 1];
+							const aoA = polyAo[0];
+							const aoB = polyAo[i];
+							const aoC = polyAo[i + 1];
+							if (
+								!pA ||
+								!pB ||
+								!pC ||
+								!uvA ||
+								!uvB ||
+								!uvC ||
+								aoA === undefined ||
+								aoB === undefined ||
+								aoC === undefined
+							) {
+								continue;
+							}
+							writeTriangle(
+								pA,
+								pB,
+								pC,
+								normal,
+								uvA,
+								uvB,
+								uvC,
+								aoA,
+								aoB,
+								aoC,
+								blockId,
+							);
+						}
+
+						const foldU = faceFold.corner === 1 || faceFold.corner === 2 ? 1 : -1;
+						const foldV = faceFold.corner === 2 || faceFold.corner === 3 ? 1 : -1;
+						const foldVec: [number, number, number] = [0, 0, 0];
+						foldVec[axis] = dir;
+						foldVec[u] = foldU;
+						foldVec[v] = foldV;
+						const foldLen = Math.sqrt(
+							foldVec[0] * foldVec[0] +
+							foldVec[1] * foldVec[1] +
+							foldVec[2] * foldVec[2],
+						);
+						const foldNormal: [number, number, number] = [
+							foldVec[0] / foldLen,
+							foldVec[1] / foldLen,
+							foldVec[2] / foldLen,
+						];
+						writeTriangle(
+							faceFold.shoulderToPrev,
+							faceFold.shoulderToNext,
+							faceFold.foldPoint,
+							foldNormal,
+							projectUv(faceFold.shoulderToPrev),
+							projectUv(faceFold.shoulderToNext),
+							projectUv(faceFold.foldPoint),
+							shoulderPrevAo,
+							shoulderNextAo,
+							aoFloats[faceFold.corner],
+							blockId,
+						);
+						continue;
+					}
 
 					if (positive) {
 						if (flipDiag) {
@@ -606,42 +758,6 @@ export function bevelMesh(
 							? [vBH[pV] / uvDenom, vBH[pU] / uvDenom]
 							: [vBH[pU] / uvDenom, vBH[pV] / uvDenom];
 
-					const lowCollapsed = samePos(vAL, vBL);
-					const highCollapsed = samePos(vAH, vBH);
-					if (lowCollapsed && highCollapsed) continue;
-					if (lowCollapsed) {
-						writeTriangle(
-							vAL,
-							vAH,
-							vBH,
-							normal,
-							uvAL,
-							uvAH,
-							uvBH,
-							aoAL,
-							aoAH,
-							aoBH,
-							blockId,
-						);
-						continue;
-					}
-					if (highCollapsed) {
-						writeTriangle(
-							vAL,
-							vBL,
-							vAH,
-							normal,
-							uvAL,
-							uvBL,
-							uvAH,
-							aoAL,
-							aoBL,
-							aoAH,
-							blockId,
-						);
-						continue;
-					}
-
 					// Winding check: cross(aHigh-aLow, bLow-aLow) · normal
 					const e1x = vAH[0] - vAL[0];
 					const e1y = vAH[1] - vAL[1];
@@ -685,10 +801,12 @@ export function bevelMesh(
 						continue;
 
 					// All 3 edges meeting at this corner must be beveled
-					const capAB = edgeEndpointBeveled(fA, fB, faceDir(fC) > 0);
-					const capAC = edgeEndpointBeveled(fA, fC, faceDir(fB) > 0);
-					const capBC = edgeEndpointBeveled(fB, fC, faceDir(fA) > 0);
-					if (!capAB || !capAC || !capBC) continue;
+					if (
+						!edgeBev[fA][fB] ||
+						!edgeBev[fA][fC] ||
+						!edgeBev[fB][fC]
+					)
+						continue;
 
 					const cornersA = faceCorners[fA];
 					const cornersB = faceCorners[fB];

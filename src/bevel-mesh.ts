@@ -198,10 +198,59 @@ export function bevelMesh(
 		vOffset++;
 	}
 
+	function samePos(
+		a: readonly [number, number, number],
+		b: readonly [number, number, number],
+	): boolean {
+		return (
+			Math.abs(a[0] - b[0]) < 1e-6 &&
+			Math.abs(a[1] - b[1]) < 1e-6 &&
+			Math.abs(a[2] - b[2]) < 1e-6
+		);
+	}
+
+	function writeTriangle(
+		p0: readonly [number, number, number],
+		p1: readonly [number, number, number],
+		p2: readonly [number, number, number],
+		normal: readonly [number, number, number],
+		uv0: readonly [number, number],
+		uv1: readonly [number, number],
+		uv2: readonly [number, number],
+		ao0: number,
+		ao1: number,
+		ao2: number,
+		texLayer: number,
+	): void {
+		const e1x = p1[0] - p0[0];
+		const e1y = p1[1] - p0[1];
+		const e1z = p1[2] - p0[2];
+		const e2x = p2[0] - p0[0];
+		const e2y = p2[1] - p0[1];
+		const e2z = p2[2] - p0[2];
+		const cx = e1y * e2z - e1z * e2y;
+		const cy = e1z * e2x - e1x * e2z;
+		const cz = e1x * e2y - e1y * e2x;
+		const dot = cx * normal[0] + cy * normal[1] + cz * normal[2];
+
+		if (dot > 0) {
+			writeVertex(p0, normal, uv0, ao0, texLayer);
+			writeVertex(p1, normal, uv1, ao1, texLayer);
+			writeVertex(p2, normal, uv2, ao2, texLayer);
+		} else {
+			writeVertex(p0, normal, uv0, ao0, texLayer);
+			writeVertex(p2, normal, uv2, ao2, texLayer);
+			writeVertex(p1, normal, uv1, ao1, texLayer);
+		}
+	}
+
 	// Reusable arrays to reduce allocations
 	const exposed: boolean[] = [false, false, false, false, false, false];
 	const edgeBev: boolean[][] = Array.from({ length: 6 }, () =>
 		Array.from({ length: 6 }, () => false),
+	);
+	const edgeEndBev: boolean[][][] = Array.from({ length: 6 }, () =>
+		Array.from({ length: 6 }, () => [false, false]),
 	);
 	const aoSigns: [number, number][] = [
 		[-1, -1],
@@ -240,6 +289,8 @@ export function bevelMesh(
 				for (let ei = 0; ei < 6; ei++) {
 					for (let ej = 0; ej < 6; ej++) {
 						edgeBev[ei][ej] = false;
+						edgeEndBev[ei][ej][0] = false;
+						edgeEndBev[ei][ej][1] = false;
 					}
 				}
 				for (const pair of EDGE_PAIRS) {
@@ -257,7 +308,34 @@ export function bevelMesh(
 						);
 						edgeBev[fA][fB] = diagAir;
 						edgeBev[fB][fA] = diagAir;
+
+						if (diagAir) {
+							const edgeAx = 3 - faceAxis(fA) - faceAxis(fB);
+							for (const endDir of [-1, 1] as const) {
+								const fC = faceIndex(edgeAx, endDir);
+								const dC = FACE_DIRS[fC];
+								if (dC === undefined) continue;
+								const cornerAir =
+									exposed[fC] &&
+									!isSolidFast(
+										lx + dA[0] + dB[0] + dC[0],
+										ly + dA[1] + dB[1] + dC[1],
+										lz + dA[2] + dB[2] + dC[2],
+									);
+								const endIndex = endDir > 0 ? 1 : 0;
+								edgeEndBev[fA][fB][endIndex] = cornerAir;
+								edgeEndBev[fB][fA][endIndex] = cornerAir;
+							}
+						}
 					}
+				}
+
+				function edgeEndpointBeveled(
+					fA: number,
+					fB: number,
+					positiveEnd: boolean,
+				): boolean {
+					return edgeEndBev[fA][fB][positiveEnd ? 1 : 0] ?? false;
 				}
 
 				// --- Compute inset face corners and AO ---
@@ -293,26 +371,31 @@ export function bevelMesh(
 					const vMinF = faceIndex(v, -1);
 					const vMaxF = faceIndex(v, 1);
 
-					const uMinB = edgeBev[f][uMinF];
-					const uMaxB = edgeBev[f][uMaxF];
-					const vMinB = edgeBev[f][vMinF];
-					const vMaxB = edgeBev[f][vMaxF];
-
 					// v0(u-min,v-min) v1(u-max,v-min) v2(u-max,v-max) v3(u-min,v-max)
 					const corners: [number, number, number][] = [];
 					for (let c = 0; c < 4; c++) {
 						const isUMax = c === 1 || c === 2;
 						const isVMax = c === 2 || c === 3;
+						const bevelU = edgeEndpointBeveled(
+							f,
+							isUMax ? uMaxF : uMinF,
+							isVMax,
+						);
+						const bevelV = edgeEndpointBeveled(
+							f,
+							isVMax ? vMaxF : vMinF,
+							isUMax,
+						);
 
 						const pos: [number, number, number] = [0, 0, 0];
 						pos[axis] = facePos;
 						pos[u] = isUMax ? base[u] + S : base[u];
 						pos[v] = isVMax ? base[v] + S : base[v];
 
-						if (isUMax && uMaxB) pos[u] -= b;
-						if (!isUMax && uMinB) pos[u] += b;
-						if (isVMax && vMaxB) pos[v] -= b;
-						if (!isVMax && vMinB) pos[v] += b;
+						if (isUMax && bevelU) pos[u] -= b;
+						if (!isUMax && bevelU) pos[u] += b;
+						if (isVMax && bevelV) pos[v] -= b;
+						if (!isVMax && bevelV) pos[v] += b;
 
 						corners.push(pos);
 					}
@@ -523,6 +606,42 @@ export function bevelMesh(
 							? [vBH[pV] / uvDenom, vBH[pU] / uvDenom]
 							: [vBH[pU] / uvDenom, vBH[pV] / uvDenom];
 
+					const lowCollapsed = samePos(vAL, vBL);
+					const highCollapsed = samePos(vAH, vBH);
+					if (lowCollapsed && highCollapsed) continue;
+					if (lowCollapsed) {
+						writeTriangle(
+							vAL,
+							vAH,
+							vBH,
+							normal,
+							uvAL,
+							uvAH,
+							uvBH,
+							aoAL,
+							aoAH,
+							aoBH,
+							blockId,
+						);
+						continue;
+					}
+					if (highCollapsed) {
+						writeTriangle(
+							vAL,
+							vBL,
+							vAH,
+							normal,
+							uvAL,
+							uvBL,
+							uvAH,
+							aoAL,
+							aoBL,
+							aoAH,
+							blockId,
+						);
+						continue;
+					}
+
 					// Winding check: cross(aHigh-aLow, bLow-aLow) · normal
 					const e1x = vAH[0] - vAL[0];
 					const e1y = vAH[1] - vAL[1];
@@ -566,12 +685,10 @@ export function bevelMesh(
 						continue;
 
 					// All 3 edges meeting at this corner must be beveled
-					if (
-						!edgeBev[fA][fB] ||
-						!edgeBev[fA][fC] ||
-						!edgeBev[fB][fC]
-					)
-						continue;
+					const capAB = edgeEndpointBeveled(fA, fB, faceDir(fC) > 0);
+					const capAC = edgeEndpointBeveled(fA, fC, faceDir(fB) > 0);
+					const capBC = edgeEndpointBeveled(fB, fC, faceDir(fA) > 0);
+					if (!capAB || !capAC || !capBC) continue;
 
 					const cornersA = faceCorners[fA];
 					const cornersB = faceCorners[fB];

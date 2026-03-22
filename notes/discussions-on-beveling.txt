@@ -1,0 +1,207 @@
+ This is mostly just an expirement, but I was wondering what it might take to bevel our cubes. And to make them connect in a smart way, obviously we could update the mesh to be beveled, but we would want
+things to connect such that two cubes next to each other would blend into one solid beveled cube.
+
+● Interesting experiment. Let me think through what this actually requires.
+
+  The core problem
+
+  Right now every block is a perfect cube, and the greedy mesher merges coplanar same-type faces into big quads. Beveling breaks that in a fundamental way: the geometry at each block's edge depends on whether
+  its neighbor is solid or air. Two blocks side-by-side should have no bevel on their shared edge, but exposed edges get chamfered.
+
+  What "neighbor-aware beveling" means
+
+  Each block has 12 edges. An edge sits at the intersection of 2 faces. A bevel is needed on that edge only if both faces are exposed (adjacent to air). So for each solid block you'd check:
+
+  - 6 face neighbors — determines which faces are visible (same as now)
+  - 12 edge neighbors — determines which edges get chamfer strips
+  - 8 corner neighbors — determines which corners get triangular caps
+
+  A fully exposed block (floating in air) gets: 6 inset faces + 12 chamfer quads + 8 corner triangles = 26 primitives vs the current 6 faces. A block buried with only its top face exposed and no exposed edges
+  gets: 1 face, 0 bevels — same as now.
+
+  The greedy mesher conflict
+
+  This is the big tension. The greedy mesher works because all faces are flat, coplanar, and identical. Bevels make each block's geometry depend on its local neighborhood, so two adjacent faces can't be
+  naively merged — they might have different bevel profiles on their edges.
+
+  Three approaches, roughly ordered by complexity:
+
+  A) Per-block beveled mesh (no greedy merging)
+  Generate geometry block-by-block. For each solid block, emit inset faces + chamfer strips + corner caps based on neighbor checks. Simple to reason about, but you lose greedy meshing entirely — vertex count
+  explodes. A 32x32x32 chunk surface could go from ~few thousand verts to hundreds of thousands.
+
+  B) Greedy merge flat regions, per-block bevels at edges
+  Greedy mesh the interior of flat regions as normal (inset by bevel amount), then do a separate edge-detection pass that emits bevel geometry only along the boundary between solid and air. The flat parts
+  still merge; only the edge trim is per-block. More complex but preserves most of the greedy mesh benefit.
+
+  C) Marching-cubes-style implicit surface
+  Replace the whole meshing approach with something like surface nets or marching cubes on the voxel grid, with a slight inset that naturally produces rounded edges. Very different architecture — essentially a
+   different engine at that point.
+
+  My recommendation for an experiment
+
+  Approach B is the sweet spot. The changes would be:
+
+  1. Edge detection pass in the mesher — after building the face mask, build an edge mask: iterate all 12 edge directions per block, check the two faces that share each edge
+  2. Inset the greedy quads — shrink each merged quad inward by BEVEL_SIZE on any side that borders air (the mesher already knows face adjacency)
+  3. Emit chamfer strips — for each exposed edge, a quad connecting the two inset faces
+  4. Emit corner caps — small triangle where 3 beveled edges meet
+  5. Normals — chamfer strips get angled normals (average of the two face normals), giving smooth shading on the bevel. Corner cap normals point diagonally.
+
+  The main face vertex format stays the same. Bevel geometry uses the same format but with different normals — the existing AO and lighting would just work.
+
+  Rough scope: ~200-400 lines of new mesher code for the bevel pass, minor shader changes (normals are already per-vertex so smooth shading comes free), no changes to collision/physics (keep using the full
+  cube AABB).
+
+  Want to try it? I'd suggest starting with approach A (per-block, no greedy merge) to validate the look quickly, then optimize to B if you like the result.
+
+  ......Then later.......
+
+  ● The plan is written. Four files touched — one new (bevel-mesh.ts), three modified. The core idea: iterate every solid block, check 6 face neighbors + 12 edge-diagonal neighbors + 8 corner-diagonal neighbors,
+   emit inset faces + chamfer quads + corner triangles accordingly. Same vertex format, so no pipeline changes.
+
+● User approved Claude's plan
+  ⎿  Plan saved to: ~\.claude\plans\cheerful-swinging-stonebraker.md · /plan to edit
+     Plan: Per-Block Beveled Mesh (Approach A)
+
+     Context
+
+     Experiment to see what beveled voxel cubes look like. The key requirement is neighbor-aware beveling: adjacent solid blocks blend into one continuous shape — only edges/corners exposed to air get beveled.
+      This is Approach A (per-block geometry, no greedy merging) to validate the visual quickly.
+
+     Overview
+
+     New src/bevel-mesh.ts that generates per-block geometry with inset faces, edge chamfer quads, and corner cap triangles based on neighbor state. Same vertex format and return type as greedyMesh, so no GPU
+     pipeline changes. Toggle via debug panel.
+
+     ---
+     Step 1: Shader — smooth brightness interpolation
+
+     File: src/shader.ts (lines 41-50)
+
+     Replace the hard if/else brightness thresholds with a weighted average that produces identical results for axis-aligned normals but smooth transitions for bevel normals (45-degree chamfers):
+
+     let a = abs(n);
+     let yBright = select(0.5, 1.0, n.y >= 0.0);
+     brightness = (a.x * 0.6 + a.y * yBright + a.z * 0.8) / max(a.x + a.y + a.z, 0.001);
+
+     Verify: existing greedy mesh should look identical (all normals are axis-aligned).
+
+     Step 2: Debug panel — bevel toggle + size slider
+
+     File: src/debug.ts
+
+     - Add bevelMesh: false and bevelSize: 0.8 to debuggerParams
+     - Add Tweakpane bindings: checkbox for bevel toggle, slider for bevel size (range 0.1–2.0, step 0.1)
+     - Extend BuildDebug signature to accept a remeshAll callback (in addition to existing render)
+     - Both bevel controls call remeshAll() on change
+
+     Step 3: Create src/bevel-mesh.ts
+
+     New file, exports:
+     function bevelMesh(world: World, cx: number, cy: number, cz: number, bevelSize: number): GreedyMeshResult
+
+     3a: Lookup tables
+
+     12 edges — each defined by 2 face directions + the edge-diagonal neighbor offset:
+
+     ┌─────────────┬────────┬────────┬───────────────────┐
+     │    Edge     │ Face A │ Face B │ Diagonal neighbor │
+     ├─────────────┼────────┼────────┼───────────────────┤
+     │ top-front   │ Y+     │ Z+     │ (0,+1,+1)         │
+     ├─────────────┼────────┼────────┼───────────────────┤
+     │ top-back    │ Y+     │ Z-     │ (0,+1,-1)         │
+     ├─────────────┼────────┼────────┼───────────────────┤
+     │ top-right   │ Y+     │ X+     │ (+1,+1,0)         │
+     ├─────────────┼────────┼────────┼───────────────────┤
+     │ top-left    │ Y+     │ X-     │ (-1,+1,0)         │
+     ├─────────────┼────────┼────────┼───────────────────┤
+     │ bot-front   │ Y-     │ Z+     │ (0,-1,+1)         │
+     ├─────────────┼────────┼────────┼───────────────────┤
+     │ bot-back    │ Y-     │ Z-     │ (0,-1,-1)         │
+     ├─────────────┼────────┼────────┼───────────────────┤
+     │ bot-right   │ Y-     │ X+     │ (+1,-1,0)         │
+     ├─────────────┼────────┼────────┼───────────────────┤
+     │ bot-left    │ Y-     │ X-     │ (-1,-1,0)         │
+     ├─────────────┼────────┼────────┼───────────────────┤
+     │ right-front │ X+     │ Z+     │ (+1,0,+1)         │
+     ├─────────────┼────────┼────────┼───────────────────┤
+     │ right-back  │ X+     │ Z-     │ (+1,0,-1)         │
+     ├─────────────┼────────┼────────┼───────────────────┤
+     │ left-front  │ X-     │ Z+     │ (-1,0,+1)         │
+     ├─────────────┼────────┼────────┼───────────────────┤
+     │ left-back   │ X-     │ Z-     │ (-1,0,-1)         │
+     └─────────────┴────────┴────────┴───────────────────┘
+
+     8 corners — each at the intersection of 3 faces, with corner-diagonal at (dx, dy, dz). A corner is beveled when all 3 face neighbors, all 3 edge-diagonals, and the corner-diagonal are air.
+
+     3b: Per-block geometry generation
+
+     For each solid block at world-block coords (bx, by, bz), block size S=10:
+
+     Faces (up to 6): Emit when face neighbor is air. Each face is a quad with corners inset by bevelSize on edges that are beveled. A face corner adjacent to 2 beveled edges moves diagonally inward. The face
+     stays on its original plane.
+
+     Edge chamfers (up to 12): Emit when both adjacent faces are exposed AND edge-diagonal neighbor is air. A chamfer is a quad connecting the inset edges of the two faces. Normal = normalize(faceA_normal +
+     faceB_normal).
+
+     Corner caps (up to 8): Emit when all 3 meeting edges are beveled AND corner-diagonal is air. A single triangle filling the gap where 3 chamfers meet. Normal = normalize(dx, dy, dz).
+
+     3c: AO
+
+     - Face vertices: same computation as greedy mesher — vertexAO(side1, side2, corner) checking 3 neighbors, mapped through AO_CURVE
+     - Edge/corner vertices: inherit AO from the corresponding adjacent face corner (natural continuity, no new math)
+
+     3d: UVs
+
+     World-aligned, same as current mesher: blockPos / textureScale. Single-block quads (width=height=1). Axis 0 swaps U/V. Chamfer/cap UVs project onto the dominant axis plane.
+
+     3e: Winding
+
+     Positive-facing = CCW. For chamfers/caps, compute cross product and verify alignment with intended normal, flip if needed.
+
+     3f: Buffer allocation
+
+     Count solid blocks first, allocate worst-case (132 vertices per solid block × 10 floats), slice to actual size after filling.
+
+     Step 4: Wire up in main.ts
+
+     File: src/main.ts
+
+     - Import bevelMesh from ./bevel-mesh
+     - In meshChunk (line 253), replace direct greedyMesh call:
+     const { vertexData, numVertices } = debuggerParams.bevelMesh
+       ? bevelMesh(world, cx, cy, cz, debuggerParams.bevelSize)
+       : greedyMesh(world, cx, cy, cz);
+     - Add remeshAllChunks() that iterates world.forEachChunk and calls meshChunk for each
+     - Pass remeshAllChunks to BuildDebug
+
+     Step 5: Test and tune
+
+     - Toggle bevel on/off — verify no regressions with greedy mesh
+     - Check winding (no inside-out faces)
+     - Check AO continuity across face → chamfer → cap
+     - Check cross-chunk bevel correctness (blocks on chunk boundary)
+     - Adjust bevel size slider, verify geometry updates
+     - Place/break blocks in bevel mode, verify remeshing works
+     - Wireframe overlay should work without changes (same vertex stride)
+
+     ---
+     Files to modify
+
+     ┌───────────────────┬────────────────────────────────────────────────────────┐
+     │       File        │                         Change                         │
+     ├───────────────────┼────────────────────────────────────────────────────────┤
+     │ src/bevel-mesh.ts │ New — per-block beveled mesher                         │
+     ├───────────────────┼────────────────────────────────────────────────────────┤
+     │ src/shader.ts     │ Smooth brightness interpolation                        │
+     ├───────────────────┼────────────────────────────────────────────────────────┤
+     │ src/debug.ts      │ Bevel toggle + size slider, remesh callback            │
+     ├───────────────────┼────────────────────────────────────────────────────────┤
+     │ src/main.ts       │ Conditional mesher call, remeshAllChunks, debug wiring │
+     └───────────────────┴────────────────────────────────────────────────────────┘
+
+     Performance note
+
+     Approach A trades vertex count for simplicity. Expect ~10-50x more vertices than greedy mesh. This is fine for validating the look. If we like the result, Approach B (greedy merge flat regions + per-block
+      bevels at edges only) would recover most of the performance.

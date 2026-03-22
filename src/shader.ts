@@ -37,17 +37,12 @@ const MainShader = /*wgsl*/ `
 		let texColor = textureSample(myTexture, mySampler, vsOut.uv, vsOut.texLayer);
 
 		// Per-face shading: top brightest, sides medium, bottom darkest
+		// Smooth interpolation supports bevel normals while giving
+		// identical results for axis-aligned normals.
 		let n = vsOut.normal;
-		var brightness: f32;
-		if (n.y > 0.5) {
-			brightness = 1.0;   // top
-		} else if (n.y < -0.5) {
-			brightness = 0.5;   // bottom
-		} else if (abs(n.x) > 0.5) {
-			brightness = 0.6;   // east/west
-		} else {
-			brightness = 0.8;   // north/south
-		}
+		let a = abs(n);
+		let yBright = select(0.5, 1.0, n.y >= 0.0);
+		let brightness = (a.x * 0.6 + a.y * yBright + a.z * 0.8) / max(a.x + a.y + a.z, 0.001);
 
 		// a nice blue vec3f(0.49, 0.55, 0.68)
 		let shadowColor = vec3f(0.1, 0.1, 0.1); // AO shadow tint

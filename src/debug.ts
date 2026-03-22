@@ -8,6 +8,8 @@ document.body.appendChild(stats.dom);
 export const debuggerParams = {
 	wireframe: false,
 	freecam: false,
+	bevelMesh: false,
+	bevelSize: 0.8,
 	vertices: 0,
 	targetBlock: 'none',
 };
@@ -18,13 +20,22 @@ export function refreshDebug(): void {
 	pane?.refresh();
 }
 
-export function BuildDebug(render: () => void): void {
+export function BuildDebug(render: () => void, remeshAll: () => void): void {
 	pane = new Pane({ title: 'Debug' });
 	const wireframeBinding = pane.addBinding(debuggerParams, 'wireframe', {
 		label: 'Wireframe',
 	});
 	pane.addBinding(debuggerParams, 'freecam', {
 		label: 'Freecam',
+	});
+	const bevelBinding = pane.addBinding(debuggerParams, 'bevelMesh', {
+		label: 'Bevel Mesh',
+	});
+	const bevelSizeBinding = pane.addBinding(debuggerParams, 'bevelSize', {
+		label: 'Bevel Size',
+		min: 0.1,
+		max: 2.0,
+		step: 0.1,
 	});
 	pane.addBinding(debuggerParams, 'vertices', {
 		readonly: true,
@@ -40,6 +51,14 @@ export function BuildDebug(render: () => void): void {
 		requestAnimationFrame(() => {
 			render();
 		});
+	});
+	bevelBinding.on('change', () => {
+		remeshAll();
+	});
+	bevelSizeBinding.on('change', () => {
+		if (debuggerParams.bevelMesh) {
+			remeshAll();
+		}
 	});
 }
 

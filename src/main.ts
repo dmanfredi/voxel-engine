@@ -6,6 +6,7 @@ import { initSkybox, drawSkybox, type SkyboxResources } from './skybox';
 import { BuildDebug, refreshDebug, debuggerParams, stats } from './debug';
 import buildChunkBlocks from './block-builder';
 import { greedyMesh } from './greedy-mesh';
+import { bevelMesh } from './bevel-mesh';
 import { FREECAM, physicsTick, createPlayerState } from './movement';
 import { World } from './world';
 import { Chunk, CHUNK_SIZE, chunkKey } from './chunk';
@@ -30,7 +31,7 @@ if (!navigator.gpu) {
 }
 
 const BLOCK_SIZE = 10;
-const CHUNKS = 8;
+const CHUNKS = 1;
 
 const world = new World(BLOCK_SIZE);
 for (let cy = 0; cy < CHUNKS; cy++) {
@@ -250,7 +251,9 @@ async function main(): Promise<void> {
 			old.vertexBuffer.destroy();
 		}
 
-		const { vertexData, numVertices } = greedyMesh(world, cx, cy, cz);
+		const { vertexData, numVertices } = debuggerParams.bevelMesh
+			? bevelMesh(world, cx, cy, cz, debuggerParams.bevelSize)
+			: greedyMesh(world, cx, cy, cz);
 
 		if (numVertices === 0) {
 			chunkRenderMap.delete(key);
@@ -417,7 +420,14 @@ async function main(): Promise<void> {
 		requestAnimationFrame(tick);
 	}
 
-	BuildDebug(render);
+	function remeshAllChunks(): void {
+		world.forEachChunk((chunk) => {
+			meshChunk(chunk.cx, chunk.cy, chunk.cz);
+		});
+		requestRender();
+	}
+
+	BuildDebug(render, remeshAllChunks);
 	function render(): void {
 		stats.begin();
 		renderRequestId = 0;

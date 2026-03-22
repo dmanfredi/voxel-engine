@@ -1,0 +1,667 @@
+import { type BlockId, AIR, blockRegistry } from './block';
+import { CHUNK_SIZE } from './chunk';
+import type { GreedyMeshResult } from './greedy-mesh';
+import type { World } from './world';
+
+type AO = 0 | 1 | 2 | 3;
+
+const AO_CURVE: readonly [number, number, number, number] = [
+	0.2, 0.45, 0.7, 1.0,
+];
+
+const CHUNK_SHIFT = 5;
+const CHUNK_MASK = CHUNK_SIZE - 1;
+const FLOATS_PER_VERTEX = 10;
+const MAX_VERTS_PER_SURFACE_BLOCK = 132; // 6×6 face + 12×6 chamfer + 8×3 corner
+
+// Face directions indexed 0-5: +X, -X, +Y, -Y, +Z, -Z
+const FACE_DIRS: readonly (readonly [number, number, number])[] = [
+	[1, 0, 0],
+	[-1, 0, 0],
+	[0, 1, 0],
+	[0, -1, 0],
+	[0, 0, 1],
+	[0, 0, -1],
+];
+
+function faceAxis(f: number): number {
+	return f >> 1;
+}
+function faceDir(f: number): number {
+	return (f & 1) === 0 ? 1 : -1;
+}
+function faceIndex(axis: number, dir: number): number {
+	return axis * 2 + (dir < 0 ? 1 : 0);
+}
+function cornerIdx(uMax: boolean, vMax: boolean): number {
+	return uMax ? (vMax ? 2 : 1) : vMax ? 3 : 0;
+}
+
+// 12 unique edges as [faceA, faceB] pairs (A < B)
+const EDGE_PAIRS: readonly (readonly [number, number])[] = [
+	[0, 2],
+	[0, 3],
+	[0, 4],
+	[0, 5], // +X with ±Y, ±Z
+	[1, 2],
+	[1, 3],
+	[1, 4],
+	[1, 5], // -X with ±Y, ±Z
+	[2, 4],
+	[2, 5],
+	[3, 4],
+	[3, 5], // ±Y with ±Z
+];
+
+// 8 corners as [faceA, faceB, faceC] — one per octant
+const CORNER_FACES: readonly (readonly [number, number, number])[] = [
+	[0, 2, 4],
+	[0, 2, 5],
+	[0, 3, 4],
+	[0, 3, 5],
+	[1, 2, 4],
+	[1, 2, 5],
+	[1, 3, 4],
+	[1, 3, 5],
+];
+
+function vertexAO(side1: boolean, side2: boolean, corner: boolean): AO {
+	if (side1 && side2) return 0;
+	return (3 - (Number(side1) + Number(side2) + Number(corner))) as AO;
+}
+
+/**
+ * Returns the 2 corner indices of face `fA` that lie on the edge shared
+ * with face `fB`, sorted by position along the edge axis.
+ */
+function getEdgeCorners(fA: number, fB: number): [number, number] {
+	const aA = faceAxis(fA);
+	const aB = faceAxis(fB);
+	const dB = faceDir(fB);
+	const uA = (aA + 1) % 3;
+
+	if (aB === uA) {
+		// Edge runs along vA
+		return dB > 0 ? [1, 2] : [0, 3];
+	}
+	// Edge runs along uA
+	return dB > 0 ? [3, 2] : [0, 1];
+}
+
+/**
+ * Returns the single corner index of `face` that sits at the block corner
+ * defined by the intersection of all three faces.
+ */
+function getCornerVertexIndex(
+	face: number,
+	other1: number,
+	other2: number,
+): number {
+	const a = faceAxis(face);
+	const u = (a + 1) % 3;
+	const a1 = faceAxis(other1);
+	const d1 = faceDir(other1);
+	const d2 = faceDir(other2);
+
+	if (a1 === u) {
+		return cornerIdx(d1 > 0, d2 > 0);
+	}
+	return cornerIdx(d2 > 0, d1 > 0);
+}
+
+export function bevelMesh(
+	world: World,
+	cx: number,
+	cy: number,
+	cz: number,
+	bevelSize: number,
+): GreedyMeshResult {
+	const S = world.blockSize;
+	const b = bevelSize;
+
+	const ox = cx * CHUNK_SIZE;
+	const oy = cy * CHUNK_SIZE;
+	const oz = cz * CHUNK_SIZE;
+
+	const chunk = world.getChunk(cx, cy, cz);
+	if (!chunk) {
+		return { vertexData: new Float32Array(0), numVertices: 0 };
+	}
+	const blocks = chunk.blocks;
+
+	function getBlockFast(lx: number, ly: number, lz: number): BlockId {
+		if (((lx | ly | lz) & ~CHUNK_MASK) === 0) {
+			return (
+				blocks[(ly << (CHUNK_SHIFT * 2)) + (lz << CHUNK_SHIFT) + lx] ??
+				AIR
+			);
+		}
+		return world.getBlock(ox + lx, oy + ly, oz + lz);
+	}
+
+	function isSolidFast(lx: number, ly: number, lz: number): boolean {
+		return blockRegistry.isSolid(getBlockFast(lx, ly, lz));
+	}
+
+	// Count surface blocks for buffer allocation
+	let surfaceCount = 0;
+	for (let ly = 0; ly < CHUNK_SIZE; ly++) {
+		for (let lz = 0; lz < CHUNK_SIZE; lz++) {
+			for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+				const id =
+					blocks[
+						(ly << (CHUNK_SHIFT * 2)) + (lz << CHUNK_SHIFT) + lx
+					];
+				if (id === undefined || id === AIR) continue;
+				if (
+					!isSolidFast(lx + 1, ly, lz) ||
+					!isSolidFast(lx - 1, ly, lz) ||
+					!isSolidFast(lx, ly + 1, lz) ||
+					!isSolidFast(lx, ly - 1, lz) ||
+					!isSolidFast(lx, ly, lz + 1) ||
+					!isSolidFast(lx, ly, lz - 1)
+				) {
+					surfaceCount++;
+				}
+			}
+		}
+	}
+
+	if (surfaceCount === 0) {
+		return { vertexData: new Float32Array(0), numVertices: 0 };
+	}
+
+	const vertexData = new Float32Array(
+		surfaceCount * MAX_VERTS_PER_SURFACE_BLOCK * FLOATS_PER_VERTEX,
+	);
+	const uint32View = new Uint32Array(vertexData.buffer);
+	let vOffset = 0;
+
+	function writeVertex(
+		pos: readonly [number, number, number],
+		normal: readonly [number, number, number],
+		uv: readonly [number, number],
+		ao: number,
+		texLayer: number,
+	): void {
+		const i = vOffset * FLOATS_PER_VERTEX;
+		vertexData[i] = pos[0];
+		vertexData[i + 1] = pos[1];
+		vertexData[i + 2] = pos[2];
+		vertexData[i + 3] = normal[0];
+		vertexData[i + 4] = normal[1];
+		vertexData[i + 5] = normal[2];
+		vertexData[i + 6] = uv[0];
+		vertexData[i + 7] = uv[1];
+		vertexData[i + 8] = ao;
+		uint32View[i + 9] = texLayer;
+		vOffset++;
+	}
+
+	// Reusable arrays to reduce allocations
+	const exposed: boolean[] = [false, false, false, false, false, false];
+	const edgeBev: boolean[][] = Array.from({ length: 6 }, () =>
+		Array.from({ length: 6 }, () => false),
+	);
+	const aoSigns: [number, number][] = [
+		[-1, -1],
+		[1, -1],
+		[1, 1],
+		[-1, 1],
+	];
+
+	for (let ly = 0; ly < CHUNK_SIZE; ly++) {
+		for (let lz = 0; lz < CHUNK_SIZE; lz++) {
+			for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+				const blockId = getBlockFast(lx, ly, lz);
+				if (blockId === AIR) continue;
+
+				const local: [number, number, number] = [lx, ly, lz];
+				const base: [number, number, number] = [
+					(ox + lx) * S,
+					(oy + ly) * S,
+					(oz + lz) * S,
+				];
+
+				const texScale = blockRegistry.get(blockId)?.textureScale ?? 1;
+				const uvDenom = S * texScale;
+
+				// --- Check face exposure ---
+				let anyExposed = false;
+				for (let f = 0; f < 6; f++) {
+					const d = FACE_DIRS[f];
+					if (d === undefined) continue;
+					exposed[f] = !isSolidFast(lx + d[0], ly + d[1], lz + d[2]);
+					if (exposed[f]) anyExposed = true;
+				}
+				if (!anyExposed) continue;
+
+				// --- Check edge bevels ---
+				for (let ei = 0; ei < 6; ei++) {
+					for (let ej = 0; ej < 6; ej++) {
+						edgeBev[ei][ej] = false;
+					}
+				}
+				for (const pair of EDGE_PAIRS) {
+					const fA = pair[0];
+					const fB = pair[1];
+					if (fA === undefined || fB === undefined) continue;
+					if (exposed[fA] && exposed[fB]) {
+						const dA = FACE_DIRS[fA];
+						const dB = FACE_DIRS[fB];
+						if (dA === undefined || dB === undefined) continue;
+						const diagAir = !isSolidFast(
+							lx + dA[0] + dB[0],
+							ly + dA[1] + dB[1],
+							lz + dA[2] + dB[2],
+						);
+						edgeBev[fA][fB] = diagAir;
+						edgeBev[fB][fA] = diagAir;
+					}
+				}
+
+				// --- Compute inset face corners and AO ---
+				const faceCorners: ([number, number, number][] | null)[] = [
+					null,
+					null,
+					null,
+					null,
+					null,
+					null,
+				];
+				const faceAO: ([AO, AO, AO, AO] | null)[] = [
+					null,
+					null,
+					null,
+					null,
+					null,
+					null,
+				];
+
+				for (let f = 0; f < 6; f++) {
+					if (!exposed[f]) continue;
+
+					const axis = faceAxis(f);
+					const dir = faceDir(f);
+					const u = (axis + 1) % 3;
+					const v = (axis + 2) % 3;
+
+					const facePos = dir > 0 ? base[axis] + S : base[axis];
+
+					const uMinF = faceIndex(u, -1);
+					const uMaxF = faceIndex(u, 1);
+					const vMinF = faceIndex(v, -1);
+					const vMaxF = faceIndex(v, 1);
+
+					const uMinB = edgeBev[f][uMinF];
+					const uMaxB = edgeBev[f][uMaxF];
+					const vMinB = edgeBev[f][vMinF];
+					const vMaxB = edgeBev[f][vMaxF];
+
+					// v0(u-min,v-min) v1(u-max,v-min) v2(u-max,v-max) v3(u-min,v-max)
+					const corners: [number, number, number][] = [];
+					for (let c = 0; c < 4; c++) {
+						const isUMax = c === 1 || c === 2;
+						const isVMax = c === 2 || c === 3;
+
+						const pos: [number, number, number] = [0, 0, 0];
+						pos[axis] = facePos;
+						pos[u] = isUMax ? base[u] + S : base[u];
+						pos[v] = isVMax ? base[v] + S : base[v];
+
+						if (isUMax && uMaxB) pos[u] -= b;
+						if (!isUMax && uMinB) pos[u] += b;
+						if (isVMax && vMaxB) pos[v] -= b;
+						if (!isVMax && vMinB) pos[v] += b;
+
+						corners.push(pos);
+					}
+					faceCorners[f] = corners;
+
+					// AO: same as greedy mesher
+					const airD = local[axis] + dir;
+					const ao: [AO, AO, AO, AO] = [0, 0, 0, 0];
+					for (let c = 0; c < 4; c++) {
+						const signs = aoSigns[c];
+						if (signs === undefined) continue;
+						const su = signs[0];
+						const sv = signs[1];
+
+						const s1: [number, number, number] = [0, 0, 0];
+						s1[axis] = airD;
+						s1[u] = local[u] + su;
+						s1[v] = local[v];
+
+						const s2: [number, number, number] = [0, 0, 0];
+						s2[axis] = airD;
+						s2[u] = local[u];
+						s2[v] = local[v] + sv;
+
+						const cr: [number, number, number] = [0, 0, 0];
+						cr[axis] = airD;
+						cr[u] = local[u] + su;
+						cr[v] = local[v] + sv;
+
+						ao[c] = vertexAO(
+							isSolidFast(s1[0], s1[1], s1[2]),
+							isSolidFast(s2[0], s2[1], s2[2]),
+							isSolidFast(cr[0], cr[1], cr[2]),
+						);
+					}
+					faceAO[f] = ao;
+				}
+
+				// --- Emit face quads ---
+				for (let f = 0; f < 6; f++) {
+					const corners = faceCorners[f];
+					const ao = faceAO[f];
+					if (!corners || !ao) continue;
+
+					const axis = faceAxis(f);
+					const dir = faceDir(f);
+					const u = (axis + 1) % 3;
+					const v = (axis + 2) % 3;
+					const positive = dir > 0;
+
+					const normal: [number, number, number] = [0, 0, 0];
+					normal[axis] = dir;
+
+					const aoF0 = AO_CURVE[ao[0]];
+					const aoF1 = AO_CURVE[ao[1]];
+					const aoF2 = AO_CURVE[ao[2]];
+					const aoF3 = AO_CURVE[ao[3]];
+
+					// World-aligned UVs from vertex positions
+					const uvs: [number, number][] = [];
+					for (let c = 0; c < 4; c++) {
+						const p = corners[c];
+						if (p === undefined) continue;
+						if (axis === 0) {
+							uvs.push([p[v] / uvDenom, p[u] / uvDenom]);
+						} else {
+							uvs.push([p[u] / uvDenom, p[v] / uvDenom]);
+						}
+					}
+
+					const flipDiag = ao[0] + ao[2] > ao[1] + ao[3];
+
+					const c0 = corners[0];
+					const c1 = corners[1];
+					const c2 = corners[2];
+					const c3 = corners[3];
+					const u0 = uvs[0];
+					const u1 = uvs[1];
+					const u2 = uvs[2];
+					const u3 = uvs[3];
+					if (!c0 || !c1 || !c2 || !c3 || !u0 || !u1 || !u2 || !u3)
+						continue;
+
+					if (positive) {
+						if (flipDiag) {
+							writeVertex(c0, normal, u0, aoF0, blockId);
+							writeVertex(c1, normal, u1, aoF1, blockId);
+							writeVertex(c3, normal, u3, aoF3, blockId);
+							writeVertex(c1, normal, u1, aoF1, blockId);
+							writeVertex(c2, normal, u2, aoF2, blockId);
+							writeVertex(c3, normal, u3, aoF3, blockId);
+						} else {
+							writeVertex(c0, normal, u0, aoF0, blockId);
+							writeVertex(c1, normal, u1, aoF1, blockId);
+							writeVertex(c2, normal, u2, aoF2, blockId);
+							writeVertex(c0, normal, u0, aoF0, blockId);
+							writeVertex(c2, normal, u2, aoF2, blockId);
+							writeVertex(c3, normal, u3, aoF3, blockId);
+						}
+					} else {
+						if (flipDiag) {
+							writeVertex(c0, normal, u0, aoF0, blockId);
+							writeVertex(c3, normal, u3, aoF3, blockId);
+							writeVertex(c1, normal, u1, aoF1, blockId);
+							writeVertex(c1, normal, u1, aoF1, blockId);
+							writeVertex(c3, normal, u3, aoF3, blockId);
+							writeVertex(c2, normal, u2, aoF2, blockId);
+						} else {
+							writeVertex(c0, normal, u0, aoF0, blockId);
+							writeVertex(c2, normal, u2, aoF2, blockId);
+							writeVertex(c1, normal, u1, aoF1, blockId);
+							writeVertex(c0, normal, u0, aoF0, blockId);
+							writeVertex(c3, normal, u3, aoF3, blockId);
+							writeVertex(c2, normal, u2, aoF2, blockId);
+						}
+					}
+				}
+
+				// --- Emit edge chamfer quads ---
+				for (const pair of EDGE_PAIRS) {
+					const fA = pair[0];
+					const fB = pair[1];
+					if (fA === undefined || fB === undefined) continue;
+					if (!edgeBev[fA][fB]) continue;
+
+					const cornersA = faceCorners[fA];
+					const cornersB = faceCorners[fB];
+					const aoA = faceAO[fA];
+					const aoB = faceAO[fB];
+					if (!cornersA || !cornersB || !aoA || !aoB) continue;
+
+					const [cA0, cA1] = getEdgeCorners(fA, fB);
+					const [cB0, cB1] = getEdgeCorners(fB, fA);
+
+					const axisA = faceAxis(fA);
+					const axisB = faceAxis(fB);
+					const edgeAx = 3 - axisA - axisB;
+
+					// Sort corners by position along edge axis
+					const pA0 = cornersA[cA0];
+					const pA1 = cornersA[cA1];
+					const pB0 = cornersB[cB0];
+					const pB1 = cornersB[cB1];
+					if (!pA0 || !pA1 || !pB0 || !pB1) continue;
+
+					let aLow: number, aHigh: number;
+					if (pA0[edgeAx] <= pA1[edgeAx]) {
+						aLow = cA0;
+						aHigh = cA1;
+					} else {
+						aLow = cA1;
+						aHigh = cA0;
+					}
+
+					let bLow: number, bHigh: number;
+					if (pB0[edgeAx] <= pB1[edgeAx]) {
+						bLow = cB0;
+						bHigh = cB1;
+					} else {
+						bLow = cB1;
+						bHigh = cB0;
+					}
+
+					const vAL = cornersA[aLow];
+					const vAH = cornersA[aHigh];
+					const vBL = cornersB[bLow];
+					const vBH = cornersB[bHigh];
+					if (!vAL || !vAH || !vBL || !vBH) continue;
+
+					// Chamfer normal
+					const dA = FACE_DIRS[fA];
+					const dB = FACE_DIRS[fB];
+					if (!dA || !dB) continue;
+					const nx = dA[0] + dB[0];
+					const ny = dA[1] + dB[1];
+					const nz = dA[2] + dB[2];
+					const nLen = Math.sqrt(nx * nx + ny * ny + nz * nz);
+					const normal: [number, number, number] = [
+						nx / nLen,
+						ny / nLen,
+						nz / nLen,
+					];
+
+					// AO: inherit from face corners
+					const aoAL = AO_CURVE[aoA[aLow]];
+					const aoAH = AO_CURVE[aoA[aHigh]];
+					const aoBL = AO_CURVE[aoB[bLow]];
+					const aoBH = AO_CURVE[aoB[bHigh]];
+
+					// UVs: project through face A's axis
+					const projAxis = axisA;
+					const pU = (projAxis + 1) % 3;
+					const pV = (projAxis + 2) % 3;
+					const uvAL: [number, number] =
+						projAxis === 0
+							? [vAL[pV] / uvDenom, vAL[pU] / uvDenom]
+							: [vAL[pU] / uvDenom, vAL[pV] / uvDenom];
+					const uvAH: [number, number] =
+						projAxis === 0
+							? [vAH[pV] / uvDenom, vAH[pU] / uvDenom]
+							: [vAH[pU] / uvDenom, vAH[pV] / uvDenom];
+					const uvBL: [number, number] =
+						projAxis === 0
+							? [vBL[pV] / uvDenom, vBL[pU] / uvDenom]
+							: [vBL[pU] / uvDenom, vBL[pV] / uvDenom];
+					const uvBH: [number, number] =
+						projAxis === 0
+							? [vBH[pV] / uvDenom, vBH[pU] / uvDenom]
+							: [vBH[pU] / uvDenom, vBH[pV] / uvDenom];
+
+					// Winding check: cross(aHigh-aLow, bLow-aLow) · normal
+					const e1x = vAH[0] - vAL[0];
+					const e1y = vAH[1] - vAL[1];
+					const e1z = vAH[2] - vAL[2];
+					const e2x = vBL[0] - vAL[0];
+					const e2y = vBL[1] - vAL[1];
+					const e2z = vBL[2] - vAL[2];
+					const cx = e1y * e2z - e1z * e2y;
+					const cy = e1z * e2x - e1x * e2z;
+					const cz = e1x * e2y - e1y * e2x;
+					const dot =
+						cx * normal[0] + cy * normal[1] + cz * normal[2];
+
+					if (dot > 0) {
+						writeVertex(vAL, normal, uvAL, aoAL, blockId);
+						writeVertex(vAH, normal, uvAH, aoAH, blockId);
+						writeVertex(vBH, normal, uvBH, aoBH, blockId);
+						writeVertex(vAL, normal, uvAL, aoAL, blockId);
+						writeVertex(vBH, normal, uvBH, aoBH, blockId);
+						writeVertex(vBL, normal, uvBL, aoBL, blockId);
+					} else {
+						writeVertex(vAL, normal, uvAL, aoAL, blockId);
+						writeVertex(vBL, normal, uvBL, aoBL, blockId);
+						writeVertex(vBH, normal, uvBH, aoBH, blockId);
+						writeVertex(vAL, normal, uvAL, aoAL, blockId);
+						writeVertex(vBH, normal, uvBH, aoBH, blockId);
+						writeVertex(vAH, normal, uvAH, aoAH, blockId);
+					}
+				}
+
+				// --- Emit corner cap triangles ---
+				for (const triple of CORNER_FACES) {
+					const fA = triple[0];
+					const fB = triple[1];
+					const fC = triple[2];
+					if (
+						fA === undefined ||
+						fB === undefined ||
+						fC === undefined
+					)
+						continue;
+
+					// All 3 edges meeting at this corner must be beveled
+					if (
+						!edgeBev[fA][fB] ||
+						!edgeBev[fA][fC] ||
+						!edgeBev[fB][fC]
+					)
+						continue;
+
+					const cornersA = faceCorners[fA];
+					const cornersB = faceCorners[fB];
+					const cornersC = faceCorners[fC];
+					const aoA = faceAO[fA];
+					const aoB = faceAO[fB];
+					const aoC = faceAO[fC];
+					if (
+						!cornersA ||
+						!cornersB ||
+						!cornersC ||
+						!aoA ||
+						!aoB ||
+						!aoC
+					)
+						continue;
+
+					const ciA = getCornerVertexIndex(fA, fB, fC);
+					const ciB = getCornerVertexIndex(fB, fA, fC);
+					const ciC = getCornerVertexIndex(fC, fA, fB);
+
+					const pA = cornersA[ciA];
+					const pB = cornersB[ciB];
+					const pC = cornersC[ciC];
+					if (!pA || !pB || !pC) continue;
+
+					const dA = FACE_DIRS[fA];
+					const dB = FACE_DIRS[fB];
+					const dC = FACE_DIRS[fC];
+					if (!dA || !dB || !dC) continue;
+					const cnx = dA[0] + dB[0] + dC[0];
+					const cny = dA[1] + dB[1] + dC[1];
+					const cnz = dA[2] + dB[2] + dC[2];
+					const cnLen = Math.sqrt(cnx * cnx + cny * cny + cnz * cnz);
+					const normal: [number, number, number] = [
+						cnx / cnLen,
+						cny / cnLen,
+						cnz / cnLen,
+					];
+
+					const capAoA = AO_CURVE[aoA[ciA]];
+					const capAoB = AO_CURVE[aoB[ciB]];
+					const capAoC = AO_CURVE[aoC[ciC]];
+
+					// UVs: project through face A's axis
+					const projAxis = faceAxis(fA);
+					const pU = (projAxis + 1) % 3;
+					const pV = (projAxis + 2) % 3;
+					const uvPA: [number, number] =
+						projAxis === 0
+							? [pA[pV] / uvDenom, pA[pU] / uvDenom]
+							: [pA[pU] / uvDenom, pA[pV] / uvDenom];
+					const uvPB: [number, number] =
+						projAxis === 0
+							? [pB[pV] / uvDenom, pB[pU] / uvDenom]
+							: [pB[pU] / uvDenom, pB[pV] / uvDenom];
+					const uvPC: [number, number] =
+						projAxis === 0
+							? [pC[pV] / uvDenom, pC[pU] / uvDenom]
+							: [pC[pU] / uvDenom, pC[pV] / uvDenom];
+
+					// Winding check
+					const t1x = pB[0] - pA[0];
+					const t1y = pB[1] - pA[1];
+					const t1z = pB[2] - pA[2];
+					const t2x = pC[0] - pA[0];
+					const t2y = pC[1] - pA[1];
+					const t2z = pC[2] - pA[2];
+					const tcx = t1y * t2z - t1z * t2y;
+					const tcy = t1z * t2x - t1x * t2z;
+					const tcz = t1x * t2y - t1y * t2x;
+					const tdot =
+						tcx * normal[0] + tcy * normal[1] + tcz * normal[2];
+
+					if (tdot > 0) {
+						writeVertex(pA, normal, uvPA, capAoA, blockId);
+						writeVertex(pB, normal, uvPB, capAoB, blockId);
+						writeVertex(pC, normal, uvPC, capAoC, blockId);
+					} else {
+						writeVertex(pA, normal, uvPA, capAoA, blockId);
+						writeVertex(pC, normal, uvPC, capAoC, blockId);
+						writeVertex(pB, normal, uvPB, capAoB, blockId);
+					}
+				}
+			}
+		}
+	}
+
+	return {
+		vertexData: vertexData.subarray(0, vOffset * FLOATS_PER_VERTEX),
+		numVertices: vOffset,
+	};
+}

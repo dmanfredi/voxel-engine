@@ -12,12 +12,12 @@ const AO_CURVE: readonly [number, number, number, number] = [
 const CHUNK_SHIFT = 5;
 const CHUNK_MASK = CHUNK_SIZE - 1;
 const FLOATS_PER_VERTEX = 10;
-type FaceFold = {
+interface FaceFold {
 	corner: number;
 	shoulderToPrev: [number, number, number];
 	shoulderToNext: [number, number, number];
 	foldPoint: [number, number, number];
-};
+}
 const MAX_VERTS_PER_SURFACE_BLOCK = 276; // 6x30 face (up to 4 folds) + 12x6 chamfer + 8x3 corner
 
 // Face directions indexed 0-5: +X, -X, +Y, -Y, +Z, -Z
@@ -457,20 +457,30 @@ export function bevelMesh(
 						cornerPos[u] = isUMax ? base[u] + S : base[u];
 						cornerPos[v] = isVMax ? base[v] + S : base[v];
 
-						const shoulderAlongU: [number, number, number] = [...cornerPos];
-						const shoulderAlongV: [number, number, number] = [...cornerPos];
+						const shoulderAlongU: [number, number, number] = [
+							...cornerPos,
+						];
+						const shoulderAlongV: [number, number, number] = [
+							...cornerPos,
+						];
 						shoulderAlongU[u] += isUMax ? -b : b;
 						shoulderAlongV[v] += isVMax ? -b : b;
 
-						const foldPoint: [number, number, number] = [...cornerPos];
+						const foldPoint: [number, number, number] = [
+							...cornerPos,
+						];
 						foldPoint[axis] -= dir * b;
 
 						faceFolds[f].push({
 							corner: c,
 							shoulderToPrev:
-								c === 0 || c === 2 ? shoulderAlongV : shoulderAlongU,
+								c === 0 || c === 2
+									? shoulderAlongV
+									: shoulderAlongU,
 							shoulderToNext:
-								c === 0 || c === 2 ? shoulderAlongU : shoulderAlongV,
+								c === 0 || c === 2
+									? shoulderAlongU
+									: shoulderAlongV,
 							foldPoint,
 						});
 					}
@@ -526,7 +536,12 @@ export function bevelMesh(
 
 					const folds = faceFolds[f];
 					if (folds.length > 0) {
-						const foldsByCorner: (FaceFold | null)[] = [null, null, null, null];
+						const foldsByCorner: (FaceFold | null)[] = [
+							null,
+							null,
+							null,
+							null,
+						];
 						for (const fold of folds) {
 							foldsByCorner[fold.corner] = fold;
 						}
@@ -547,11 +562,15 @@ export function bevelMesh(
 									aoFloats[faceFold.corner] * (1 - insetT) +
 									aoFloats[nextCorner] * insetT;
 								polyPositions.push(faceFold.shoulderToPrev);
-								polyUvs.push(projectUv(faceFold.shoulderToPrev));
+								polyUvs.push(
+									projectUv(faceFold.shoulderToPrev),
+								);
 								polyAo.push(shoulderPrevAo);
 
 								polyPositions.push(faceFold.shoulderToNext);
-								polyUvs.push(projectUv(faceFold.shoulderToNext));
+								polyUvs.push(
+									projectUv(faceFold.shoulderToNext),
+								);
 								polyAo.push(shoulderNextAo);
 								continue;
 							}
@@ -613,17 +632,21 @@ export function bevelMesh(
 								aoFloats[faceFold.corner] * (1 - insetT) +
 								aoFloats[nextCorner] * insetT;
 							const foldU =
-								faceFold.corner === 1 || faceFold.corner === 2 ? 1 : -1;
+								faceFold.corner === 1 || faceFold.corner === 2
+									? 1
+									: -1;
 							const foldV =
-								faceFold.corner === 2 || faceFold.corner === 3 ? 1 : -1;
+								faceFold.corner === 2 || faceFold.corner === 3
+									? 1
+									: -1;
 							const foldVec: [number, number, number] = [0, 0, 0];
 							foldVec[axis] = dir;
 							foldVec[u] = foldU;
 							foldVec[v] = foldV;
 							const foldLen = Math.sqrt(
 								foldVec[0] * foldVec[0] +
-								foldVec[1] * foldVec[1] +
-								foldVec[2] * foldVec[2],
+									foldVec[1] * foldVec[1] +
+									foldVec[2] * foldVec[2],
 							);
 							const foldNormal: [number, number, number] = [
 								foldVec[0] / foldLen,

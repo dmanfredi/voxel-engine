@@ -2,6 +2,7 @@ const MainShader = /*wgsl*/ `
 	struct Uniforms {
 		matrix: mat4x4f,
 		bevelSize: f32,
+		bevelIntensity: f32,
 	}
 
 	struct Vertex {
@@ -52,13 +53,15 @@ const MainShader = /*wgsl*/ `
 		// For each in-plane axis, check edge proximity.
 		// Only apply bevel if the neighbor block in that direction is air
 		// (exposed edge). Solid neighbors = internal edge, no bevel.
+		let intensity = uni.bevelIntensity;
+
 		if (absN.x < 0.5) {
 			let d = min(blockFrac.x, 1.0 - blockFrac.x);
 			let t = smoothstep(bevelFrac, 0.0, d);
 			if (t > 0.0) {
 				let edgeDir = select(1, -1, blockFrac.x < 0.5);
 				if (!isVoxelSolid(blockPos + vec3i(edgeDir, 0, 0))) {
-					result.x += f32(edgeDir) * t;
+					result.x += f32(edgeDir) * t * intensity;
 				}
 			}
 		}
@@ -68,7 +71,7 @@ const MainShader = /*wgsl*/ `
 			if (t > 0.0) {
 				let edgeDir = select(1, -1, blockFrac.y < 0.5);
 				if (!isVoxelSolid(blockPos + vec3i(0, edgeDir, 0))) {
-					result.y += f32(edgeDir) * t;
+					result.y += f32(edgeDir) * t * intensity;
 				}
 			}
 		}
@@ -78,7 +81,7 @@ const MainShader = /*wgsl*/ `
 			if (t > 0.0) {
 				let edgeDir = select(1, -1, blockFrac.z < 0.5);
 				if (!isVoxelSolid(blockPos + vec3i(0, 0, edgeDir))) {
-					result.z += f32(edgeDir) * t;
+					result.z += f32(edgeDir) * t * intensity;
 				}
 			}
 		}

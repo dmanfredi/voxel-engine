@@ -528,11 +528,12 @@ async function main(): Promise<void> {
 		// Compute the view projection matrix
 		const viewProjectionMatrix = mat4.multiply(projection, viewMatrix);
 
-		// Upload uniforms: view-projection matrix + bevel size
+		// Upload uniforms: view-projection matrix + bevel params
 		uniformValues.set(viewProjectionMatrix);
 		uniformValues[16] = debuggerParams.bevelShader
 			? debuggerParams.bevelSize
 			: 0;
+		uniformValues[17] = debuggerParams.bevelIntensity;
 		device.queue.writeBuffer(uniformBuffer, 0, uniformValues);
 
 		// Draw all chunk meshes

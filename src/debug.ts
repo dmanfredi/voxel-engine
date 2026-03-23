@@ -11,6 +11,7 @@ export const debuggerParams = {
 	bevelMesh: false,
 	bevelSize: 0.8,
 	bevelShader: true,
+	bevelIntensity: 1.0,
 	vertices: 0,
 	targetBlock: 'none',
 };
@@ -37,6 +38,12 @@ export function BuildDebug(render: () => void, remeshAll: () => void): void {
 	});
 	const bevelSizeBinding = pane.addBinding(debuggerParams, 'bevelSize', {
 		label: 'Bevel Size',
+		min: 0.1,
+		max: 5.0,
+		step: 0.1,
+	});
+	pane.addBinding(debuggerParams, 'bevelIntensity', {
+		label: 'Bevel Intensity',
 		min: 0.1,
 		max: 5.0,
 		step: 0.1,

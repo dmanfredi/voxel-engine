@@ -214,8 +214,8 @@ async function main(): Promise<void> {
 		addressModeV: 'repeat',
 	});
 
-	// Single uniform buffer for the view-projection matrix
-	const uniformBufferSize = 16 * 4; // mat4x4
+	// Uniform buffer: mat4x4f (64 bytes) + bevelSize f32 (4 bytes), padded to 80
+	const uniformBufferSize = 80;
 	const uniformBuffer = device.createBuffer({
 		label: 'uniforms',
 		size: uniformBufferSize,
@@ -226,6 +226,49 @@ async function main(): Promise<void> {
 	const blockTextureView = blockTextureArray.createView({
 		dimension: '2d-array',
 	});
+
+	// 3D voxel map texture for the bevel shader to look up neighbors
+	const WORLD_BLOCKS = CHUNKS * CHUNK_SIZE;
+	const voxelMapTexture = device.createTexture({
+		label: 'voxel map 3D',
+		dimension: '3d',
+		size: [WORLD_BLOCKS, WORLD_BLOCKS, WORLD_BLOCKS],
+		format: 'r8uint',
+		usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+	});
+
+	/** Upload the entire voxel grid to the 3D texture. */
+	function uploadVoxelMap(): void {
+		const data = new Uint8Array(WORLD_BLOCKS * WORLD_BLOCKS * WORLD_BLOCKS);
+		for (let z = 0; z < WORLD_BLOCKS; z++) {
+			for (let y = 0; y < WORLD_BLOCKS; y++) {
+				for (let x = 0; x < WORLD_BLOCKS; x++) {
+					data[
+						z * WORLD_BLOCKS * WORLD_BLOCKS + y * WORLD_BLOCKS + x
+					] = world.isSolid(x, y, z) ? 1 : 0;
+				}
+			}
+		}
+		device.queue.writeTexture(
+			{ texture: voxelMapTexture },
+			data,
+			{ bytesPerRow: WORLD_BLOCKS, rowsPerImage: WORLD_BLOCKS },
+			[WORLD_BLOCKS, WORLD_BLOCKS, WORLD_BLOCKS],
+		);
+	}
+	uploadVoxelMap();
+
+	/** Update a single texel in the voxel map after a block change. */
+	function updateVoxelTexel(bx: number, by: number, bz: number): void {
+		const val = new Uint8Array([world.isSolid(bx, by, bz) ? 1 : 0]);
+		device.queue.writeTexture(
+			{ texture: voxelMapTexture, origin: { x: bx, y: by, z: bz } },
+			val,
+			{},
+			[1, 1, 1],
+		);
+	}
+
 	const bindGroup = device.createBindGroup({
 		label: 'bind group for chunk',
 		layout: pipeline.getBindGroupLayout(0),
@@ -233,6 +276,10 @@ async function main(): Promise<void> {
 			{ binding: 0, resource: { buffer: uniformBuffer } },
 			{ binding: 1, resource: sampler },
 			{ binding: 2, resource: blockTextureView },
+			{
+				binding: 3,
+				resource: voxelMapTexture.createView({ dimension: '3d' }),
+			},
 		],
 	});
 
@@ -344,6 +391,9 @@ async function main(): Promise<void> {
 
 	/** Remesh a single chunk and any boundary neighbors affected by a block change. */
 	function onBlockChanged(bx: number, by: number, bz: number): void {
+		// Keep the voxel map texture in sync for the bevel shader
+		updateVoxelTexel(bx, by, bz);
+
 		const cx = Math.floor(bx / CHUNK_SIZE);
 		const cy = Math.floor(by / CHUNK_SIZE);
 		const cz = Math.floor(bz / CHUNK_SIZE);
@@ -378,7 +428,7 @@ async function main(): Promise<void> {
 		lastT = t;
 
 		if (debuggerParams.freecam) {
-			FREECAM(keysDown, cameraPos, cameraFront, cameraUp, dt * 500);
+			FREECAM(keysDown, cameraPos, cameraFront, cameraUp, dt * 100);
 		} else {
 			physicsTick(
 				playerState,
@@ -478,8 +528,11 @@ async function main(): Promise<void> {
 		// Compute the view projection matrix
 		const viewProjectionMatrix = mat4.multiply(projection, viewMatrix);
 
-		// Upload the view-projection matrix (positions are baked into the mesh)
+		// Upload uniforms: view-projection matrix + bevel size
 		uniformValues.set(viewProjectionMatrix);
+		uniformValues[16] = debuggerParams.bevelShader
+			? debuggerParams.bevelSize
+			: 0;
 		device.queue.writeBuffer(uniformBuffer, 0, uniformValues);
 
 		// Draw all chunk meshes

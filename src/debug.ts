@@ -10,6 +10,7 @@ export const debuggerParams = {
 	freecam: false,
 	bevelMesh: false,
 	bevelSize: 0.8,
+	bevelShader: true,
 	vertices: 0,
 	targetBlock: 'none',
 };
@@ -31,10 +32,13 @@ export function BuildDebug(render: () => void, remeshAll: () => void): void {
 	const bevelBinding = pane.addBinding(debuggerParams, 'bevelMesh', {
 		label: 'Bevel Mesh',
 	});
+	const bevelShaderBinding = pane.addBinding(debuggerParams, 'bevelShader', {
+		label: 'Bevel Shader',
+	});
 	const bevelSizeBinding = pane.addBinding(debuggerParams, 'bevelSize', {
 		label: 'Bevel Size',
 		min: 0.1,
-		max: 2.0,
+		max: 5.0,
 		step: 0.1,
 	});
 	pane.addBinding(debuggerParams, 'vertices', {
@@ -54,6 +58,11 @@ export function BuildDebug(render: () => void, remeshAll: () => void): void {
 	});
 	bevelBinding.on('change', () => {
 		remeshAll();
+	});
+	bevelShaderBinding.on('change', () => {
+		requestAnimationFrame(() => {
+			render();
+		});
 	});
 	bevelSizeBinding.on('change', () => {
 		if (debuggerParams.bevelMesh) {

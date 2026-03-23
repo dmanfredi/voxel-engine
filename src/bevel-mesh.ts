@@ -18,7 +18,11 @@ interface FaceFold {
 	shoulderToNext: [number, number, number];
 	foldPoint: [number, number, number];
 }
-const MAX_VERTS_PER_SURFACE_BLOCK = 276; // 6x30 face (up to 4 folds) + 12x6 chamfer + 8x3 corner
+interface FaceCornerData {
+	pos: [number, number, number];
+	ao: number;
+}
+const MAX_VERTS_PER_SURFACE_BLOCK = 1348; // face folds + chamfers + corner caps + crude concave plugs
 
 // Face directions indexed 0-5: +X, -X, +Y, -Y, +Z, -Z
 const FACE_DIRS: readonly (readonly [number, number, number])[] = [
@@ -259,6 +263,103 @@ export function bevelMesh(
 				lz + dA[2] + dB[2],
 			)
 		);
+	}
+
+	function compareBlockCoords(
+		ax: number,
+		ay: number,
+		az: number,
+		bx: number,
+		by: number,
+		bz: number,
+	): number {
+		if (ax !== bx) return ax - bx;
+		if (ay !== by) return ay - by;
+		return az - bz;
+	}
+
+	function oppositeFace(face: number): number {
+		return face ^ 1;
+	}
+
+	function getFaceCornerData(
+		lx: number,
+		ly: number,
+		lz: number,
+		face: number,
+		corner: number,
+	): FaceCornerData | null {
+		if (!isSolidFast(lx, ly, lz)) return null;
+
+		const dFace = FACE_DIRS[face];
+		if (!dFace) return null;
+		if (isSolidFast(lx + dFace[0], ly + dFace[1], lz + dFace[2])) {
+			return null;
+		}
+
+		const axis = faceAxis(face);
+		const dir = faceDir(face);
+		const u = (axis + 1) % 3;
+		const v = (axis + 2) % 3;
+
+		const uMinF = faceIndex(u, -1);
+		const uMaxF = faceIndex(u, 1);
+		const vMinF = faceIndex(v, -1);
+		const vMaxF = faceIndex(v, 1);
+		const uMinB = isEdgeBeveledAt(lx, ly, lz, face, uMinF);
+		const uMaxB = isEdgeBeveledAt(lx, ly, lz, face, uMaxF);
+		const vMinB = isEdgeBeveledAt(lx, ly, lz, face, vMinF);
+		const vMaxB = isEdgeBeveledAt(lx, ly, lz, face, vMaxF);
+
+		const base: [number, number, number] = [
+			(ox + lx) * S,
+			(oy + ly) * S,
+			(oz + lz) * S,
+		];
+		const facePos = dir > 0 ? base[axis] + S : base[axis];
+		const isUMax = corner === 1 || corner === 2;
+		const isVMax = corner === 2 || corner === 3;
+		const pos: [number, number, number] = [0, 0, 0];
+		pos[axis] = facePos;
+		pos[u] = isUMax ? base[u] + S : base[u];
+		pos[v] = isVMax ? base[v] + S : base[v];
+		if (isUMax && uMaxB) pos[u] -= b;
+		if (!isUMax && uMinB) pos[u] += b;
+		if (isVMax && vMaxB) pos[v] -= b;
+		if (!isVMax && vMinB) pos[v] += b;
+
+		const local: [number, number, number] = [lx, ly, lz];
+		const airD = local[axis] + dir;
+		const signs = aoSigns[corner];
+		if (!signs) return null;
+		const su = signs[0];
+		const sv = signs[1];
+
+		const s1: [number, number, number] = [0, 0, 0];
+		s1[axis] = airD;
+		s1[u] = local[u] + su;
+		s1[v] = local[v];
+
+		const s2: [number, number, number] = [0, 0, 0];
+		s2[axis] = airD;
+		s2[u] = local[u];
+		s2[v] = local[v] + sv;
+
+		const cr: [number, number, number] = [0, 0, 0];
+		cr[axis] = airD;
+		cr[u] = local[u] + su;
+		cr[v] = local[v] + sv;
+
+		return {
+			pos,
+			ao: AO_CURVE[
+				vertexAO(
+					isSolidFast(s1[0], s1[1], s1[2]),
+					isSolidFast(s2[0], s2[1], s2[2]),
+					isSolidFast(cr[0], cr[1], cr[2]),
+				)
+			],
+		};
 	}
 
 	// Reusable arrays to reduce allocations
@@ -928,6 +1029,187 @@ export function bevelMesh(
 						writeVertex(pA, normal, uvPA, capAoA, blockId);
 						writeVertex(pC, normal, uvPC, capAoC, blockId);
 						writeVertex(pB, normal, uvPB, capAoB, blockId);
+					}
+				}
+
+				// --- Emit crude 3-way concave plug triangles ---
+				console.log('triple: ', CORNER_FACES);
+				for (const triple of CORNER_FACES) {
+					const f0 = triple[0];
+					const f1 = triple[1];
+					const f2 = triple[2];
+					if (
+						f0 === undefined ||
+						f1 === undefined ||
+						f2 === undefined
+					) {
+						continue;
+					}
+
+					const faces = [f0, f1, f2];
+					for (let inIndex = 0; inIndex < 3; inIndex++) {
+						const inwardFace = faces[inIndex];
+						const outwardFaceA = faces[(inIndex + 1) % 3];
+						const outwardFaceB = faces[(inIndex + 2) % 3];
+						if (
+							inwardFace === undefined ||
+							outwardFaceA === undefined ||
+							outwardFaceB === undefined
+						) {
+							continue;
+						}
+						if (
+							!exposed[inwardFace] ||
+							!exposed[outwardFaceA] ||
+							!exposed[outwardFaceB]
+						) {
+							continue;
+						}
+						if (
+							!edgeBev[inwardFace][outwardFaceA] ||
+							!edgeBev[inwardFace][outwardFaceB]
+						) {
+							continue;
+						}
+
+						const dIn = FACE_DIRS[inwardFace];
+						const dOutA = FACE_DIRS[outwardFaceA];
+						const dOutB = FACE_DIRS[outwardFaceB];
+						if (!dIn || !dOutA || !dOutB) continue;
+
+						const neighborA: [number, number, number] = [
+							lx + dIn[0] + dOutA[0],
+							ly + dIn[1] + dOutA[1],
+							lz + dIn[2] + dOutA[2],
+						];
+						const neighborB: [number, number, number] = [
+							lx + dIn[0] + dOutB[0],
+							ly + dIn[1] + dOutB[1],
+							lz + dIn[2] + dOutB[2],
+						];
+						if (
+							!isSolidFast(
+								neighborA[0],
+								neighborA[1],
+								neighborA[2],
+							) ||
+							!isSolidFast(
+								neighborB[0],
+								neighborB[1],
+								neighborB[2],
+							)
+						) {
+							continue;
+						}
+
+						const farDiagSolid = isSolidFast(
+							lx + dIn[0] + dOutA[0] + dOutB[0],
+							ly + dIn[1] + dOutA[1] + dOutB[1],
+							lz + dIn[2] + dOutA[2] + dOutB[2],
+						);
+						if (farDiagSolid) continue;
+
+						if (
+							compareBlockCoords(
+								lx,
+								ly,
+								lz,
+								neighborA[0],
+								neighborA[1],
+								neighborA[2],
+							) > 0 ||
+							compareBlockCoords(
+								lx,
+								ly,
+								lz,
+								neighborB[0],
+								neighborB[1],
+								neighborB[2],
+							) > 0
+						) {
+							continue;
+						}
+
+						const currentFaceCorners = faceCorners[inwardFace];
+						const currentFaceAo = faceAO[inwardFace];
+						if (!currentFaceCorners || !currentFaceAo) continue;
+
+						const currentCorner = getCornerVertexIndex(
+							inwardFace,
+							outwardFaceA,
+							outwardFaceB,
+						);
+						const currentPos = currentFaceCorners[currentCorner];
+						if (!currentPos) continue;
+						const currentAo =
+							AO_CURVE[currentFaceAo[currentCorner]];
+
+						const neighborAFace = oppositeFace(outwardFaceA);
+						const neighborBFace = oppositeFace(outwardFaceB);
+						const neighborACorner = getCornerVertexIndex(
+							neighborAFace,
+							outwardFaceB,
+							inwardFace,
+						);
+						const neighborBCorner = getCornerVertexIndex(
+							neighborBFace,
+							outwardFaceA,
+							inwardFace,
+						);
+						const neighborAData = getFaceCornerData(
+							neighborA[0],
+							neighborA[1],
+							neighborA[2],
+							neighborAFace,
+							neighborACorner,
+						);
+						const neighborBData = getFaceCornerData(
+							neighborB[0],
+							neighborB[1],
+							neighborB[2],
+							neighborBFace,
+							neighborBCorner,
+						);
+						if (!neighborAData || !neighborBData) continue;
+
+						const nnx = dIn[0] + dOutA[0] + dOutB[0];
+						const nny = dIn[1] + dOutA[1] + dOutB[1];
+						const nnz = dIn[2] + dOutA[2] + dOutB[2];
+						const nnLen = Math.sqrt(
+							nnx * nnx + nny * nny + nnz * nnz,
+						);
+						if (nnLen < 1e-6) continue;
+						const plugNormal: [number, number, number] = [
+							nnx / nnLen,
+							nny / nnLen,
+							nnz / nnLen,
+						];
+
+						console.log('?!?!', plugNormal);
+
+						const projAxis = faceAxis(inwardFace);
+						const pU = (projAxis + 1) % 3;
+						const pV = (projAxis + 2) % 3;
+						const projectUv = (
+							p: readonly [number, number, number],
+						): [number, number] =>
+							projAxis === 0
+								? [p[pV] / uvDenom, p[pU] / uvDenom]
+								: [p[pU] / uvDenom, p[pV] / uvDenom];
+
+						writeTriangle(
+							currentPos,
+							neighborAData.pos,
+							neighborBData.pos,
+							plugNormal,
+							projectUv(currentPos),
+							projectUv(neighborAData.pos),
+							projectUv(neighborBData.pos),
+							currentAo,
+							neighborAData.ao,
+							neighborBData.ao,
+							blockId,
+						);
 					}
 				}
 			}

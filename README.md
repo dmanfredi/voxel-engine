@@ -3,6 +3,7 @@
 Requires a [WebGPU-capable browser](https://caniuse.com/webgpu) (Chrome/Edge 113+, Firefox Nightly).
 
 ```
+// using node version 22+
 npm install
 npm run dev
 ```

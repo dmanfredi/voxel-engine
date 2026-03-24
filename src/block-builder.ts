@@ -6,7 +6,7 @@ const noise = new (Noise as unknown as { Noise: typeof Noise }).Noise(
 	Math.random(),
 );
 
-const NOISE_FREQUENCY = 0.06;
+const NOISE_FREQUENCY = 0.02;
 
 export default function buildChunkBlocks(
 	cx: number,

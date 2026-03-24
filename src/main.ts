@@ -31,7 +31,7 @@ if (!navigator.gpu) {
 }
 
 const BLOCK_SIZE = 10;
-const CHUNKS = 1;
+const CHUNKS = 8;
 
 const world = new World(BLOCK_SIZE);
 for (let cy = 0; cy < CHUNKS; cy++) {

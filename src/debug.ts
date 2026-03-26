@@ -10,6 +10,8 @@ export const debuggerParams = {
 	freecam: false,
 	vertices: 0,
 	targetBlock: 'none',
+	shininess: 32,
+	specularStrength: 0.3,
 };
 
 let pane: Pane | null = null;
@@ -40,6 +42,20 @@ export function BuildDebug(render: () => void): void {
 		requestAnimationFrame(() => {
 			render();
 		});
+	});
+
+	const reflFolder = pane.addFolder({ title: 'Specular' });
+	reflFolder.addBinding(debuggerParams, 'shininess', {
+		label: 'Shininess',
+		min: 2,
+		max: 256,
+		step: 1,
+	});
+	reflFolder.addBinding(debuggerParams, 'specularStrength', {
+		label: 'Spec Strength',
+		min: 0,
+		max: 1,
+		step: 0.05,
 	});
 }
 

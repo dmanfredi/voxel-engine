@@ -213,8 +213,13 @@ async function main(): Promise<void> {
 		addressModeV: 'repeat',
 	});
 
-	// Single uniform buffer for the view-projection matrix
-	const uniformBufferSize = 16 * 4; // mat4x4
+	// Uniform buffer layout (WGSL std140):
+	// mat4x4f  = 64 bytes (offset 0)
+	// vec3f    = 12 bytes (offset 64, aligned to 16) — eyePosition
+	// f32      = 4 bytes  (offset 76) — shininess (packs into vec3's trailing slot)
+	// f32      = 4 bytes  (offset 80) — specularStrength
+	// Total: 84 bytes, round up to 96 for 16-byte alignment
+	const uniformBufferSize = 96;
 	const uniformBuffer = device.createBuffer({
 		label: 'uniforms',
 		size: uniformBufferSize,
@@ -224,15 +229,6 @@ async function main(): Promise<void> {
 
 	const blockTextureView = blockTextureArray.createView({
 		dimension: '2d-array',
-	});
-	const bindGroup = device.createBindGroup({
-		label: 'bind group for chunk',
-		layout: pipeline.getBindGroupLayout(0),
-		entries: [
-			{ binding: 0, resource: { buffer: uniformBuffer } },
-			{ binding: 1, resource: sampler },
-			{ binding: 2, resource: blockTextureView },
-		],
 	});
 
 	// Per-chunk GPU resources
@@ -295,6 +291,22 @@ async function main(): Promise<void> {
 		device,
 		presentationFormat,
 	);
+
+	// Bind group for main shader
+	const bindGroup = device.createBindGroup({
+		label: 'bind group for chunk(s)',
+		layout: pipeline.getBindGroupLayout(0),
+		entries: [
+			{ binding: 0, resource: { buffer: uniformBuffer } },
+			{ binding: 1, resource: sampler },
+			{ binding: 2, resource: blockTextureView },
+			{ binding: 3, resource: skybox.sampler },
+			{
+				binding: 4,
+				resource: skybox.texture.createView({ dimension: 'cube' }),
+			},
+		],
+	});
 
 	// Initialize block highlight outline
 	const highlight = initHighlight(device, presentationFormat);
@@ -468,8 +480,13 @@ async function main(): Promise<void> {
 		// Compute the view projection matrix
 		const viewProjectionMatrix = mat4.multiply(projection, viewMatrix);
 
-		// Upload the view-projection matrix (positions are baked into the mesh)
+		// Upload uniforms: VP matrix + eye position + reflection params
 		uniformValues.set(viewProjectionMatrix);
+		uniformValues[16] = cameraPos[0]; // eyePosition.x
+		uniformValues[17] = cameraPos[1]; // eyePosition.y
+		uniformValues[18] = cameraPos[2]; // eyePosition.z
+		uniformValues[19] = debuggerParams.shininess; // shininess
+		uniformValues[20] = debuggerParams.specularStrength; // specularStrength
 		device.queue.writeBuffer(uniformBuffer, 0, uniformValues);
 
 		// Draw all chunk meshes

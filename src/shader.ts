@@ -1,6 +1,9 @@
 const MainShader = /*wgsl*/ `
 	struct Uniforms {
 		matrix: mat4x4f,
+		eyePosition: vec3f,
+		shininess: f32,
+		specularStrength: f32,
 	}
 
 	struct Vertex {
@@ -17,11 +20,17 @@ const MainShader = /*wgsl*/ `
 		@location(1) @interpolate(flat) texLayer: u32,
 		@location(2) normal: vec3f,
 		@location(3) ao: f32,
+		@location(4) worldPos: vec3f,
 	}
 
 	@group(0) @binding(0) var<uniform> uni: Uniforms;
 	@group(0) @binding(1) var mySampler: sampler;
 	@group(0) @binding(2) var myTexture: texture_2d_array<f32>;
+	@group(0) @binding(3) var skySampler: sampler;
+	@group(0) @binding(4) var skyTexture: texture_cube<f32>;
+
+	// Light direction matching skybox sun (azimuth 124.6°, elevation 46.9°)
+	const LIGHT_DIR = vec3f(-0.387, 0.730, 0.563);
 
 	@vertex fn vs(vert: Vertex) -> VSOutput {
 		var vsOut: VSOutput;
@@ -30,6 +39,7 @@ const MainShader = /*wgsl*/ `
 		vsOut.texLayer = vert.texLayer;
 		vsOut.normal = vert.normal;
 		vsOut.ao = vert.ao;
+		vsOut.worldPos = vert.position.xyz;
 		return vsOut;
 	}
 
@@ -49,10 +59,23 @@ const MainShader = /*wgsl*/ `
 			brightness = 0.8;   // north/south
 		}
 
+		// Sky-tinted specular: sample cubemap along reflection for highlight color
+		let eyeToSurface = normalize(vsOut.worldPos - uni.eyePosition);
+		let reflected = reflect(eyeToSurface, n);
+		let skyColor = textureSample(skyTexture, skySampler, reflected * vec3f(1, 1, -1));
+
+		// Blinn-Phong specular highlight, tinted by skybox instead of white
+		let V = normalize(uni.eyePosition - vsOut.worldPos);
+		let H = normalize(LIGHT_DIR + V);
+		let spec = pow(max(dot(n, H), 0.0), uni.shininess);
+		let specular = uni.specularStrength * spec * skyColor.rgb;
+
 		// a nice blue vec3f(0.49, 0.55, 0.68)
 		let shadowColor = vec3f(0.1, 0.1, 0.1); // AO shadow tint
 		let lit = texColor.rgb * brightness;
-		return vec4f(mix(shadowColor, lit, vsOut.ao), texColor.a);
+		let base = mix(shadowColor, lit, vsOut.ao);
+		let final_color = base + specular;
+		return vec4f(final_color, texColor.a);
 	}
 `;
 

@@ -1,42 +1,5 @@
 import { CHUNK_SIZE } from '../chunk';
 import { AIR, MARBLE } from '../block';
-const MAX_CUBE_SIZE = 10;
-
-const mengTop: number[][] = [
-	[-1, 1, -1],
-	[-1, 1, 0],
-	[-1, 1, 1],
-	// [0, 1, 0],
-	[0, 1, -1],
-	[0, 1, 1],
-	[1, 1, -1],
-	[1, 1, 0],
-	[1, 1, 1],
-];
-
-const mengMiddle: number[][] = [
-	[-1, 0, -1],
-	// [-1, 0, 0],
-	[-1, 0, 1],
-	// [0, 1, 0],
-	// [0, 0, -1],
-	//[0, 0, 1],
-	[1, 0, -1],
-	//[1, 0, 0],
-	[1, 0, 1],
-];
-
-const mengBottom: number[][] = [
-	[-1, -1, -1],
-	[-1, -1, 0],
-	[-1, -1, 1],
-	// [0, 1, 0],
-	[0, -1, -1],
-	[0, -1, 1],
-	[1, -1, -1],
-	[1, -1, 0],
-	[1, -1, 1],
-];
 
 function isMenger(x: number, y: number, z: number, level: number) {
 	for (let i = 0; i < level; i++) {

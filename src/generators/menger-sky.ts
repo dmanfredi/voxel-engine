@@ -3,7 +3,7 @@ import { MARBLE } from '../block';
 
 const LEVELS = [3, 9, 27] as const;
 const GRID_SPACING = 48;
-const SPAWN_CHANCE = 0.5;
+const SPAWN_CHANCE = 2;
 const MAX_SPONGE_SIZE = 27;
 
 function seededRng(gx: number, gy: number, gz: number): () => number {
@@ -54,7 +54,9 @@ export default function mengerSky(
 
 				if (rng() > SPAWN_CHANCE) continue;
 
-				const level = Math.floor(rng() * 3) + 1;
+				// Weight toward smaller sponges: level 1 = 9/13, level 2 = 3/13, level 3 = 1/13
+				const roll = rng() * 13;
+				const level = roll < 9 ? 1 : roll < 12 ? 2 : 3;
 				const size = LEVELS[level - 1];
 				if (size === undefined) continue;
 

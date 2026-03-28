@@ -32,7 +32,7 @@ if (!navigator.gpu) {
 const BLOCK_SIZE = 10;
 const CHUNKS = 8;
 
-const world = new World(BLOCK_SIZE);
+const world = new World(BLOCK_SIZE, CHUNKS);
 for (let cy = 0; cy < CHUNKS; cy++) {
 	for (let cz = 0; cz < CHUNKS; cz++) {
 		for (let cx = 0; cx < CHUNKS; cx++) {
@@ -401,6 +401,11 @@ async function main(): Promise<void> {
 				dt,
 			);
 		}
+
+		// Wrap player position horizontally
+		const worldWidth = world.widthChunks * CHUNK_SIZE * BLOCK_SIZE;
+		cameraPos[0] = ((cameraPos[0] % worldWidth) + worldWidth) % worldWidth;
+		cameraPos[2] = ((cameraPos[2] % worldWidth) + worldWidth) % worldWidth;
 
 		// Auto-climb: place a block beneath feet whenever there's air there.
 		// Suppressed when holding Shift or in freecam.

@@ -12,6 +12,8 @@ export const debuggerParams = {
 	targetBlock: 'none',
 	shininess: 32,
 	specularStrength: 0.3,
+	fogStart: 1400,
+	fogEnd: 1500,
 };
 
 let pane: Pane | null = null;
@@ -56,6 +58,20 @@ export function BuildDebug(render: () => void): void {
 		min: 0,
 		max: 1,
 		step: 0.05,
+	});
+
+	const fogFolder = pane.addFolder({ title: 'Fog' });
+	fogFolder.addBinding(debuggerParams, 'fogStart', {
+		label: 'Fog Start',
+		min: 0,
+		max: 5000,
+		step: 50,
+	});
+	fogFolder.addBinding(debuggerParams, 'fogEnd', {
+		label: 'Fog End',
+		min: 0,
+		max: 5000,
+		step: 50,
 	});
 }
 

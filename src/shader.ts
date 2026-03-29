@@ -4,6 +4,8 @@ const MainShader = /*wgsl*/ `
 		eyePosition: vec3f,
 		shininess: f32,
 		specularStrength: f32,
+		fogStart: f32,
+		fogEnd: f32,
 	}
 
 	struct Vertex {
@@ -78,7 +80,13 @@ const MainShader = /*wgsl*/ `
 		let lit = texColor.rgb * brightness;
 		let base = mix(shadowColor, lit, vsOut.ao);
 		let final_color = base + specular;
-		return vec4f(final_color, texColor.a);
+
+		// Distance fog — sample skybox in eye-to-fragment direction so fog matches the sky behind it
+		let dist = length(vsOut.worldPos - uni.eyePosition);
+		let fogFactor = clamp((uni.fogEnd - dist) / (uni.fogEnd - uni.fogStart), 0.0, 1.0);
+		let fogColor = textureSample(skyTexture, skySampler, eyeToSurface * vec3f(1, 1, -1)).rgb;
+		let fogged = mix(fogColor, final_color, fogFactor);
+		return vec4f(fogged, texColor.a);
 	}
 `;
 

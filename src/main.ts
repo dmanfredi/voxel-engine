@@ -30,7 +30,7 @@ if (!navigator.gpu) {
 }
 
 const BLOCK_SIZE = 10;
-const WORLD_WIDTH = 8; // horizontal chunk width (X and Z), wrapping
+const WORLD_WIDTH = 10; // horizontal chunk width (X and Z), wrapping
 const VERTICAL_RADIUS = 6; // chunks above/below player to keep loaded
 const SPAWN_CY = 4; // initial player chunk Y
 
@@ -606,6 +606,8 @@ async function main(): Promise<void> {
 		uniformValues[18] = cameraPos[2]; // eyePosition.z
 		uniformValues[19] = debuggerParams.shininess; // shininess
 		uniformValues[20] = debuggerParams.specularStrength; // specularStrength
+		uniformValues[21] = debuggerParams.fogStart; // fogStart
+		uniformValues[22] = debuggerParams.fogEnd; // fogEnd
 		device.queue.writeBuffer(uniformBuffer, 0, uniformValues);
 
 		// Compute and upload per-chunk wrap offsets

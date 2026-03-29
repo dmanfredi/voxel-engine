@@ -457,6 +457,11 @@ async function main(): Promise<void> {
 
 	/** Remesh a single chunk and any boundary neighbors affected by a block change. */
 	function onBlockChanged(bx: number, by: number, bz: number): void {
+		// Wrap horizontal block coords so chunk lookups resolve correctly
+		const wb = world.widthChunks * CHUNK_SIZE;
+		bx = ((bx % wb) + wb) % wb;
+		bz = ((bz % wb) + wb) % wb;
+
 		const cx = Math.floor(bx / CHUNK_SIZE);
 		const cy = Math.floor(by / CHUNK_SIZE);
 		const cz = Math.floor(bz / CHUNK_SIZE);
@@ -470,12 +475,13 @@ async function main(): Promise<void> {
 
 		// console.log("L's: ", lx, ly, lz);
 
-		if (lx === 0) meshChunk(cx - 1, cy, cz);
-		if (lx === CHUNK_SIZE - 1) meshChunk(cx + 1, cy, cz);
+		const w = world.widthChunks;
+		if (lx === 0) meshChunk((((cx - 1) % w) + w) % w, cy, cz);
+		if (lx === CHUNK_SIZE - 1) meshChunk((cx + 1) % w, cy, cz);
 		if (ly === 0) meshChunk(cx, cy - 1, cz);
 		if (ly === CHUNK_SIZE - 1) meshChunk(cx, cy + 1, cz);
-		if (lz === 0) meshChunk(cx, cy, cz - 1);
-		if (lz === CHUNK_SIZE - 1) meshChunk(cx, cy, cz + 1);
+		if (lz === 0) meshChunk(cx, cy, (((cz - 1) % w) + w) % w);
+		if (lz === CHUNK_SIZE - 1) meshChunk(cx, cy, (cz + 1) % w);
 	}
 
 	function requestRender() {

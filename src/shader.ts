@@ -29,17 +29,20 @@ const MainShader = /*wgsl*/ `
 	@group(0) @binding(3) var skySampler: sampler;
 	@group(0) @binding(4) var skyTexture: texture_cube<f32>;
 
+	@group(1) @binding(0) var<uniform> chunkOffset: vec4f;
+
 	// Light direction matching skybox sun (azimuth 124.6°, elevation 46.9°)
 	const LIGHT_DIR = vec3f(-0.387, 0.730, 0.563);
 
 	@vertex fn vs(vert: Vertex) -> VSOutput {
 		var vsOut: VSOutput;
-		vsOut.position = uni.matrix * vert.position;
+		let worldPos = vert.position.xyz + chunkOffset.xyz;
+		vsOut.position = uni.matrix * vec4f(worldPos, 1.0);
 		vsOut.uv = vert.uv;
 		vsOut.texLayer = vert.texLayer;
 		vsOut.normal = vert.normal;
 		vsOut.ao = vert.ao;
-		vsOut.worldPos = vert.position.xyz;
+		vsOut.worldPos = worldPos;
 		return vsOut;
 	}
 

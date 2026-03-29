@@ -64,14 +64,14 @@ export function BuildDebug(render: () => void): void {
 	fogFolder.addBinding(debuggerParams, 'fogStart', {
 		label: 'Fog Start',
 		min: 0,
-		max: 5000,
-		step: 50,
+		max: 2000,
+		step: 10,
 	});
 	fogFolder.addBinding(debuggerParams, 'fogEnd', {
 		label: 'Fog End',
 		min: 0,
-		max: 5000,
-		step: 50,
+		max: 2000,
+		step: 10,
 	});
 }
 

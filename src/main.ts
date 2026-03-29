@@ -614,9 +614,16 @@ async function main(): Promise<void> {
 		const ww = world.widthChunks * CHUNK_SIZE * BLOCK_SIZE;
 		const hw = ww / 2;
 		const offsetData = new Float32Array(4);
+		const halfChunk = (CHUNK_SIZE * BLOCK_SIZE) / 2;
 		for (const chunkRender of chunkRenderMap.values()) {
-			const dx = chunkRender.cx * CHUNK_SIZE * BLOCK_SIZE - cameraPos[0];
-			const dz = chunkRender.cz * CHUNK_SIZE * BLOCK_SIZE - cameraPos[2];
+			const dx =
+				chunkRender.cx * CHUNK_SIZE * BLOCK_SIZE +
+				halfChunk -
+				cameraPos[0];
+			const dz =
+				chunkRender.cz * CHUNK_SIZE * BLOCK_SIZE +
+				halfChunk -
+				cameraPos[2];
 
 			offsetData[0] = dx > hw ? -ww : dx < -hw ? ww : 0;
 			offsetData[2] = dz > hw ? -ww : dz < -hw ? ww : 0;

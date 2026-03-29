@@ -25,6 +25,14 @@ export class World {
 		this.chunks.set(chunkKey(chunk.cx, chunk.cy, chunk.cz), chunk);
 	}
 
+	removeChunk(cx: number, cy: number, cz: number): void {
+		this.chunks.delete(chunkKey(cx, cy, cz));
+	}
+
+	hasChunk(cx: number, cy: number, cz: number): boolean {
+		return this.chunks.has(chunkKey(cx, cy, cz));
+	}
+
 	getChunk(cx: number, cy: number, cz: number): Chunk | undefined {
 		return this.chunks.get(chunkKey(cx, cy, cz));
 	}

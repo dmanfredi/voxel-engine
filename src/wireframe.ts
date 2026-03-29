@@ -8,6 +8,8 @@ const WireframeShader = /*wgsl*/ `
 	@group(0) @binding(0) var<uniform> uni: Uniforms;
 	@group(0) @binding(1) var<storage, read> positions: array<f32>;
 
+	@group(1) @binding(0) var<uniform> chunkOffset: vec4f;
+
     struct BarycentricCoordinateBasedVSOutput {
 		@builtin(position) position: vec4f,
 		@location(0) barycenticCoord: vec3f,
@@ -19,7 +21,8 @@ const WireframeShader = /*wgsl*/ `
 		let vertNdx = vNdx % 3u;
 
 		let pNdx = vNdx * 10u; // <-- expanded vertex list (pos + normal + uv + ao + color)
-		let position = vec4f(positions[pNdx], positions[pNdx + 1u], positions[pNdx + 2u], 1.0);
+		let rawPos = vec3f(positions[pNdx], positions[pNdx + 1u], positions[pNdx + 2u]);
+		let position = vec4f(rawPos + chunkOffset.xyz, 1.0);
 
 		var out: BarycentricCoordinateBasedVSOutput;
 		out.position = uni.matrix * position;

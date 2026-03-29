@@ -4,16 +4,16 @@ import WireframeShader from './wireframe';
 import { initSkybox, drawSkybox, type SkyboxResources } from './skybox';
 
 import { BuildDebug, refreshDebug, debuggerParams, stats } from './debug';
-import buildChunkBlocks from './block-builder';
 import { greedyMesh } from './greedy-mesh';
 import { FREECAM, physicsTick, createPlayerState } from './movement';
 import { World } from './world';
-import { Chunk, CHUNK_SIZE, chunkKey } from './chunk';
+import { CHUNK_SIZE, chunkKey } from './chunk';
 import { AIR, MARBLE } from './block';
 import { raycast, type RaycastHit } from './raycast';
 import { initHighlight, drawHighlight } from './highlight';
 import { createGameState } from './game-state';
 import { autoClimb } from './auto-climb';
+import { ChunkLoader } from './chunk-loader';
 
 // TODO
 // - Skylights
@@ -30,21 +30,16 @@ if (!navigator.gpu) {
 }
 
 const BLOCK_SIZE = 10;
-const CHUNKS = 8;
+const WORLD_WIDTH = 8; // horizontal chunk width (X and Z), wrapping
+const VERTICAL_RADIUS = 6; // chunks above/below player to keep loaded
+const SPAWN_CY = 4; // initial player chunk Y
 
-const world = new World(BLOCK_SIZE, CHUNKS);
-for (let cy = 0; cy < CHUNKS; cy++) {
-	for (let cz = 0; cz < CHUNKS; cz++) {
-		for (let cx = 0; cx < CHUNKS; cx++) {
-			world.addChunk(new Chunk(cx, cy, cz, buildChunkBlocks(cx, cy, cz)));
-		}
-	}
-}
+const world = new World(BLOCK_SIZE, WORLD_WIDTH);
 
 const degToRad = (d: number) => (d * Math.PI) / 180;
 const up = vec3.create(0, 1, 0);
 
-const worldCenter = (CHUNKS * CHUNK_SIZE * BLOCK_SIZE) / 2;
+const worldCenter = (WORLD_WIDTH * CHUNK_SIZE * BLOCK_SIZE) / 2;
 const cameraPos = vec3.create(worldCenter, worldCenter, worldCenter);
 const cameraFront = vec3.create(0, 0, -1);
 const cameraUp = up;
@@ -55,8 +50,13 @@ let currentHit: RaycastHit | null = null;
 const MAX_REACH = 100; // 10 blocks
 
 interface ChunkRenderData {
+	cx: number;
+	cy: number;
+	cz: number;
 	vertexBuffer: GPUBuffer;
 	wireframeBindGroup: GPUBindGroup;
+	offsetBuffer: GPUBuffer;
+	offsetBindGroup: GPUBindGroup;
 	numVertices: number;
 }
 
@@ -99,6 +99,73 @@ async function main(): Promise<void> {
 		code: WireframeShader,
 	});
 
+	// Shared bind group layout for per-chunk offset (group 1 in both pipelines)
+	const chunkOffsetBGL = device.createBindGroupLayout({
+		label: 'chunk offset',
+		entries: [
+			{
+				binding: 0,
+				visibility: GPUShaderStage.VERTEX,
+				buffer: { type: 'uniform' },
+			},
+		],
+	});
+
+	const mainGroup0BGL = device.createBindGroupLayout({
+		label: 'main group 0',
+		entries: [
+			{
+				binding: 0,
+				visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+				buffer: { type: 'uniform' },
+			},
+			{
+				binding: 1,
+				visibility: GPUShaderStage.FRAGMENT,
+				sampler: { type: 'filtering' },
+			},
+			{
+				binding: 2,
+				visibility: GPUShaderStage.FRAGMENT,
+				texture: { sampleType: 'float', viewDimension: '2d-array' },
+			},
+			{
+				binding: 3,
+				visibility: GPUShaderStage.FRAGMENT,
+				sampler: { type: 'filtering' },
+			},
+			{
+				binding: 4,
+				visibility: GPUShaderStage.FRAGMENT,
+				texture: { sampleType: 'float', viewDimension: 'cube' },
+			},
+		],
+	});
+
+	const wireframeGroup0BGL = device.createBindGroupLayout({
+		label: 'wireframe group 0',
+		entries: [
+			{
+				binding: 0,
+				visibility: GPUShaderStage.VERTEX,
+				buffer: { type: 'uniform' },
+			},
+			{
+				binding: 1,
+				visibility: GPUShaderStage.VERTEX,
+				buffer: { type: 'read-only-storage' },
+			},
+		],
+	});
+
+	const mainPipelineLayout = device.createPipelineLayout({
+		bindGroupLayouts: [mainGroup0BGL, chunkOffsetBGL],
+	});
+
+	const wireframePipelineLayout = device.createPipelineLayout({
+		bindGroupLayouts: [wireframeGroup0BGL, chunkOffsetBGL],
+	});
+
 	const vertexBufferLayout: GPUVertexBufferLayout = {
 		arrayStride: (3 + 3 + 2 + 1 + 1) * 4, // pos, normal, uv, ao, texLayer (4 bytes each)
 		attributes: [
@@ -112,7 +179,7 @@ async function main(): Promise<void> {
 
 	const pipeline = device.createRenderPipeline({
 		label: '3 attributes',
-		layout: 'auto',
+		layout: mainPipelineLayout,
 		vertex: {
 			module,
 			entryPoint: 'vs',
@@ -136,7 +203,7 @@ async function main(): Promise<void> {
 	const barycentricCoordinatesBasedWireframePipeline =
 		device.createRenderPipeline({
 			label: 'barycentric coordinates based wireframe pipeline',
-			layout: 'auto',
+			layout: wireframePipelineLayout,
 			vertex: {
 				module: wireframeModule,
 				entryPoint: 'vsIndexedU32BarycentricCoordinateBasedLines',
@@ -240,10 +307,11 @@ async function main(): Promise<void> {
 
 		const key = chunkKey(cx, cy, cz);
 
-		// Destroy old buffer if it exists
+		// Destroy old buffers if they exist
 		const old = chunkRenderMap.get(key);
 		if (old) {
 			old.vertexBuffer.destroy();
+			old.offsetBuffer.destroy();
 		}
 
 		const { vertexData, numVertices } = greedyMesh(world, cx, cy, cz);
@@ -265,23 +333,59 @@ async function main(): Promise<void> {
 
 		const wireframeBindGroup = device.createBindGroup({
 			label: `chunk ${key} wireframe bindgroup`,
-			layout: barycentricCoordinatesBasedWireframePipeline.getBindGroupLayout(
-				0,
-			),
+			layout: wireframeGroup0BGL,
 			entries: [
 				{ binding: 0, resource: { buffer: uniformBuffer } },
 				{ binding: 1, resource: { buffer: vertexBuffer } },
 			],
 		});
 
+		const offsetBuffer = device.createBuffer({
+			label: `chunk ${key} offset`,
+			size: 16, // vec4f
+			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+		});
+
+		const offsetBindGroup = device.createBindGroup({
+			label: `chunk ${key} offset bindgroup`,
+			layout: chunkOffsetBGL,
+			entries: [{ binding: 0, resource: { buffer: offsetBuffer } }],
+		});
+
 		chunkRenderMap.set(key, {
+			cx,
+			cy,
+			cz,
 			vertexBuffer,
 			wireframeBindGroup,
+			offsetBuffer,
+			offsetBindGroup,
 			numVertices,
 		});
 	}
 
-	// Initial mesh for all chunks
+	/** Destroy GPU resources for a chunk. */
+	function unmeshChunk(cx: number, cy: number, cz: number): void {
+		const key = chunkKey(cx, cy, cz);
+		const data = chunkRenderMap.get(key);
+		if (data) {
+			data.vertexBuffer.destroy();
+			data.offsetBuffer.destroy();
+			chunkRenderMap.delete(key);
+		}
+	}
+
+	// ChunkLoader: handles vertical streaming
+	const chunkLoader = new ChunkLoader({
+		world,
+		verticalRadius: VERTICAL_RADIUS,
+		loadsPerFrame: 4,
+		meshChunk,
+		unmeshChunk,
+	});
+
+	// Initial synchronous load + mesh
+	chunkLoader.loadInitial(SPAWN_CY);
 	world.forEachChunk((chunk) => {
 		meshChunk(chunk.cx, chunk.cy, chunk.cz);
 	});
@@ -295,7 +399,7 @@ async function main(): Promise<void> {
 	// Bind group for main shader
 	const bindGroup = device.createBindGroup({
 		label: 'bind group for chunk(s)',
-		layout: pipeline.getBindGroupLayout(0),
+		layout: mainGroup0BGL,
 		entries: [
 			{ binding: 0, resource: { buffer: uniformBuffer } },
 			{ binding: 1, resource: sampler },
@@ -407,6 +511,10 @@ async function main(): Promise<void> {
 		cameraPos[0] = ((cameraPos[0] % worldWidth) + worldWidth) % worldWidth;
 		cameraPos[2] = ((cameraPos[2] % worldWidth) + worldWidth) % worldWidth;
 
+		// Stream chunks vertically around the player
+		const playerCY = Math.floor(cameraPos[1] / (CHUNK_SIZE * BLOCK_SIZE));
+		chunkLoader.update(playerCY);
+
 		// Auto-climb: place a block beneath feet whenever there's air there.
 		// Suppressed when holding Shift or in freecam.
 		if (!debuggerParams.freecam && !keysDown.has('ShiftLeft')) {
@@ -494,10 +602,25 @@ async function main(): Promise<void> {
 		uniformValues[20] = debuggerParams.specularStrength; // specularStrength
 		device.queue.writeBuffer(uniformBuffer, 0, uniformValues);
 
+		// Compute and upload per-chunk wrap offsets
+		const ww = world.widthChunks * CHUNK_SIZE * BLOCK_SIZE;
+		const hw = ww / 2;
+		const offsetData = new Float32Array(4);
+		for (const chunkRender of chunkRenderMap.values()) {
+			const dx = chunkRender.cx * CHUNK_SIZE * BLOCK_SIZE - cameraPos[0];
+			const dz = chunkRender.cz * CHUNK_SIZE * BLOCK_SIZE - cameraPos[2];
+
+			offsetData[0] = dx > hw ? -ww : dx < -hw ? ww : 0;
+			offsetData[2] = dz > hw ? -ww : dz < -hw ? ww : 0;
+
+			device.queue.writeBuffer(chunkRender.offsetBuffer, 0, offsetData);
+		}
+
 		// Draw all chunk meshes
 		pass.setPipeline(pipeline);
 		pass.setBindGroup(0, bindGroup);
 		for (const chunkRender of chunkRenderMap.values()) {
+			pass.setBindGroup(1, chunkRender.offsetBindGroup);
 			pass.setVertexBuffer(0, chunkRender.vertexBuffer);
 			pass.draw(chunkRender.numVertices);
 			debuggerParams.vertices += chunkRender.numVertices;
@@ -508,6 +631,7 @@ async function main(): Promise<void> {
 			pass.setPipeline(barycentricCoordinatesBasedWireframePipeline);
 			for (const chunkRender of chunkRenderMap.values()) {
 				pass.setBindGroup(0, chunkRender.wireframeBindGroup);
+				pass.setBindGroup(1, chunkRender.offsetBindGroup);
 				pass.draw(chunkRender.numVertices);
 			}
 		}

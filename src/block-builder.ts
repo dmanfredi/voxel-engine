@@ -1,6 +1,6 @@
 import { CHUNK_SIZE } from './chunk';
 import cubeSky from './generators/cube-sky';
-import mengerSky from './generators/menger-sky';
+// import mengerSky from './generators/menger-sky';
 // import mengerSponges from './generators/menger';
 // import perlinTerrain from './generators/perlin';
 
@@ -13,9 +13,9 @@ export default function buildChunkBlocks(
 
 	// perlinTerrain(cx, cy, cz, blocks);
 
-	//cubeSky(blocks);
+	cubeSky(blocks);
 
-	mengerSky(cx, cy, cz, blocks);
+	// mengerSky(cx, cy, cz, blocks);
 
 	// mengerSponges(cx, cy, cz, blocks);
 

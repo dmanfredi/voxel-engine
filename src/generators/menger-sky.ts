@@ -1,10 +1,10 @@
 import { CHUNK_SIZE } from '../chunk';
 import { MARBLE } from '../block';
 
-const LEVELS = [3, 9, 27] as const;
+const LEVELS = [3, 9, 27, 81] as const;
 const GRID_SPACING = 48;
 const SPAWN_CHANCE = 2;
-const MAX_SPONGE_SIZE = 27;
+const MAX_SPONGE_SIZE = 81;
 
 function seededRng(gx: number, gy: number, gz: number): () => number {
 	let seed = Math.sin(gx * 12.9898 + gy * 78.233 + gz * 45.164) * 43758.5453;
@@ -54,9 +54,10 @@ export default function mengerSky(
 
 				if (rng() > SPAWN_CHANCE) continue;
 
-				// Weight toward smaller sponges: level 1 = 9/13, level 2 = 3/13, level 3 = 1/13
-				const roll = rng() * 13;
-				const level = roll < 9 ? 1 : roll < 12 ? 2 : 3;
+				// Scale down by 9x per level: 729/820, 81/820, 9/820, 1/820
+				const roll = rng() * 820;
+				const level =
+					roll < 729 ? 1 : roll < 810 ? 2 : roll < 819 ? 3 : 4;
 				const size = LEVELS[level - 1];
 				if (size === undefined) continue;
 

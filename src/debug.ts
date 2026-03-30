@@ -60,6 +60,21 @@ export function BuildDebug(render: () => void): void {
 		step: 0.05,
 	});
 
+	const hideStyle = document.createElement('style');
+	hideStyle.textContent =
+		'body.hide-ui > :not(canvas) { display: none !important; }';
+	document.head.appendChild(hideStyle);
+
+	const toggleUI = () => {
+		document.body.classList.toggle('hide-ui');
+	};
+	window.addEventListener('keydown', (e) => {
+		if (e.code === 'F1') {
+			e.preventDefault();
+			toggleUI();
+		}
+	});
+
 	const fogFolder = pane.addFolder({ title: 'Fog' });
 	fogFolder.addBinding(debuggerParams, 'fogStart', {
 		label: 'Fog Start',

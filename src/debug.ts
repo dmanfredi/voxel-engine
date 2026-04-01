@@ -12,8 +12,8 @@ export const debuggerParams = {
 	targetBlock: 'none',
 	shininess: 32,
 	specularStrength: 0.3,
-	fogStart: 1400,
-	fogEnd: 1500,
+	fogStart: 1300,
+	fogEnd: 1400,
 };
 
 let pane: Pane | null = null;

@@ -27,6 +27,7 @@
 		"vite": "^7.2.7"
 	},
 	"dependencies": {
+		"comlink": "^4.4.2",
 		"noisejs": "^2.1.0",
 		"stats.js": "^0.17.0",
 		"tweakpane": "^4.0.5",

@@ -1,6 +1,5 @@
-import { type BlockId, AIR, blockRegistry } from './block';
+import { type BlockId, type BlockProps, AIR } from './block';
 import { CHUNK_SIZE } from './chunk';
-import type { World } from './world';
 
 export interface GreedyMeshResult {
 	vertexData: Float32Array<ArrayBuffer>;
@@ -14,9 +13,9 @@ const AO_CURVE: readonly [number, number, number, number] = [
 	0.2, 0.45, 0.7, 1.0,
 ];
 
-// CHUNK_SIZE = 32 = 2^5
-const CHUNK_SHIFT = 5;
-const CHUNK_MASK = CHUNK_SIZE - 1; // 31
+// Padded block array dimensions (chunk + 1-block border on each side)
+const PAD = CHUNK_SIZE + 2; // 34
+const PAD2 = PAD * PAD; // 1156
 
 /**
  * Computes ambient occlusion for a single vertex of a face.
@@ -33,61 +32,43 @@ function vertexAO(side1: boolean, side2: boolean, corner: boolean): AO {
  *
  * Claude wrote 90% of this.
  *
- * Takes a World and chunk coordinates, produces an optimized mesh by:
+ * Pure function: takes a padded block array and produces an optimized mesh by:
  * 1. Culling interior faces (faces between two solid blocks)
  * 2. Computing per-vertex AO for each face
  * 3. Merging adjacent coplanar faces with identical AO patterns
  *
- * Block lookups use a fast path for interior blocks (direct array access)
- * and fall through to World for cross-chunk boundary reads.
+ * The padded block array is (CHUNK_SIZE+2)³ and includes a 1-block border
+ * from neighbor chunks, so all block lookups (including AO boundary reads)
+ * are simple array accesses with no external dependencies.
  *
- * @param world - World instance providing block access
+ * @param paddedBlocks - (CHUNK_SIZE+2)³ block array with 1-block neighbor border
  * @param cx - Chunk X coordinate
  * @param cy - Chunk Y coordinate
  * @param cz - Chunk Z coordinate
+ * @param blockSize - World-space size of one block
+ * @param blockProps - Flat arrays of block properties (isSolid, textureScale)
  */
 export function greedyMesh(
-	world: World,
+	paddedBlocks: Uint8Array,
 	cx: number,
 	cy: number,
 	cz: number,
+	blockSize: number,
+	blockProps: BlockProps,
 ): GreedyMeshResult {
-	const blockSize = world.blockSize;
-
 	// World-block offset for this chunk
 	const ox = cx * CHUNK_SIZE;
 	const oy = cy * CHUNK_SIZE;
 	const oz = cz * CHUNK_SIZE;
 	const offsets: [number, number, number] = [ox, oy, oz];
 
-	// Grab the chunk's block array for direct access (fast path).
-	// ~97% of lookups during the sweep are interior to this chunk —
-	// only boundary slices (local coord -1 or CHUNK_SIZE) need World.
-	const chunk = world.getChunk(cx, cy, cz);
-	if (!chunk) {
-		return { vertexData: new Float32Array(0), numVertices: 0 };
-	}
-	const blocks = chunk.blocks;
-
-	/**
-	 * Fast block lookup using chunk-local coordinates.
-	 * If in bounds [0, 31] on all axes: direct array read (no Map lookup).
-	 * Otherwise: falls through to world.getBlock for cross-chunk access.
-	 */
-	function getBlockFast(lx: number, ly: number, lz: number): BlockId {
-		// Single branch: if any coord has bits outside 0-4 (negative or >= 32),
-		// the OR will have bits set above CHUNK_MASK.
-		if (((lx | ly | lz) & ~CHUNK_MASK) === 0) {
-			return (
-				blocks[(ly << (CHUNK_SHIFT * 2)) + (lz << CHUNK_SHIFT) + lx] ??
-				AIR
-			);
-		}
-		return world.getBlock(ox + lx, oy + ly, oz + lz);
+	/** Read a block from the padded array using chunk-local coordinates [-1, CHUNK_SIZE]. */
+	function getBlock(lx: number, ly: number, lz: number): BlockId {
+		return paddedBlocks[(ly + 1) * PAD2 + (lz + 1) * PAD + (lx + 1)] ?? AIR;
 	}
 
-	function isSolidFast(lx: number, ly: number, lz: number): boolean {
-		return blockRegistry.isSolid(getBlockFast(lx, ly, lz));
+	function isSolid(lx: number, ly: number, lz: number): boolean {
+		return blockProps.isSolid[getBlock(lx, ly, lz)] ?? false;
 	}
 
 	/**
@@ -137,9 +118,9 @@ export function greedyMesh(
 			cr[vIdx] = faceV + sv;
 
 			ao[c] = vertexAO(
-				isSolidFast(s1[0], s1[1], s1[2]),
-				isSolidFast(s2[0], s2[1], s2[2]),
-				isSolidFast(cr[0], cr[1], cr[2]),
+				isSolid(s1[0], s1[1], s1[2]),
+				isSolid(s2[0], s2[1], s2[2]),
+				isSolid(cr[0], cr[1], cr[2]),
 			);
 		}
 
@@ -197,8 +178,8 @@ export function greedyMesh(
 					// Get block IDs on either side of this potential face.
 					// Uses fast path (direct array read) for interior blocks,
 					// falls through to World for boundary slices.
-					const blockA = getBlockFast(x[0], x[1], x[2]);
-					const blockB = getBlockFast(
+					const blockA = getBlock(x[0], x[1], x[2]);
+					const blockB = getBlock(
 						x[0] + q[0],
 						x[1] + q[1],
 						x[2] + q[2],
@@ -357,7 +338,7 @@ export function greedyMesh(
 
 		// World-aligned UVs: offset by block-space origin so adjacent quads
 		// tile seamlessly even when textureScale > 1
-		const s = blockRegistry.get(quad.blockType)?.textureScale ?? 1;
+		const s = blockProps.textureScale[quad.blockType] ?? 1;
 		const ou = quad.originU / s;
 		const ov = quad.originV / s;
 		const uw = quad.uvWidth / s;

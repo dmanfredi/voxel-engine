@@ -6,7 +6,7 @@ interface ChunkLoaderOptions {
 	world: World;
 	verticalRadius: number;
 	loadsPerFrame: number;
-	meshChunk: (cx: number, cy: number, cz: number) => void;
+	scheduleMeshChunk: (cx: number, cy: number, cz: number) => void;
 	unmeshChunk: (cx: number, cy: number, cz: number) => void;
 }
 
@@ -20,7 +20,7 @@ export class ChunkLoader {
 	private world: World;
 	private verticalRadius: number;
 	private loadsPerFrame: number;
-	private meshChunk: (cx: number, cy: number, cz: number) => void;
+	private scheduleMeshChunk: (cx: number, cy: number, cz: number) => void;
 	private unmeshChunk: (cx: number, cy: number, cz: number) => void;
 
 	private lastPlayerCY: number | null = null;
@@ -30,7 +30,7 @@ export class ChunkLoader {
 		this.world = opts.world;
 		this.verticalRadius = opts.verticalRadius;
 		this.loadsPerFrame = opts.loadsPerFrame;
-		this.meshChunk = opts.meshChunk;
+		this.scheduleMeshChunk = opts.scheduleMeshChunk;
 		this.unmeshChunk = opts.unmeshChunk;
 	}
 
@@ -112,14 +112,14 @@ export class ChunkLoader {
 
 			const blocks = buildChunkBlocks(cx, cy, cz);
 			this.world.addChunk(new Chunk(cx, cy, cz, blocks));
-			this.meshChunk(cx, cy, cz);
+			this.scheduleMeshChunk(cx, cy, cz);
 
 			// Remesh vertical neighbors for correct boundary AO
 			if (this.world.hasChunk(cx, cy - 1, cz)) {
-				this.meshChunk(cx, cy - 1, cz);
+				this.scheduleMeshChunk(cx, cy - 1, cz);
 			}
 			if (this.world.hasChunk(cx, cy + 1, cz)) {
-				this.meshChunk(cx, cy + 1, cz);
+				this.scheduleMeshChunk(cx, cy + 1, cz);
 			}
 
 			loaded++;

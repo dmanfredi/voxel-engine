@@ -24,6 +24,28 @@ export class BlockRegistry {
 	isSolid(id: BlockId): boolean {
 		return this.blocks[id]?.solid ?? false;
 	}
+
+	get count(): number {
+		return this.blocks.length;
+	}
+}
+
+/** Flat arrays of block properties for use in the mesher (and workers). */
+export interface BlockProps {
+	isSolid: boolean[];
+	textureScale: number[];
+}
+
+/** Extract block properties into flat arrays suitable for transfer to a worker. */
+export function extractBlockProps(): BlockProps {
+	const isSolid: boolean[] = [];
+	const textureScale: number[] = [];
+	for (let id = 0; id < blockRegistry.count; id++) {
+		const props = blockRegistry.get(id);
+		isSolid[id] = props?.solid ?? false;
+		textureScale[id] = props?.textureScale ?? 1;
+	}
+	return { isSolid, textureScale };
 }
 
 export const blockRegistry = new BlockRegistry();

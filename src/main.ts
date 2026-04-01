@@ -8,12 +8,13 @@ import { greedyMesh } from './greedy-mesh';
 import { FREECAM, physicsTick, createPlayerState } from './movement';
 import { World } from './world';
 import { CHUNK_SIZE, chunkKey } from './chunk';
-import { AIR, MARBLE } from './block';
+import { AIR, MARBLE, extractBlockProps } from './block';
 import { raycast, type RaycastHit } from './raycast';
 import { initHighlight, drawHighlight } from './highlight';
 import { createGameState } from './game-state';
 import { autoClimb } from './auto-climb';
 import { ChunkLoader } from './chunk-loader';
+import { MeshScheduler } from './mesh-scheduler';
 
 // TODO
 // - Skylights
@@ -301,23 +302,29 @@ async function main(): Promise<void> {
 	// Per-chunk GPU resources
 	const chunkRenderMap = new Map<string, ChunkRenderData>();
 
-	/** Build or rebuild GPU resources for a single chunk. */
-	function meshChunk(cx: number, cy: number, cz: number): void {
-		if (!world.getChunk(cx, cy, cz)) return;
+	// Block properties extracted once for mesher (main-thread sync path + worker init)
+	const blockProps = extractBlockProps();
 
-		const key = chunkKey(cx, cy, cz);
+	/** Apply a completed mesh result: create GPU buffers and swap into the render map. */
+	function applyMeshResult(
+		key: string,
+		cx: number,
+		cy: number,
+		cz: number,
+		vertexData: Float32Array<ArrayBuffer>,
+		numVertices: number,
+	): void {
+		// Don't apply if the chunk was unloaded while the mesh was in-flight
+		if (!world.hasChunk(cx, cy, cz)) return;
 
-		// Destroy old buffers if they exist
 		const old = chunkRenderMap.get(key);
-		if (old) {
-			old.vertexBuffer.destroy();
-			old.offsetBuffer.destroy();
-		}
-
-		const { vertexData, numVertices } = greedyMesh(world, cx, cy, cz);
 
 		if (numVertices === 0) {
-			chunkRenderMap.delete(key);
+			if (old) {
+				old.vertexBuffer.destroy();
+				old.offsetBuffer.destroy();
+				chunkRenderMap.delete(key);
+			}
 			return;
 		}
 
@@ -352,6 +359,7 @@ async function main(): Promise<void> {
 			entries: [{ binding: 0, resource: { buffer: offsetBuffer } }],
 		});
 
+		// Swap-then-destroy: old mesh stays visible until the new one is ready
 		chunkRenderMap.set(key, {
 			cx,
 			cy,
@@ -362,11 +370,68 @@ async function main(): Promise<void> {
 			offsetBindGroup,
 			numVertices,
 		});
+
+		if (old) {
+			old.vertexBuffer.destroy();
+			old.offsetBuffer.destroy();
+		}
 	}
 
-	/** Destroy GPU resources for a chunk. */
+	/** Synchronous mesh path — used for initial load only. */
+	function meshChunkSync(cx: number, cy: number, cz: number): void {
+		if (!world.getChunk(cx, cy, cz)) return;
+		const paddedBlocks = world.buildPaddedBlocks(cx, cy, cz);
+		const { vertexData, numVertices } = greedyMesh(
+			paddedBlocks,
+			cx,
+			cy,
+			cz,
+			world.blockSize,
+			blockProps,
+		);
+		applyMeshResult(
+			chunkKey(cx, cy, cz),
+			cx,
+			cy,
+			cz,
+			vertexData,
+			numVertices,
+		);
+	}
+
+	// Mesh scheduler: sends meshing work to a web worker
+	const meshScheduler = new MeshScheduler(
+		world.blockSize,
+		blockProps,
+		(key, cx, cy, cz, result) => {
+			applyMeshResult(
+				key,
+				cx,
+				cy,
+				cz,
+				result.vertexData,
+				result.numVertices,
+			);
+		},
+	);
+
+	/** Async mesh path — submits work to the web worker. */
+	function scheduleMeshChunk(
+		cx: number,
+		cy: number,
+		cz: number,
+		priority: 'interactive' | 'streaming',
+	): void {
+		if (!world.getChunk(cx, cy, cz)) return;
+		const key = chunkKey(cx, cy, cz);
+		const paddedBlocks = world.buildPaddedBlocks(cx, cy, cz);
+		meshScheduler.scheduleMesh(key, paddedBlocks, cx, cy, cz, priority);
+	}
+
+	/** Destroy GPU resources for a chunk and cancel pending worker jobs. */
 	function unmeshChunk(cx: number, cy: number, cz: number): void {
 		const key = chunkKey(cx, cy, cz);
+		meshScheduler.cancel(key);
 		const data = chunkRenderMap.get(key);
 		if (data) {
 			data.vertexBuffer.destroy();
@@ -380,14 +445,16 @@ async function main(): Promise<void> {
 		world,
 		verticalRadius: VERTICAL_RADIUS,
 		loadsPerFrame: 4,
-		meshChunk,
+		scheduleMeshChunk: (cx, cy, cz) => {
+			scheduleMeshChunk(cx, cy, cz, 'streaming');
+		},
 		unmeshChunk,
 	});
 
-	// Initial synchronous load + mesh
+	// Initial synchronous load + mesh (sync path so world is visible on first frame)
 	chunkLoader.loadInitial(SPAWN_CY);
 	world.forEachChunk((chunk) => {
-		meshChunk(chunk.cx, chunk.cy, chunk.cz);
+		meshChunkSync(chunk.cx, chunk.cy, chunk.cz);
 	});
 
 	// Initialize skybox
@@ -455,7 +522,7 @@ async function main(): Promise<void> {
 	}
 	updateBPDisplay();
 
-	/** Remesh a single chunk and any boundary neighbors affected by a block change. */
+	/** Schedule remeshing for a chunk and any boundary neighbors affected by a block change. */
 	function onBlockChanged(bx: number, by: number, bz: number): void {
 		// Wrap horizontal block coords so chunk lookups resolve correctly
 		const wb = world.widthChunks * CHUNK_SIZE;
@@ -465,23 +532,25 @@ async function main(): Promise<void> {
 		const cx = Math.floor(bx / CHUNK_SIZE);
 		const cy = Math.floor(by / CHUNK_SIZE);
 		const cz = Math.floor(bz / CHUNK_SIZE);
-		// console.log("C's: ", cx, cy, cz);
-		meshChunk(cx, cy, cz);
+		scheduleMeshChunk(cx, cy, cz, 'interactive');
 
 		// If the block is on a chunk boundary, remesh the neighbor for correct AO
 		const lx = ((bx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
 		const ly = ((by % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
 		const lz = ((bz % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
 
-		// console.log("L's: ", lx, ly, lz);
-
 		const w = world.widthChunks;
-		if (lx === 0) meshChunk((((cx - 1) % w) + w) % w, cy, cz);
-		if (lx === CHUNK_SIZE - 1) meshChunk((cx + 1) % w, cy, cz);
-		if (ly === 0) meshChunk(cx, cy - 1, cz);
-		if (ly === CHUNK_SIZE - 1) meshChunk(cx, cy + 1, cz);
-		if (lz === 0) meshChunk(cx, cy, (((cz - 1) % w) + w) % w);
-		if (lz === CHUNK_SIZE - 1) meshChunk(cx, cy, (cz + 1) % w);
+		if (lx === 0)
+			scheduleMeshChunk((((cx - 1) % w) + w) % w, cy, cz, 'interactive');
+		if (lx === CHUNK_SIZE - 1)
+			scheduleMeshChunk((cx + 1) % w, cy, cz, 'interactive');
+		if (ly === 0) scheduleMeshChunk(cx, cy - 1, cz, 'interactive');
+		if (ly === CHUNK_SIZE - 1)
+			scheduleMeshChunk(cx, cy + 1, cz, 'interactive');
+		if (lz === 0)
+			scheduleMeshChunk(cx, cy, (((cz - 1) % w) + w) % w, 'interactive');
+		if (lz === CHUNK_SIZE - 1)
+			scheduleMeshChunk(cx, cy, (cz + 1) % w, 'interactive');
 	}
 
 	function requestRender() {

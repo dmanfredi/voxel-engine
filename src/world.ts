@@ -77,4 +77,81 @@ export class World {
 	isSolid(x: number, y: number, z: number): boolean {
 		return blockRegistry.isSolid(this.getBlock(x, y, z));
 	}
+
+	/**
+	 * Build a padded (CHUNK_SIZE+2)³ block array for the mesher.
+	 * Contains the target chunk's blocks in the interior, plus a 1-block
+	 * border read directly from neighbor chunk arrays.
+	 *
+	 * Pre-fetches the 26 neighbor chunks (6 face + 12 edge + 8 corner) with
+	 * only 26 Map lookups total, then copies border cells via direct array
+	 * access — no per-cell getBlock/chunkKey/string allocation overhead.
+	 */
+	buildPaddedBlocks(cx: number, cy: number, cz: number): Uint8Array {
+		const PAD = CHUNK_SIZE + 2;
+		const PAD2 = PAD * PAD;
+		const MASK = CHUNK_SIZE - 1; // 31 — works because CHUNK_SIZE is a power of 2
+		const CS2 = CHUNK_SIZE * CHUNK_SIZE;
+		const padded = new Uint8Array(PAD * PAD2);
+
+		const chunk = this.getChunk(cx, cy, cz);
+		if (!chunk) return padded;
+
+		// Fast interior copy: row-by-row from the chunk's flat block array
+		for (let ly = 0; ly < CHUNK_SIZE; ly++) {
+			for (let lz = 0; lz < CHUNK_SIZE; lz++) {
+				const srcOff = ly * CS2 + lz * CHUNK_SIZE;
+				const dstOff = (ly + 1) * PAD2 + (lz + 1) * PAD + 1;
+				padded.set(
+					chunk.blocks.subarray(srcOff, srcOff + CHUNK_SIZE),
+					dstOff,
+				);
+			}
+		}
+
+		// Border: iterate the 26 neighbor directions, fetch each chunk once,
+		// then copy the relevant border cells directly from its block array.
+		const w = this.widthChunks;
+		for (let dy = -1; dy <= 1; dy++) {
+			for (let dz = -1; dz <= 1; dz++) {
+				for (let dx = -1; dx <= 1; dx++) {
+					if (dx === 0 && dy === 0 && dz === 0) continue;
+
+					const ncx = (((cx + dx) % w) + w) % w;
+					const ncy = cy + dy;
+					const ncz = (((cz + dz) % w) + w) % w;
+					const neighbor = this.getChunk(ncx, ncy, ncz);
+					if (!neighbor) continue;
+					const nb = neighbor.blocks;
+
+					// Determine which padded cells this neighbor fills.
+					// For the offset axis: just the single border slice (-1 or CHUNK_SIZE).
+					// For non-offset axes: the full interior range [0, CHUNK_SIZE-1].
+					const lxMin = dx === -1 ? -1 : dx === 1 ? CHUNK_SIZE : 0;
+					const lxMax = dx === -1 ? -1 : dx === 1 ? CHUNK_SIZE : MASK;
+					const lyMin = dy === -1 ? -1 : dy === 1 ? CHUNK_SIZE : 0;
+					const lyMax = dy === -1 ? -1 : dy === 1 ? CHUNK_SIZE : MASK;
+					const lzMin = dz === -1 ? -1 : dz === 1 ? CHUNK_SIZE : 0;
+					const lzMax = dz === -1 ? -1 : dz === 1 ? CHUNK_SIZE : MASK;
+
+					for (let ly = lyMin; ly <= lyMax; ly++) {
+						for (let lz = lzMin; lz <= lzMax; lz++) {
+							for (let lx = lxMin; lx <= lxMax; lx++) {
+								padded[
+									(ly + 1) * PAD2 + (lz + 1) * PAD + (lx + 1)
+								] =
+									nb[
+										(ly & MASK) * CS2 +
+											(lz & MASK) * CHUNK_SIZE +
+											(lx & MASK)
+									];
+							}
+						}
+					}
+				}
+			}
+		}
+
+		return padded;
+	}
 }

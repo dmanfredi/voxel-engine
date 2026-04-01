@@ -23,7 +23,7 @@ No test framework is configured.
 
 ### Render Pipeline (src/main.ts)
 
-The application runs a single-chunk render loop with three ordered passes:
+The application runs a multi-chunk render loop with three ordered passes:
 
 1. **Main geometry pass** — textured voxel mesh with depth write
 2. **Wireframe pass** — optional barycentric debug overlay (additive blend)
@@ -33,10 +33,14 @@ The game loop uses `requestAnimationFrame` for continuous ticking (physics + ren
 
 ### Chunk & Mesh Generation
 
-- **block-builder.ts** generates a 128×128×128 block array using 3D Perlin noise (frequency 0.081). Blocks indexed as `blocks[y][z][x]`, block size = 10 world units. Solid blocks where `perlin3 > 0`.
-- **greedy-mesh.ts** — AO-aware greedy meshing. See "Greedy Mesher Details" below.
+- **block-builder.ts** generates a `Uint8Array(32³)` block array per chunk. Multiple generators available (Perlin terrain, Menger sponge, etc.), selected in block-builder.ts.
+- **greedy-mesh.ts** — AO-aware greedy meshing. Pure function: takes a padded block array + flat property arrays, returns vertex data. No World dependency — runs identically on main thread (sync initial load) or in a web worker (async runtime). See "Greedy Mesher Details" below.
+- **mesh-worker.ts** — Comlink-exposed web worker that runs `greedyMesh`. Receives `BlockProps` once at init, then processes mesh requests with transferred buffers.
+- **mesh-scheduler.ts** — Single-worker scheduler with key-based dedup, revision-checked stale result rejection, and priority queue (interactive > streaming). Main thread code submits jobs via `scheduleMesh()` and receives results via callback.
 
 ### Greedy Mesher Details (src/greedy-mesh.ts)
+
+The mesher is a pure function: `greedyMesh(paddedBlocks, cx, cy, cz, blockSize, blockProps)`. It takes a `Uint8Array((CHUNK_SIZE+2)³)` — the chunk's blocks plus a 1-block border from all 26 neighbors — so every block lookup (including diagonal AO reads) is a single flat array access. `World.buildPaddedBlocks()` assembles this on the main thread by pre-fetching 26 neighbor chunks and copying border cells directly from their block arrays.
 
 The mesher runs in three phases and has several non-obvious design decisions:
 
@@ -63,7 +67,7 @@ The mesher runs in three phases and has several non-obvious design decisions:
 - **Triangulation flip**: when `ao0 + ao2 > ao1 + ao3`, splits along v1-v3 diagonal instead of v0-v2 to avoid AO interpolation artifacts.
 - **Winding order**: positive=CCW, negative=CW. Combined with flip: 4 triangle orderings total.
 
-**Vertex format**: `pos(3) + normal(3) + uv(2) + ao(1) + color(1 as u8×4) = 10 floats = 40 bytes`. The wireframe shader reads the same buffer as storage, striding by `10u`.
+**Vertex format**: `pos(3) + normal(3) + uv(2) + ao(1) + texLayer(1 as u32) = 10 floats = 40 bytes`. The wireframe shader reads the same buffer as storage, striding by `10u`.
 
 ### Physics & Collision (src/movement.ts, src/collision.ts)
 
@@ -83,7 +87,7 @@ All WGSL shaders are defined as TypeScript string constants:
 
 ### Supporting Modules
 
-- **Block.ts** — block type as string constants (`MARBLE`, `NOTHING`), `Block` class wrapping a type
+- **block.ts** — `BlockId` as numeric constants (`AIR`, `MARBLE`, `BRICK`), `BlockRegistry` mapping IDs to properties (solid, textureScale). `BlockProps` interface + `extractBlockProps()` for serializing registry data to workers.
 - **debug.ts** — stats.js FPS counter + Tweakpane panel (wireframe toggle, freecam toggle, vertex count)
 
 ### Camera & Input
@@ -92,13 +96,13 @@ FPS-style camera with pointer lock. WASD movement, Space jump (or freecam up), S
 
 ## TypeScript Configuration
 
-Strict mode with additional flags: `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `noImplicitReturns`, `noFallthroughCasesInSwitch`. Target ES2022, ESNext modules. WebGPU types via `@webgpu/types`. Uses `verbatimModuleSyntax` (requires `import type` for type-only imports).
+Strict mode with additional flags: `exactOptionalPropertyTypes`, `noImplicitReturns`, `noFallthroughCasesInSwitch`. `noUncheckedIndexedAccess` is **off**. Target ES2022, ESNext modules. WebGPU types via `@webgpu/types`. Uses `verbatimModuleSyntax` (requires `import type` for type-only imports).
 
 ## Code Style
 
 Respect the TypeScript and ESLint configurations as they are. Do not suppress lint rules with `eslint-disable` comments (e.g. `@typescript-eslint/no-non-null-assertion`). If the checker complains, fix the underlying type issue instead — use narrower types, union types, or runtime guards so the code is provably correct without escape hatches.
 
-ESLint uses `strictTypeChecked` + `stylisticTypeChecked` rulesets. Two rules are explicitly turned off: `prefer-optional-chain` and `no-unnecessary-condition` (due to `noUncheckedIndexedAccess` making many conditions technically necessary).
+ESLint uses `strictTypeChecked` + `stylisticTypeChecked` rulesets. Two rules are explicitly turned off: `prefer-optional-chain` and `no-unnecessary-condition`.
 
 After making code changes, always run `npx prettier --write "src/**/*.ts"` to format before committing or finishing.
 
@@ -108,3 +112,4 @@ After making code changes, always run `npx prettier --write "src/**/*.ts"` to fo
 - **noisejs** — Perlin noise terrain generation
 - **tweakpane** — debug UI controls
 - **stats.js** — FPS monitoring
+- **comlink** — worker message passing (wraps postMessage into async function calls)

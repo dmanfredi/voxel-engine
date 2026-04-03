@@ -611,6 +611,7 @@ async function main(): Promise<void> {
 		debuggerParams.targetBlock = currentHit
 			? currentHit.blockPos.join(', ')
 			: 'none';
+		debuggerParams.playerPos = `${Math.round(cameraPos[0] / BLOCK_SIZE)}, ${Math.round(cameraPos[1] / BLOCK_SIZE)}, ${Math.round(cameraPos[2] / BLOCK_SIZE)}`;
 
 		requestRender();
 

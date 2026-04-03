@@ -10,6 +10,7 @@ export const debuggerParams = {
 	freecam: false,
 	vertices: 0,
 	targetBlock: 'none',
+	playerPos: '0, 0, 0',
 	shininess: 32,
 	specularStrength: 0.3,
 	fogStart: 1300,
@@ -38,6 +39,10 @@ export function BuildDebug(render: () => void): void {
 	pane.addBinding(debuggerParams, 'targetBlock', {
 		readonly: true,
 		label: 'Target',
+	});
+	pane.addBinding(debuggerParams, 'playerPos', {
+		readonly: true,
+		label: 'Location',
 	});
 
 	wireframeBinding.on('change', () => {

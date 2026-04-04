@@ -1,4 +1,10 @@
 import { mat4, type Mat4 } from 'wgpu-matrix';
+import skyPx from '../assets/skybox-sunny/px.png';
+import skyNx from '../assets/skybox-sunny/nx.png';
+import skyPy from '../assets/skybox-sunny/py.png';
+import skyNy from '../assets/skybox-sunny/ny.png';
+import skyPz from '../assets/skybox-sunny/pz.png';
+import skyNz from '../assets/skybox-sunny/nz.png';
 
 export interface SkyboxResources {
 	pipeline: GPURenderPipeline;
@@ -241,14 +247,7 @@ export async function initSkybox(
 
 	const texture = await loadCubemapTexture(
 		device,
-		[
-			'assets/skybox-sunny/px.png',
-			'assets/skybox-sunny/nx.png',
-			'assets/skybox-sunny/py.png',
-			'assets/skybox-sunny/ny.png',
-			'assets/skybox-sunny/pz.png',
-			'assets/skybox-sunny/nz.png',
-		],
+		[skyPx, skyNx, skyPy, skyNy, skyPz, skyNz],
 		{ mips: true },
 	);
 

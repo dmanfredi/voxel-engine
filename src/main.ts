@@ -15,6 +15,8 @@ import { createGameState } from './game-state';
 import { autoClimb } from './auto-climb';
 import { ChunkLoader } from './chunk-loader';
 import { MeshScheduler } from './mesh-scheduler';
+import marbleTextureUrl from '../assets/MarbleBase1024.png';
+import bricksTextureUrl from '../assets/Bricks060_1K-PNG_Color.png';
 
 // TODO
 // - Skylights
@@ -241,9 +243,9 @@ async function main(): Promise<void> {
 	// Load block textures into a texture array (one layer per block type)
 	const TEXTURE_SIZE = 1024;
 	const blockTextureSources: { layer: number; src: string }[] = [
-		{ layer: 0, src: '../assets/MarbleBase1024.png' }, // AIR placeholder (never sampled)
-		{ layer: 1, src: '../assets/MarbleBase1024.png' }, // DIRT
-		{ layer: 2, src: '../assets/Bricks060_1K-PNG_Color.png' },
+		{ layer: 0, src: marbleTextureUrl }, // AIR placeholder (never sampled)
+		{ layer: 1, src: marbleTextureUrl }, // DIRT
+		{ layer: 2, src: bricksTextureUrl },
 	];
 
 	const numLayers = blockTextureSources.length;

@@ -22,7 +22,8 @@ canvas {
 
 .ui-elements {
 	position: absolute;
-	z-index: 1;
+	top: 0;
+	left: 0;
 	width: 100%;
 	height: 100%;
 
@@ -38,6 +39,9 @@ canvas {
 
 		border: 2px solid rgb(255, 255, 255);
 		border-radius: 5px;
+
+		/* mix-blend-mode: difference;
+		background: white; */
 	}
 
 	.bp-orb {

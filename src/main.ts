@@ -16,7 +16,7 @@ import { autoClimb } from './auto-climb';
 import { ChunkLoader } from './chunk-loader';
 import { MeshScheduler } from './mesh-scheduler';
 import { initEntityRenderer } from './entity-renderer';
-import { EntityManager, EntityType } from './entity';
+import { EntityManager, Shape, Material, Role } from './entity';
 import marbleTextureUrl from '../assets/MarbleBase1024.png';
 import bricksTextureUrl from '../assets/Bricks060_1K-PNG_Color.png';
 
@@ -491,13 +491,15 @@ async function main(): Promise<void> {
 		bindGroup,
 	);
 	const entityManager = new EntityManager(entityRenderer, device);
-	entityManager.spawn(
-		EntityType.Sphere,
-		worldCenter,
-		worldCenter + 50,
-		worldCenter - 100,
-		40,
-	);
+	entityManager.spawn({
+		shape: Shape.Sphere,
+		material: Material.Marble,
+		role: Role.Rush,
+		x: worldCenter,
+		y: worldCenter + 50,
+		z: worldCenter - 100,
+		size: 200,
+	});
 
 	// Initialize block highlight outline
 	// const highlight = initHighlight(device, presentationFormat);

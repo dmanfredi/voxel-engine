@@ -1,13 +1,16 @@
 /**
  * Entity system — types, lifecycle management, and world integration.
  *
- * Entities are game objects that aren't part of the voxel grid: enemies,
- * projectiles, etc. Each entity has a position/rotation/scale in world space
- * and GPU resources for rendering.
+ * Enemies are defined by 5 composable axes:
+ *   Shape    → mesh geometry, movement physics, behavior palette
+ *   Role     → specific AI strategy from the shape's palette
+ *   Material → texture, physical stats (density, speed, hardness)
+ *   Size     → stat scaling (passed as `size` at spawn)
+ *   Traits   → bolt-on behavioral modifiers (future)
  */
 
 import { mat4 } from 'wgpu-matrix';
-import { MARBLE } from './block';
+import { MARBLE, BRICK } from './block';
 import { createIcosphere } from './icosphere';
 import {
 	createEntityRenderData,
@@ -17,10 +20,47 @@ import {
 } from './entity-renderer';
 import type { EntityRenderer, EntityRenderData } from './entity-renderer';
 
-export const EntityType = {
-	Sphere: 0,
-} as const;
-export type EntityType = (typeof EntityType)[keyof typeof EntityType];
+// ── Axes ────────────────────────────────────────────────────────────
+
+export const Shape = { Sphere: 0, Cube: 1 } as const;
+export type Shape = (typeof Shape)[keyof typeof Shape];
+
+export const Role = { Rush: 0, Zone: 1, Crush: 2 } as const;
+export type Role = (typeof Role)[keyof typeof Role];
+
+export const Material = { Marble: 0, Brick: 1 } as const;
+export type Material = (typeof Material)[keyof typeof Material];
+
+export type Trait = number;
+
+// ── Material properties ─────────────────────────────────────────────
+
+interface MaterialProperties {
+	name: string;
+	texLayer: number; // index into block texture array
+	density: number; // drives mass = density * size³
+	baseSpeed: number; // movement speed multiplier
+	hardness: number; // durability multiplier
+}
+
+const materials: Record<Material, MaterialProperties> = {
+	[Material.Marble]: {
+		name: 'marble',
+		texLayer: MARBLE,
+		density: 2.7,
+		baseSpeed: 1.0,
+		hardness: 0.8,
+	},
+	[Material.Brick]: {
+		name: 'brick',
+		texLayer: BRICK,
+		density: 1.8,
+		baseSpeed: 0.7,
+		hardness: 1.0,
+	},
+};
+
+// ── Entity ──────────────────────────────────────────────────────────
 
 interface Entity {
 	id: number;
@@ -31,42 +71,53 @@ interface Entity {
 	rotY: number;
 	rotZ: number;
 	scale: number;
-	entityType: EntityType;
+	shape: Shape;
+	material: Material;
+	role: Role;
+	traits: Trait[];
 	renderData: EntityRenderData;
 }
 
-// Cached mesh data per entity type (CPU-side, used to create GPU buffers)
+export interface SpawnConfig {
+	shape: Shape;
+	material: Material;
+	role: Role;
+	x: number;
+	y: number;
+	z: number;
+	size: number;
+	traits?: Trait[];
+}
+
+// ── Mesh cache ──────────────────────────────────────────────────────
+
 interface CachedMesh {
 	vertices: Float32Array<ArrayBuffer>;
 	vertexCount: number;
 }
+
+// ── EntityManager ───────────────────────────────────────────────────
 
 export class EntityManager {
 	private entities: Entity[] = [];
 	private nextId = 0;
 	private renderer: EntityRenderer;
 	private device: GPUDevice;
-	private meshCache = new Map<EntityType, CachedMesh>();
+	private meshCache = new Map<Shape, CachedMesh>();
 
 	constructor(renderer: EntityRenderer, device: GPUDevice) {
 		this.renderer = renderer;
 		this.device = device;
 	}
 
-	spawn(
-		type: EntityType,
-		x: number,
-		y: number,
-		z: number,
-		scale: number,
-	): number {
-		let mesh = this.meshCache.get(type);
+	spawn(config: SpawnConfig): number {
+		let mesh = this.meshCache.get(config.shape);
 		if (!mesh) {
-			mesh = this.generateMesh(type);
-			this.meshCache.set(type, mesh);
+			mesh = this.generateMesh(config.shape);
+			this.meshCache.set(config.shape, mesh);
 		}
 
-		const texLayer = this.getTexLayer(type);
+		const texLayer = materials[config.material].texLayer;
 		const renderData = createEntityRenderData(
 			this.device,
 			this.renderer,
@@ -78,27 +129,27 @@ export class EntityManager {
 		const id = this.nextId++;
 		this.entities.push({
 			id,
-			x,
-			y,
-			z,
+			x: config.x,
+			y: config.y,
+			z: config.z,
 			rotX: 0,
 			rotY: 0,
 			rotZ: 0,
-			scale,
-			entityType: type,
+			scale: config.size,
+			shape: config.shape,
+			material: config.material,
+			role: config.role,
+			traits: config.traits ?? [],
 			renderData,
 		});
 
-		// Upload initial transform
 		this.uploadTransform(this.entities[this.entities.length - 1]);
-
 		return id;
 	}
 
-	/** Per-frame update. Will run AI/physics per entity. */
+	/** Per-frame update. Will run AI/behavior per entity. */
 	update(dt: number): void {
 		for (const entity of this.entities) {
-			// Future: run entity AI/behavior here using dt
 			entity.rotY += dt * 0.5;
 			this.uploadTransform(entity);
 		}
@@ -132,21 +183,12 @@ export class EntityManager {
 		);
 	}
 
-	private generateMesh(type: EntityType): CachedMesh {
-		switch (type) {
-			case EntityType.Sphere:
+	private generateMesh(shape: Shape): CachedMesh {
+		switch (shape) {
+			case Shape.Sphere:
 				return createIcosphere(3);
 			default:
 				return createIcosphere(0);
-		}
-	}
-
-	private getTexLayer(type: EntityType): number {
-		switch (type) {
-			case EntityType.Sphere:
-				return MARBLE;
-			default:
-				return MARBLE;
 		}
 	}
 }

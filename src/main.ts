@@ -726,16 +726,16 @@ async function main(): Promise<void> {
 
 		// Draw block highlight outline on targeted block
 		if (currentHit) {
-			drawHighlight(
-				pass,
-				device,
-				highlight,
-				viewProjectionMatrix,
-				currentHit.blockPos[0],
-				currentHit.blockPos[1],
-				currentHit.blockPos[2],
-				BLOCK_SIZE,
-			);
+			// drawHighlight(
+			// 	pass,
+			// 	device,
+			// 	highlight,
+			// 	viewProjectionMatrix,
+			// 	currentHit.blockPos[0],
+			// 	currentHit.blockPos[1],
+			// 	currentHit.blockPos[2],
+			// 	BLOCK_SIZE,
+			// );
 		}
 
 		// Draw skybox (after geometry, uses less-equal depth test)

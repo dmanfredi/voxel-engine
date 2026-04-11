@@ -5,6 +5,7 @@ const LEVELS = [3, 9, 27, 81] as const;
 const GRID_SPACING = 48;
 const SPAWN_CHANCE = 2;
 const MAX_SPONGE_SIZE = 81;
+const MIN_FEATURE_SIZE = 3; // smallest hole = 3×3×3 blocks (skip deepest recursion level)
 
 function seededRng(gx: number, gy: number, gz: number): () => number {
 	let seed = Math.sin(gx * 12.9898 + gy * 78.233 + gz * 45.164) * 43758.5453;
@@ -104,7 +105,14 @@ export default function mengerSky(
 							const ly = chunkWorldY + y - soy;
 							const lz = chunkWorldZ + z - soz;
 
-							if (isMenger(lx, ly, lz, level)) {
+							if (
+								isMenger(
+									Math.floor(lx / MIN_FEATURE_SIZE),
+									Math.floor(ly / MIN_FEATURE_SIZE),
+									Math.floor(lz / MIN_FEATURE_SIZE),
+									level - 1,
+								)
+							) {
 								const index =
 									y * CHUNK_SIZE * CHUNK_SIZE +
 									z * CHUNK_SIZE +

@@ -15,6 +15,8 @@ import { createGameState } from './game-state';
 import { autoClimb } from './auto-climb';
 import { ChunkLoader } from './chunk-loader';
 import { MeshScheduler } from './mesh-scheduler';
+import { initEntityRenderer } from './entity-renderer';
+import { EntityManager, EntityType } from './entity';
 import marbleTextureUrl from '../assets/MarbleBase1024.png';
 import bricksTextureUrl from '../assets/Bricks060_1K-PNG_Color.png';
 
@@ -481,6 +483,22 @@ async function main(): Promise<void> {
 		],
 	});
 
+	// Entity system (enemies, etc.)
+	const entityRenderer = initEntityRenderer(
+		device,
+		presentationFormat,
+		mainGroup0BGL,
+		bindGroup,
+	);
+	const entityManager = new EntityManager(entityRenderer, device);
+	entityManager.spawn(
+		EntityType.Sphere,
+		worldCenter,
+		worldCenter + 50,
+		worldCenter - 100,
+		40,
+	);
+
 	// Initialize block highlight outline
 	// const highlight = initHighlight(device, presentationFormat);
 
@@ -607,6 +625,8 @@ async function main(): Promise<void> {
 				updateBPDisplay();
 			}
 		}
+
+		entityManager.update(dt);
 
 		// Raycast from camera to find targeted block
 		currentHit = raycast(cameraPos, cameraFront, world, MAX_REACH);
@@ -737,6 +757,9 @@ async function main(): Promise<void> {
 			// 	BLOCK_SIZE,
 			// );
 		}
+
+		// Draw entities (after terrain, before skybox)
+		entityManager.draw(pass);
 
 		// Draw skybox (after geometry, uses less-equal depth test)
 		drawSkybox(pass, device, skybox, viewMatrix, projection);

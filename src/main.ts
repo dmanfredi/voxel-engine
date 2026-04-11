@@ -10,7 +10,7 @@ import { World } from './world';
 import { CHUNK_SIZE, chunkKey } from './chunk';
 import { AIR, MARBLE, extractBlockProps } from './block';
 import { raycast, type RaycastHit } from './raycast';
-import { initHighlight, drawHighlight } from './highlight';
+// import { initHighlight, drawHighlight } from './highlight';
 import { createGameState } from './game-state';
 import { autoClimb } from './auto-climb';
 import { ChunkLoader } from './chunk-loader';
@@ -482,7 +482,7 @@ async function main(): Promise<void> {
 	});
 
 	// Initialize block highlight outline
-	const highlight = initHighlight(device, presentationFormat);
+	// const highlight = initHighlight(device, presentationFormat);
 
 	// TODO: re-enable water once it supports chunked worlds
 

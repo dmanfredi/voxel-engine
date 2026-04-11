@@ -493,12 +493,12 @@ async function main(): Promise<void> {
 	const entityManager = new EntityManager(entityRenderer, device);
 	entityManager.spawn({
 		shape: Shape.Sphere,
-		material: Material.Marble,
+		material: Material.Brick,
 		role: Role.Rush,
 		x: worldCenter,
 		y: worldCenter + 50,
 		z: worldCenter - 100,
-		size: 200,
+		size: 10,
 	});
 
 	// Initialize block highlight outline

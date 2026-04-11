@@ -6,7 +6,7 @@
  * Group 1 is per-entity: model matrix + texture layer.
  */
 
-const ENTITY_UNIFORM_SIZE = 80; // mat4x4f(64) + u32 texLayer(4) + padding(12) = 80
+const ENTITY_UNIFORM_SIZE = 80; // mat4x4f(64) + u32 texLayer(4) + f32 texScale(4) + padding(8) = 80
 
 const entityShader = /*wgsl*/ `
 	struct Uniforms {
@@ -21,6 +21,7 @@ const entityShader = /*wgsl*/ `
 	struct EntityUniforms {
 		model: mat4x4f,
 		texLayer: u32,
+		texScale: f32,
 	}
 
 	struct Vertex {
@@ -52,7 +53,7 @@ const entityShader = /*wgsl*/ `
 		out.position = uni.matrix * vec4f(worldPos, 1.0);
 		// Uniform scale: normalize(mat3(model) * normal) is correct
 		out.normal = normalize((entity.model * vec4f(vert.normal, 0.0)).xyz);
-		out.uv = vert.uv;
+		out.uv = vert.uv * entity.texScale;
 		out.worldPos = worldPos;
 		return out;
 	}
@@ -177,6 +178,7 @@ export function createEntityRenderData(
 	vertices: Float32Array<ArrayBuffer>,
 	vertexCount: number,
 	texLayer: number,
+	texScale: number,
 ): EntityRenderData {
 	const vertexBuffer = device.createBuffer({
 		label: 'entity vertex buffer',
@@ -188,6 +190,7 @@ export function createEntityRenderData(
 	const uniformF32 = new Float32Array(ENTITY_UNIFORM_SIZE / 4);
 	const uniformU32 = new Uint32Array(uniformF32.buffer);
 	uniformU32[16] = texLayer;
+	uniformF32[17] = texScale;
 
 	const uniformBuffer = device.createBuffer({
 		label: 'entity uniform buffer',

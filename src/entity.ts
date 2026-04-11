@@ -38,6 +38,7 @@ export type Trait = number;
 interface MaterialProperties {
 	name: string;
 	texLayer: number; // index into block texture array
+	textureScale: number; // UV tiling density (matches block registry values)
 	density: number; // drives mass = density * size³
 	baseSpeed: number; // movement speed multiplier
 	hardness: number; // durability multiplier
@@ -47,6 +48,7 @@ const materials: Record<Material, MaterialProperties> = {
 	[Material.Marble]: {
 		name: 'marble',
 		texLayer: MARBLE,
+		textureScale: 1,
 		density: 2.7,
 		baseSpeed: 1.0,
 		hardness: 0.8,
@@ -54,6 +56,7 @@ const materials: Record<Material, MaterialProperties> = {
 	[Material.Brick]: {
 		name: 'brick',
 		texLayer: BRICK,
+		textureScale: 1,
 		density: 1.8,
 		baseSpeed: 0.7,
 		hardness: 1.0,
@@ -117,13 +120,15 @@ export class EntityManager {
 			this.meshCache.set(config.shape, mesh);
 		}
 
-		const texLayer = materials[config.material].texLayer;
+		const mat = materials[config.material];
+		const texScale = config.size / (mat.textureScale * 10);
 		const renderData = createEntityRenderData(
 			this.device,
 			this.renderer,
 			mesh.vertices,
 			mesh.vertexCount,
-			texLayer,
+			mat.texLayer,
+			texScale,
 		);
 
 		const id = this.nextId++;
@@ -150,7 +155,7 @@ export class EntityManager {
 	/** Per-frame update. Will run AI/behavior per entity. */
 	update(dt: number): void {
 		for (const entity of this.entities) {
-			entity.rotY += dt * 0.5;
+			entity.rotY += dt * 0.0;
 			this.uploadTransform(entity);
 		}
 	}

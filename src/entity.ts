@@ -10,7 +10,7 @@
  */
 
 import { mat4 } from 'wgpu-matrix';
-import { MARBLE, BRICK } from './block';
+import { MARBLE, BRICK, DARK_MARBLE } from './block';
 import { createIcosphere } from './icosphere';
 import {
 	createEntityRenderData,
@@ -28,7 +28,7 @@ export type Shape = (typeof Shape)[keyof typeof Shape];
 export const Role = { Rush: 0, Zone: 1, Crush: 2 } as const;
 export type Role = (typeof Role)[keyof typeof Role];
 
-export const Material = { Marble: 0, Brick: 1 } as const;
+export const Material = { Marble: 0, Brick: 1, DarkMarble: 2 } as const;
 export type Material = (typeof Material)[keyof typeof Material];
 
 export type Trait = number;
@@ -60,6 +60,14 @@ const materials: Record<Material, MaterialProperties> = {
 		density: 1.8,
 		baseSpeed: 0.7,
 		hardness: 1.0,
+	},
+	[Material.DarkMarble]: {
+		name: 'darkMarble',
+		texLayer: DARK_MARBLE,
+		textureScale: 1,
+		density: 4,
+		baseSpeed: 2.0,
+		hardness: 1.2,
 	},
 };
 
@@ -155,7 +163,7 @@ export class EntityManager {
 	/** Per-frame update. Will run AI/behavior per entity. */
 	update(dt: number): void {
 		for (const entity of this.entities) {
-			entity.rotY += dt * 0.0;
+			entity.rotY += dt * 0.2;
 			this.uploadTransform(entity);
 		}
 	}

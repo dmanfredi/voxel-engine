@@ -3,6 +3,7 @@ export type BlockId = number;
 export const AIR: BlockId = 0;
 export const MARBLE: BlockId = 1;
 export const BRICK: BlockId = 2;
+export const DARK_MARBLE: BlockId = 3;
 
 export interface BlockProperties {
 	name: string;
@@ -59,4 +60,9 @@ blockRegistry.register(BRICK, {
 	name: 'brick',
 	solid: true,
 	textureScale: 3,
+});
+blockRegistry.register(DARK_MARBLE, {
+	name: 'darkMarble',
+	solid: true,
+	textureScale: 6,
 });

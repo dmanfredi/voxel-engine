@@ -19,6 +19,7 @@ import { initEntityRenderer } from './entity-renderer';
 import { EntityManager, Shape, Material, Role } from './entity';
 import marbleTextureUrl from '../assets/MarbleBase1024.png';
 import bricksTextureUrl from '../assets/Bricks060_1K-PNG_Color.png';
+import darkMarbleTextureUrl from '../assets/DarkMarble.png';
 
 // TODO
 // - Skylights
@@ -246,8 +247,9 @@ async function main(): Promise<void> {
 	const TEXTURE_SIZE = 1024;
 	const blockTextureSources: { layer: number; src: string }[] = [
 		{ layer: 0, src: marbleTextureUrl }, // AIR placeholder (never sampled)
-		{ layer: 1, src: marbleTextureUrl }, // DIRT
+		{ layer: 1, src: marbleTextureUrl },
 		{ layer: 2, src: bricksTextureUrl },
+		{ layer: 3, src: darkMarbleTextureUrl },
 	];
 
 	const numLayers = blockTextureSources.length;
@@ -493,12 +495,12 @@ async function main(): Promise<void> {
 	const entityManager = new EntityManager(entityRenderer, device);
 	entityManager.spawn({
 		shape: Shape.Sphere,
-		material: Material.Brick,
+		material: Material.DarkMarble,
 		role: Role.Rush,
 		x: worldCenter,
 		y: worldCenter + 50,
 		z: worldCenter - 100,
-		size: 10,
+		size: 20,
 	});
 
 	// Initialize block highlight outline

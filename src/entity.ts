@@ -221,6 +221,50 @@ export class EntityManager {
 		);
 	}
 
+	/**
+	 * Returns true if the block at `(bx, by, bz)` would overlap any entity.
+	 * Wrap-aware: shifts the block to the nearest wrapped copy relative to
+	 * each entity before testing, so placement near the world boundary works.
+	 */
+	blockIntersectsEntity(bx: number, by: number, bz: number): boolean {
+		const blockSize = this.world.blockSize;
+		const ww = this.world.widthChunks * CHUNK_SIZE * blockSize;
+		const hw = ww / 2;
+
+		const rawMinX = bx * blockSize;
+		const rawMinZ = bz * blockSize;
+		const boxMinY = by * blockSize;
+		const boxMaxY = boxMinY + blockSize;
+		const halfBlock = blockSize / 2;
+
+		for (const entity of this.entities) {
+			if (entity.shape !== Shape.Sphere) continue;
+
+			// Shift the block to the wrapped copy closest to this entity
+			let boxMinX = rawMinX;
+			let boxMinZ = rawMinZ;
+			const dxRaw = entity.x - (rawMinX + halfBlock);
+			const dzRaw = entity.z - (rawMinZ + halfBlock);
+			if (dxRaw > hw) boxMinX += ww;
+			else if (dxRaw < -hw) boxMinX -= ww;
+			if (dzRaw > hw) boxMinZ += ww;
+			else if (dzRaw < -hw) boxMinZ -= ww;
+
+			const boxMaxX = boxMinX + blockSize;
+			const boxMaxZ = boxMinZ + blockSize;
+
+			const r = entity.scale;
+			const cpX = Math.max(boxMinX, Math.min(entity.x, boxMaxX));
+			const cpY = Math.max(boxMinY, Math.min(entity.y, boxMaxY));
+			const cpZ = Math.max(boxMinZ, Math.min(entity.z, boxMaxZ));
+			const dx = entity.x - cpX;
+			const dy = entity.y - cpY;
+			const dz = entity.z - cpZ;
+			if (dx * dx + dy * dy + dz * dz < r * r) return true;
+		}
+		return false;
+	}
+
 	despawn(id: number): void {
 		const idx = this.entities.findIndex((e) => e.id === id);
 		if (idx === -1) return;

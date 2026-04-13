@@ -17,6 +17,7 @@ import { ChunkLoader } from './chunk-loader';
 import { MeshScheduler } from './mesh-scheduler';
 import { initEntityRenderer } from './entity-renderer';
 import { EntityManager, Shape, Material, Role } from './entity';
+import { tryPlaceBlock } from './placement';
 import marbleTextureUrl from '../assets/MarbleBase1024.png';
 import bricksTextureUrl from '../assets/Bricks060_1K-PNG_Color.png';
 import darkMarbleTextureUrl from '../assets/DarkMarble.png';
@@ -624,6 +625,7 @@ async function main(): Promise<void> {
 				playerHeight,
 				BLOCK_SIZE,
 				world,
+				entityManager,
 				gameState,
 			);
 			if (climbed) {
@@ -836,7 +838,9 @@ async function main(): Promise<void> {
 				return; // would trap the player
 			}
 
-			world.setBlock(px, py, pz, MARBLE);
+			if (!tryPlaceBlock(world, entityManager, px, py, pz, MARBLE)) {
+				return; // would overlap an entity
+			}
 			onBlockChanged(px, py, pz);
 			gameState.bp--;
 			updateBPDisplay();

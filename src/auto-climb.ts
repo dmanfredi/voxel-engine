@@ -2,6 +2,8 @@ import type { Vec3 } from 'wgpu-matrix';
 import { AIR, BRICK } from './block';
 import type { GameState } from './game-state';
 import type { World } from './world';
+import type { EntityManager } from './entity';
+import { tryPlaceBlock } from './placement';
 
 /**
  * Places a BRICK block directly beneath the player's feet if that space is air
@@ -13,6 +15,7 @@ export function autoClimb(
 	playerHeight: number,
 	blockSize: number,
 	world: World,
+	entityManager: EntityManager,
 	gameState: GameState,
 ): { x: number; y: number; z: number } | null {
 	if (gameState.bp <= 0) return null;
@@ -24,7 +27,7 @@ export function autoClimb(
 
 	if (world.getBlock(bx, by, bz) !== AIR) return null;
 
-	if (!world.setBlock(bx, by, bz, BRICK)) return null;
+	if (!tryPlaceBlock(world, entityManager, bx, by, bz, BRICK)) return null;
 
 	gameState.bp--;
 	return { x: bx, y: by, z: bz };

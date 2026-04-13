@@ -49,6 +49,13 @@ export function entityPhysicsTick(
 	if (Math.abs(entity.vz) < NEGLIGIBLE * t) entity.vz = 0;
 	// Intentionally NOT zeroing vy — gravity needs to keep accumulating
 
+	// Friction. universal and not material dependent
+	// this make the spheres "cling" to corners, Bad!
+	if (entity.grounded) {
+		entity.vx = Math.max(entity.vx - 0.005, 0);
+		entity.vz = Math.max(entity.vz - 0.005, 0);
+	}
+
 	// Integrate position
 	entity.x += entity.vx * t;
 	entity.y += entity.vy * t;

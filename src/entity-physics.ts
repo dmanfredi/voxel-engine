@@ -64,6 +64,8 @@ export function entityPhysicsTick(
 	// Reset grounded before resolution; any contact with upward normal sets it
 	entity.grounded = false;
 
+	const ww = world.widthChunks * CHUNK_SIZE * world.blockSize;
+
 	resolveSphereVsVoxels(entity, world, entityRestitution);
 	resolveSphereVsPlayer(
 		entity,
@@ -71,10 +73,10 @@ export function entityPhysicsTick(
 		playerHalfWidth,
 		playerHeight,
 		entityRestitution,
+		ww,
 	);
 
 	// Wrap horizontal position to match the wrapping world (like the player does)
-	const ww = world.widthChunks * CHUNK_SIZE * world.blockSize;
 	entity.x = ((entity.x % ww) + ww) % ww;
 	entity.z = ((entity.z % ww) + ww) % ww;
 
@@ -132,10 +134,21 @@ function resolveSphereVsPlayer(
 	playerHalfWidth: number,
 	playerHeight: number,
 	entityRestitution: number,
+	ww: number,
 ): void {
-	const px = playerPos[0] ?? 0;
+	let px = playerPos[0] ?? 0;
 	const py = playerPos[1] ?? 0;
-	const pz = playerPos[2] ?? 0;
+	let pz = playerPos[2] ?? 0;
+
+	// Shift the player to the wrapped copy closest to the entity so the
+	// closest-point test works near the world boundary.
+	const hw = ww / 2;
+	const dxRaw = entity.x - px;
+	const dzRaw = entity.z - pz;
+	if (dxRaw > hw) px += ww;
+	else if (dxRaw < -hw) px -= ww;
+	if (dzRaw > hw) pz += ww;
+	else if (dzRaw < -hw) pz -= ww;
 
 	resolveSphereVsAABB(
 		entity,

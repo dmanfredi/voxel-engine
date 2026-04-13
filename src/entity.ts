@@ -4,13 +4,14 @@
  * Enemies are defined by 5 composable axes:
  *   Shape    → mesh geometry, movement physics, behavior palette
  *   Role     → specific AI strategy from the shape's palette
- *   Material → texture, physical stats (density, speed, hardness)
+ *   Material → texture, physical stats (density, speed, hardness, restitution)
  *   Size     → stat scaling (passed as `size` at spawn)
  *   Traits   → bolt-on behavioral modifiers (future)
  */
 
 import { mat4 } from 'wgpu-matrix';
 import { MARBLE, BRICK, DARK_MARBLE } from './block';
+import { CHUNK_SIZE } from './chunk';
 import { createIcosphere } from './icosphere';
 import {
 	createEntityRenderData,
@@ -19,6 +20,8 @@ import {
 	destroyEntityRenderData,
 } from './entity-renderer';
 import type { EntityRenderer, EntityRenderData } from './entity-renderer';
+import { entityPhysicsTick } from './entity-physics';
+import type { World } from './world';
 
 // ── Axes ────────────────────────────────────────────────────────────
 
@@ -42,6 +45,7 @@ interface MaterialProperties {
 	density: number; // drives mass = density * size³
 	baseSpeed: number; // movement speed multiplier
 	hardness: number; // durability multiplier
+	restitution: number; // bounciness 0..1
 }
 
 const materials: Record<Material, MaterialProperties> = {
@@ -52,6 +56,7 @@ const materials: Record<Material, MaterialProperties> = {
 		density: 2.7,
 		baseSpeed: 1.0,
 		hardness: 0.8,
+		restitution: 0.4,
 	},
 	[Material.Brick]: {
 		name: 'brick',
@@ -60,6 +65,7 @@ const materials: Record<Material, MaterialProperties> = {
 		density: 1.8,
 		baseSpeed: 0.7,
 		hardness: 1.0,
+		restitution: 0.2,
 	},
 	[Material.DarkMarble]: {
 		name: 'darkMarble',
@@ -68,19 +74,22 @@ const materials: Record<Material, MaterialProperties> = {
 		density: 4,
 		baseSpeed: 2.0,
 		hardness: 1.2,
+		restitution: 0.4,
 	},
 };
 
 // ── Entity ──────────────────────────────────────────────────────────
 
-interface Entity {
+export interface Entity {
 	id: number;
 	x: number;
 	y: number;
 	z: number;
-	rotX: number;
-	rotY: number;
-	rotZ: number;
+	vx: number;
+	vy: number;
+	vz: number;
+	orientation: Float32Array<ArrayBuffer>;
+	grounded: boolean;
 	scale: number;
 	shape: Shape;
 	material: Material;
@@ -97,6 +106,9 @@ export interface SpawnConfig {
 	y: number;
 	z: number;
 	size: number;
+	vx?: number;
+	vy?: number;
+	vz?: number;
 	traits?: Trait[];
 }
 
@@ -114,11 +126,13 @@ export class EntityManager {
 	private nextId = 0;
 	private renderer: EntityRenderer;
 	private device: GPUDevice;
+	private world: World;
 	private meshCache = new Map<Shape, CachedMesh>();
 
-	constructor(renderer: EntityRenderer, device: GPUDevice) {
+	constructor(renderer: EntityRenderer, device: GPUDevice, world: World) {
 		this.renderer = renderer;
 		this.device = device;
+		this.world = world;
 	}
 
 	spawn(config: SpawnConfig): number {
@@ -145,9 +159,11 @@ export class EntityManager {
 			x: config.x,
 			y: config.y,
 			z: config.z,
-			rotX: 0,
-			rotY: 0,
-			rotZ: 0,
+			vx: config.vx ?? 0,
+			vy: config.vy ?? 0,
+			vz: config.vz ?? 0,
+			orientation: mat4.identity(),
+			grounded: false,
 			scale: config.size,
 			shape: config.shape,
 			material: config.material,
@@ -156,15 +172,44 @@ export class EntityManager {
 			renderData,
 		});
 
-		this.uploadTransform(this.entities[this.entities.length - 1]);
+		// Initial upload with zero offset — next update() will apply proper wrap
+		this.uploadTransform(this.entities[this.entities.length - 1], 0, 0);
 		return id;
 	}
 
-	/** Per-frame update. Will run AI/behavior per entity. */
-	update(dt: number): void {
+	/** Per-frame update: step physics for each entity, then upload transforms. */
+	update(
+		dt: number,
+		playerPos: Float32Array,
+		playerHalfWidth: number,
+		playerHeight: number,
+	): void {
+		const ww = this.world.widthChunks * CHUNK_SIZE * this.world.blockSize;
+		const hw = ww / 2;
+		const px = playerPos[0] ?? 0;
+		const pz = playerPos[2] ?? 0;
+
 		for (const entity of this.entities) {
-			entity.rotY += dt * 0.2;
-			this.uploadTransform(entity);
+			const mat = materials[entity.material];
+			entityPhysicsTick(
+				entity,
+				this.world,
+				playerPos,
+				playerHalfWidth,
+				playerHeight,
+				mat.restitution,
+				dt,
+			);
+
+			// Render-time wrap: if the entity is on the "wrong side" of the
+			// wrapping world relative to the player, offset it to appear at
+			// the closer wrap. Matches the per-chunk wrap offset trick.
+			const dx = entity.x - px;
+			const dz = entity.z - pz;
+			const offsetX = dx > hw ? -ww : dx < -hw ? ww : 0;
+			const offsetZ = dz > hw ? -ww : dz < -hw ? ww : 0;
+
+			this.uploadTransform(entity, offsetX, offsetZ);
 		}
 	}
 
@@ -183,11 +228,17 @@ export class EntityManager {
 		this.entities.splice(idx, 1);
 	}
 
-	private uploadTransform(entity: Entity): void {
-		const model = mat4.translation([entity.x, entity.y, entity.z]);
-		mat4.rotateY(model, entity.rotY, model);
-		mat4.rotateX(model, entity.rotX, model);
-		mat4.rotateZ(model, entity.rotZ, model);
+	private uploadTransform(
+		entity: Entity,
+		offsetX: number,
+		offsetZ: number,
+	): void {
+		const model = mat4.translation([
+			entity.x + offsetX,
+			entity.y,
+			entity.z + offsetZ,
+		]);
+		mat4.multiply(model, entity.orientation, model);
 		mat4.scale(model, [entity.scale, entity.scale, entity.scale], model);
 		updateEntityTransform(
 			this.device.queue,

@@ -9,6 +9,7 @@ export interface BlockProperties {
 	name: string;
 	solid: boolean;
 	textureScale: number;
+	restitution: number;
 }
 
 export class BlockRegistry {
@@ -50,19 +51,27 @@ export function extractBlockProps(): BlockProps {
 }
 
 export const blockRegistry = new BlockRegistry();
-blockRegistry.register(AIR, { name: 'air', solid: false, textureScale: 1 });
+blockRegistry.register(AIR, {
+	name: 'air',
+	solid: false,
+	textureScale: 1,
+	restitution: 0,
+});
 blockRegistry.register(MARBLE, {
 	name: 'marble',
 	solid: true,
 	textureScale: 6,
+	restitution: 0.4,
 });
 blockRegistry.register(BRICK, {
 	name: 'brick',
 	solid: true,
 	textureScale: 3,
+	restitution: 0.2,
 });
 blockRegistry.register(DARK_MARBLE, {
 	name: 'darkMarble',
 	solid: true,
 	textureScale: 6,
+	restitution: 0.4,
 });

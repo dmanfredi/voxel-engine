@@ -492,15 +492,17 @@ async function main(): Promise<void> {
 		mainGroup0BGL,
 		bindGroup,
 	);
-	const entityManager = new EntityManager(entityRenderer, device);
+	const entityManager = new EntityManager(entityRenderer, device, world);
 	entityManager.spawn({
 		shape: Shape.Sphere,
 		material: Material.DarkMarble,
 		role: Role.Rush,
 		x: worldCenter,
-		y: worldCenter + 50,
+		y: worldCenter + 100,
 		z: worldCenter - 100,
-		size: 20,
+		size: 10,
+		vx: 2,
+		vz: 2,
 	});
 
 	// Initialize block highlight outline
@@ -630,7 +632,7 @@ async function main(): Promise<void> {
 			}
 		}
 
-		entityManager.update(dt);
+		entityManager.update(dt, cameraPos, playerHalfWidth, playerHeight);
 
 		// Raycast from camera to find targeted block
 		currentHit = raycast(cameraPos, cameraFront, world, MAX_REACH);

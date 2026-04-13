@@ -21,6 +21,7 @@ import {
 } from './entity-renderer';
 import type { EntityRenderer, EntityRenderData } from './entity-renderer';
 import { entityPhysicsTick } from './entity-physics';
+import { entityAITick } from './entity-ai';
 import type { World } from './world';
 
 // ── Axes ────────────────────────────────────────────────────────────
@@ -191,6 +192,11 @@ export class EntityManager {
 
 		for (const entity of this.entities) {
 			const mat = materials[entity.material];
+
+			// AI runs first — writes to entity velocity
+			entityAITick(entity, playerPos, mat.baseSpeed, ww, dt);
+
+			// Physics integrates velocity → position and resolves collisions
 			entityPhysicsTick(
 				entity,
 				this.world,

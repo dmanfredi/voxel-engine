@@ -51,10 +51,10 @@ export function entityPhysicsTick(
 
 	// Friction. universal and not material dependent
 	// this make the spheres "cling" to corners, Bad!
-	if (entity.grounded) {
-		entity.vx = Math.max(entity.vx - 0.005, 0);
-		entity.vz = Math.max(entity.vz - 0.005, 0);
-	}
+	// if (entity.grounded) {
+	// 	entity.vx = Math.max(entity.vx - 0.005, 0);
+	// 	entity.vz = Math.max(entity.vz - 0.005, 0);
+	// }
 
 	// Integrate position
 	entity.x += entity.vx * t;

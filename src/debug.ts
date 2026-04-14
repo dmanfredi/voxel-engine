@@ -11,8 +11,9 @@ export const debuggerParams = {
 	vertices: 0,
 	targetBlock: 'none',
 	playerPos: '0, 0, 0',
-	shininess: 32,
-	specularStrength: 0.3,
+	// Additive boost on top of per-material values from BlockRegistry
+	shininess: 0,
+	specularStrength: 0,
 	fogStart: 1300,
 	fogEnd: 1400,
 };
@@ -54,7 +55,7 @@ export function BuildDebug(render: () => void): void {
 	const reflFolder = pane.addFolder({ title: 'Specular' });
 	reflFolder.addBinding(debuggerParams, 'shininess', {
 		label: 'Shininess',
-		min: 2,
+		min: 0,
 		max: 256,
 		step: 1,
 	});

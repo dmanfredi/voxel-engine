@@ -6,9 +6,13 @@
  * Group 1 is per-entity: model matrix + texture layer.
  */
 
+import { buildMaterialLUT } from './shader';
+
 const ENTITY_UNIFORM_SIZE = 80; // mat4x4f(64) + u32 texLayer(4) + f32 texScale(4) + padding(8) = 80
 
 const entityShader = /*wgsl*/ `
+	${buildMaterialLUT()}
+
 	struct Uniforms {
 		matrix: mat4x4f,
 		eyePosition: vec3f,
@@ -72,10 +76,16 @@ const entityShader = /*wgsl*/ `
 		let reflected = reflect(eyeToSurface, n);
 		let skyColor = textureSample(skyTexture, skySampler, reflected * vec3f(1, 1, -1));
 
+		// Per-material reflection params (LUT), additively boosted by global tweakpane values
+		let matShin = MATERIAL_SHININESS[entity.texLayer];
+		let matSpec = MATERIAL_SPEC_STRENGTH[entity.texLayer];
+		let effShin = matShin + uni.shininess;
+		let effSpec = matSpec + uni.specularStrength;
+
 		let V = normalize(uni.eyePosition - inp.worldPos);
 		let H = normalize(LIGHT_DIR + V);
-		let spec = pow(max(dot(n, H), 0.0), uni.shininess);
-		let specular = uni.specularStrength * spec * skyColor.rgb;
+		let spec = pow(max(dot(n, H), 0.0), effShin);
+		let specular = effSpec * spec * skyColor.rgb;
 
 		let final_color = texColor.rgb * brightness + specular;
 

@@ -1,4 +1,30 @@
+import { blockRegistry } from './block';
+
+/** Emit a number as a valid WGSL f32 literal (always contains a decimal point). */
+function f32Literal(n: number): string {
+	const s = n.toString();
+	return s.includes('.') || s.includes('e') ? s : `${s}.0`;
+}
+
+/** Generate per-material WGSL const arrays indexed by block ID (== texLayer). */
+export function buildMaterialLUT(): string {
+	const shin: string[] = [];
+	const spec: string[] = [];
+	for (let id = 0; id < blockRegistry.count; id++) {
+		const props = blockRegistry.get(id);
+		shin.push(f32Literal(props?.shininess ?? 0));
+		spec.push(f32Literal(props?.specularStrength ?? 0));
+	}
+	const n = String(shin.length);
+	return `
+		const MATERIAL_SHININESS = array<f32, ${n}>(${shin.join(', ')});
+		const MATERIAL_SPEC_STRENGTH = array<f32, ${n}>(${spec.join(', ')});
+	`;
+}
+
 const MainShader = /*wgsl*/ `
+	${buildMaterialLUT()}
+
 	struct Uniforms {
 		matrix: mat4x4f,
 		eyePosition: vec3f,
@@ -73,11 +99,17 @@ const MainShader = /*wgsl*/ `
 		let reflected = reflect(eyeToSurface, n);
 		let skyColor = textureSample(skyTexture, skySampler, reflected * vec3f(1, 1, -1));
 
+		// Per-material reflection params (LUT), additively boosted by global tweakpane values
+		let matShin = MATERIAL_SHININESS[vsOut.texLayer];
+		let matSpec = MATERIAL_SPEC_STRENGTH[vsOut.texLayer];
+		let effShin = matShin + uni.shininess;
+		let effSpec = matSpec + uni.specularStrength;
+
 		// Blinn-Phong specular highlight, tinted by skybox instead of white
 		let V = normalize(uni.eyePosition - vsOut.worldPos);
 		let H = normalize(LIGHT_DIR + V);
-		let spec = pow(max(dot(n, H), 0.0), uni.shininess);
-		let specular = uni.specularStrength * spec * skyColor.rgb;
+		let spec = pow(max(dot(n, H), 0.0), effShin);
+		let specular = effSpec * spec * skyColor.rgb;
 
 		// a nice blue vec3f(0.49, 0.55, 0.68)
 		let shadowColor = vec3f(0.1, 0.1, 0.1); // AO shadow tint

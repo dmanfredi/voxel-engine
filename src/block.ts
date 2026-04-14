@@ -10,6 +10,10 @@ export interface BlockProperties {
 	solid: boolean;
 	textureScale: number;
 	restitution: number;
+	/** Phong exponent for this material (higher = tighter highlight). */
+	shininess: number;
+	/** Specular highlight intensity multiplier. */
+	specularStrength: number;
 }
 
 export class BlockRegistry {
@@ -56,22 +60,30 @@ blockRegistry.register(AIR, {
 	solid: false,
 	textureScale: 1,
 	restitution: 0,
+	shininess: 0,
+	specularStrength: 0,
 });
 blockRegistry.register(MARBLE, {
 	name: 'marble',
 	solid: true,
 	textureScale: 6,
 	restitution: 0.4,
+	shininess: 32,
+	specularStrength: 0.3,
 });
 blockRegistry.register(BRICK, {
 	name: 'brick',
 	solid: true,
 	textureScale: 3,
 	restitution: 0.2,
+	shininess: 32,
+	specularStrength: 0.3,
 });
 blockRegistry.register(DARK_MARBLE, {
 	name: 'darkMarble',
 	solid: true,
 	textureScale: 6,
 	restitution: 0.4,
+	shininess: 5,
+	specularStrength: 0.5,
 });

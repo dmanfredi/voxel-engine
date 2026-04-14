@@ -23,13 +23,14 @@ No test framework is configured.
 
 ### Render Pipeline (src/main.ts)
 
-The application runs a multi-chunk render loop with three ordered passes:
+The application runs a multi-chunk render loop with four ordered passes (same `GPURenderPassEncoder`, different pipelines):
 
 1. **Main geometry pass** — textured voxel mesh with depth write
 2. **Wireframe pass** — optional barycentric debug overlay (additive blend)
-3. **Skybox pass** — cubemap rendered at depth=1.0 with `less-equal` test
+3. **Entity pass** — non-voxel objects (enemies). Own pipeline, reuses main bind group 0 (shared VP + textures)
+4. **Skybox pass** — cubemap rendered at depth=1.0 with `less-equal` test
 
-The game loop uses `requestAnimationFrame` for continuous ticking (physics + rendering). Rendering also triggers on resize.
+The game loop uses `requestAnimationFrame` for continuous ticking (physics + AI + rendering). Rendering also triggers on resize.
 
 ### Chunk & Mesh Generation
 
@@ -76,6 +77,25 @@ Minecraft-style physics with tick-based simulation:
 - **movement.ts** — Minecraft-like physics tick: gravity, jump velocity, ground/air drag, horizontal acceleration. Uses `MC_TICK = 0.05` as the reference timestep; all physics values scale by `dt/MC_TICK`. Two modes: physics movement (default) and freecam (`FREECAM` function, toggled via debug panel).
 - **collision.ts** — AABB-vs-voxel-grid collision. `moveAndCollide()` resolves axes independently (X → Z → Y order). Player AABB is defined relative to eye position: feet at `pos.y - height`, top at `pos.y`. Returns per-axis collision flags (`onGround`, `collidedX`, `collidedZ`, `collidedCeiling`).
 
+The player is **not** an entity — deliberate, see `notes/entity-physics-and-ai.md`. Revisit when building sphere-vs-sphere collision.
+
+### Entity System (src/entity.ts, src/entity-renderer.ts, src/icosphere.ts, src/entity-physics.ts, src/entity-ai.ts)
+
+Non-voxel objects (enemies, future projectiles). Managed by `EntityManager` in `src/entity.ts`. Entities are defined by 5 composable axes: **Shape** (mesh geometry, e.g. Sphere), **Material** (texture + physical stats from the `materials` table), **Role** (AI strategy: Rush / Zone / Crush), **Size** (scale), **Traits** (bolt-on modifiers, currently empty). The material table is the primary tuning surface — read by rendering (texture layer, tile density), physics (restitution), and AI (baseSpeed).
+
+Per-frame flow for each entity: `entityAITick` → `entityPhysicsTick` → render-offset → `uploadTransform`. AI writes to velocity; physics integrates velocity into position, resolves collisions; render reflects final position. Ordering is load-bearing.
+
+- **entity-renderer.ts** — Dedicated pipeline slotted between wireframe and skybox passes. Per-entity group-1 uniform (`model: mat4x4f, texLayer: u32, texScale: f32`, 80 bytes). Shares block texture array — entity materials map to block texture layers.
+- **icosphere.ts** — Procedural unit-icosphere via midpoint subdivision. Non-indexed triangle list to sidestep UV-seam index splits.
+- **entity-physics.ts** — Semi-implicit Euler mirroring `movement.ts`. Sphere-vs-voxel uses **closest-point narrowphase + contact-normal response** (not axis-separated — spheres need surface normals). Restitution is a pair property combined with `max()`. Resting-contact threshold prevents gravity-induced micro-bouncing. Wrap-aware throughout.
+- **entity-ai.ts** — Role-dispatched behaviors. Only `Role.Rush` implemented: wrap-aware straight-line thrust toward player, drag-driven natural turning, mid-air steering enabled. Uses material's `baseSpeed` to scale acceleration. New roles = new switch case.
+
+See `notes/entity-system.md` and `notes/entity-physics-and-ai.md` for deeper design rationale and deferred decisions.
+
+### Block Placement (src/placement.ts)
+
+`world.setBlock` is the low-level mutation primitive (for terrain gen, chunk streaming, block breaking — anything without gameplay rules). **Gameplay-driven placement** (right-click, auto-scaffold, future enemy AI) goes through `tryPlaceBlock(world, entityManager, bx, by, bz, blockId)`, which currently rejects placements that would overlap an entity. When adding new block-placing code paths, use `tryPlaceBlock` unless you specifically need to bypass the rules.
+
 ### Shaders
 
 All WGSL shaders are defined as TypeScript string constants:
@@ -84,11 +104,18 @@ All WGSL shaders are defined as TypeScript string constants:
 - **wireframe.ts** — barycentric edge detection with smooth antialiasing
 - **skybox.ts** — cubemap sampling using `viewDirectionProjectionInverse` uniform; also handles cubemap texture loading and mipmap generation
 - **shared.ts** — reusable WGSL binding declarations
+- **entity-renderer.ts** (embedded WGSL) — smooth-diffuse + sky-tinted specular for spheres; UV scaled by per-entity `texScale` for size-independent texture density
 
 ### Supporting Modules
 
-- **block.ts** — `BlockId` as numeric constants (`AIR`, `MARBLE`, `BRICK`), `BlockRegistry` mapping IDs to properties (solid, textureScale). `BlockProps` interface + `extractBlockProps()` for serializing registry data to workers.
-- **debug.ts** — stats.js FPS counter + Tweakpane panel (wireframe toggle, freecam toggle, vertex count)
+- **block.ts** — `BlockId` as numeric constants (`AIR`, `MARBLE`, `BRICK`, `DARK_MARBLE`), `BlockRegistry` mapping IDs to properties (solid, textureScale, restitution). `BlockProps` interface + `extractBlockProps()` for serializing registry data to workers.
+- **world.ts** — Chunk-based world (`Map<string, Chunk>`), horizontal wrapping via modular arithmetic. `getBlock`/`setBlock`/`isSolid` wrap X/Z internally.
+- **chunk-loader.ts** — Vertical chunk streaming around player.
+- **mesh-scheduler.ts / mesh-worker.ts** — Worker-based meshing with priority queue, key-based dedup, revision-checked stale-result rejection.
+- **auto-climb.ts** — Places a BRICK block at player's feet when there's a gap (scaffolding mechanic). Uses `tryPlaceBlock`.
+- **raycast.ts** — DDA raycasting into the voxel grid for block targeting.
+- **game-state.ts** — BP counter and other persistent gameplay state.
+- **debug.ts** — stats.js FPS counter + Tweakpane panel (wireframe toggle, freecam toggle, vertex count, hitch detector, fog/lighting tuning)
 
 ### Camera & Input
 
@@ -113,3 +140,14 @@ After making code changes, always run `npx prettier --write "src/**/*.ts"` to fo
 - **tweakpane** — debug UI controls
 - **stats.js** — FPS monitoring
 - **comlink** — worker message passing (wraps postMessage into async function calls)
+
+## Further Reading
+
+Deeper design rationale and "what's deferred and why" notes live in `notes/`:
+
+- `notes/entity-system.md` — entity taxonomy, mesh generation, render pipeline, lifecycle
+- `notes/entity-physics-and-ai.md` — physics model, AI dispatch, cross-cutting patterns (wrap handling, material table), explicitly deferred work
+- `notes/physics-and-collision.md` — player physics and AABB-vs-voxel collision (predates entity work)
+- `notes/skybox-integration.md` — skybox setup
+- `notes/TECHNICAL-ROADMAP.md` — phased plan + current progress
+- `notes/GAME-DESIGN.md` — game concept and design pillars

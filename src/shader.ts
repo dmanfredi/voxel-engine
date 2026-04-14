@@ -48,8 +48,12 @@ const MainShader = /*wgsl*/ `
 		return vsOut;
 	}
 
+	// Negative LOD bias nudges the sampler toward sharper mip levels than the
+	// automatic derivative-based selection would pick. -1.0 is nice.
+	const MIP_LOD_BIAS: f32 = -1.0;
+
 	@fragment fn fs(vsOut: VSOutput) -> @location(0) vec4f {
-		let texColor = textureSample(myTexture, mySampler, vsOut.uv, vsOut.texLayer);
+		let texColor = textureSampleBias(myTexture, mySampler, vsOut.uv, vsOut.texLayer, MIP_LOD_BIAS);
 
 		// Per-face shading: top brightest, sides medium, bottom darkest
 		let n = vsOut.normal;

@@ -20,5 +20,7 @@ export default function buildChunkBlocks(
 
 	// mengerSponges(cx, cy, cz, blocks);
 
+	//mengerSky(cx, cy, cz, blocks);
+
 	return blocks;
 }

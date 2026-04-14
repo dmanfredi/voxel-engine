@@ -18,6 +18,7 @@ import { MeshScheduler } from './mesh-scheduler';
 import { initEntityRenderer } from './entity-renderer';
 import { EntityManager, Shape, Material, Role } from './entity';
 import { tryPlaceBlock } from './placement';
+import { generateMips, numMipLevels } from './mipmap';
 import marbleTextureUrl from '../assets/MarbleBase1024.png';
 import bricksTextureUrl from '../assets/Bricks060_1K-PNG_Color.png';
 import darkMarbleTextureUrl from '../assets/DarkMarble.png';
@@ -258,6 +259,7 @@ async function main(): Promise<void> {
 		label: 'block texture array',
 		size: [TEXTURE_SIZE, TEXTURE_SIZE, numLayers],
 		format: 'rgba8unorm',
+		mipLevelCount: numMipLevels(TEXTURE_SIZE, TEXTURE_SIZE),
 		usage:
 			GPUTextureUsage.TEXTURE_BINDING |
 			GPUTextureUsage.COPY_DST |
@@ -279,11 +281,18 @@ async function main(): Promise<void> {
 		}),
 	);
 
-	// nearest filtering for crisp textures.
-	// repeat mode for tiling across greedy-meshed quads
+	// Populate mip levels 1..N by downsampling from level 0 on the GPU.
+	generateMips(device, blockTextureArray);
+
+	// linear min/mag + linear mipmap = trilinear filtering.
+	// maxAnisotropy preserves sharpness on surfaces viewed at grazing angles
+	// (long sightlines across floors/walls). Requires all filters to be 'linear'.
+	// repeat mode for tiling across greedy-meshed quads with world-aligned UVs.
 	const sampler = device.createSampler({
 		magFilter: 'linear',
 		minFilter: 'linear',
+		mipmapFilter: 'linear',
+		maxAnisotropy: 8,
 		addressModeU: 'repeat',
 		addressModeV: 'repeat',
 	});

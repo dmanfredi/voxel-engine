@@ -1,7 +1,5 @@
-// import { SharedBindings } from './shared';
-
 const WireframeShader = /*wgsl*/ `
-	struct Uniforms { 
+	struct Uniforms {
 		matrix: mat4x4f
 	}
 
@@ -51,7 +49,5 @@ const WireframeShader = /*wgsl*/ `
 		return vec4(1,1,1,a);
 	}
 `;
-
-// const WireframeShader = SharedBindings + _WireframeShader;
 
 export default WireframeShader;

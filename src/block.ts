@@ -76,8 +76,8 @@ blockRegistry.register(BRICK, {
 	solid: true,
 	textureScale: 3,
 	restitution: 0.2,
-	shininess: 32,
-	specularStrength: 0.3,
+	shininess: 30,
+	specularStrength: 0.1,
 });
 blockRegistry.register(DARK_MARBLE, {
 	name: 'darkMarble',

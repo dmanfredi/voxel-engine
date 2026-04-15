@@ -6,7 +6,7 @@
  * Group 1 is per-entity: model matrix + texture layer.
  */
 
-import { buildMaterialLUT } from './shader';
+import { buildMaterialLUT } from './shader/shared';
 
 const ENTITY_UNIFORM_SIZE = 80; // mat4x4f(64) + u32 texLayer(4) + f32 texScale(4) + padding(8) = 80
 

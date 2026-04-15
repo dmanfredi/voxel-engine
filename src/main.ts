@@ -1,6 +1,6 @@
 import { mat4, vec3 } from 'wgpu-matrix';
-import MainShader from './shader';
-import WireframeShader from './wireframe';
+import VoxelShader from './shader/voxel';
+import WireframeShader from './shader/wireframe';
 import { initSkybox, drawSkybox, type SkyboxResources } from './skybox';
 
 import { BuildDebug, refreshDebug, debuggerParams, stats } from './debug';
@@ -100,7 +100,7 @@ async function main(): Promise<void> {
 	});
 
 	const module = device.createShaderModule({
-		code: MainShader,
+		code: VoxelShader,
 	});
 
 	const wireframeModule = device.createShaderModule({

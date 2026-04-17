@@ -121,12 +121,17 @@ interface Entity {
     vx, vy, vz,                             // velocity (physics consumes/writes)
     orientation: Float32Array<ArrayBuffer>, // mat4, accumulated visual rotation
     grounded: boolean,                      // set by physics, read by AI
-    scale, shape, material, role, traits,   // the 5 axes
+    scale,                                  // size axis
+    mass,                                   // cached at spawn from material+size
+    restitution,                            // cached at spawn from material
+    shape, material, role, traits,          // remaining axes
     renderData: EntityRenderData,           // GPU resources
 }
 ```
 
 Orientation is stored as a matrix rather than Euler angles so physics (visual rolling) can accumulate rotation around arbitrary axes without gimbal concerns.
+
+`mass` and `restitution` are derived from the material table at spawn and cached on the Entity so hot paths (AI, physics, sphere-sphere resolution) don't re-look-up per frame. See `entity-physics-and-ai.md` for the mass derivation details.
 
 ### SpawnConfig
 
@@ -148,8 +153,9 @@ Object form scales cleanly as new axes get added (future: `health`, `modelScale`
 Static `Record<Material, MaterialProperties>` defined at module scope. Consumed by:
 
 - Render spawn — `texLayer` picks the texture array slice; `textureScale` + `size` compute per-entity `texScale`
-- Physics — `restitution` combined with block restitution via `max()` for bounces
-- AI — `baseSpeed` scales thrust acceleration
+- Spawn-time caching — `density` and entity `size` produce `mass`; `restitution` is copied to the Entity. Both then live on the Entity for hot-path access.
+- Physics — `entity.restitution` combined via `max()` for wall bounces, player bounces, and sphere-sphere bounces; `entity.mass` drives mass-weighted depenetration and impulse for sphere-sphere collisions
+- AI — `baseSpeed` scales thrust acceleration; `entity.mass` divides effective accel and dilates the drag time constant (heavy = sluggish in both directions)
 
 Materials like `Marble`, `Brick`, `DarkMarble` currently cover the voxel block types (reusing those textures). New entity-specific materials would expand the table without changing call sites.
 
@@ -159,14 +165,23 @@ Materials like `Marble`, `Brick`, `DarkMarble` currently cover the voxel block t
 
 ### Per-frame pipeline
 
-`update(dt, playerPos, playerHalfWidth, playerHeight)` called each frame from `main.ts`. For each entity:
+`update(dt, playerPos, playerHalfWidth, playerHeight)` called each frame from `main.ts`. Runs in **three passes** over the entity list:
+
+**Pass 1 — per-entity AI + solo physics:**
 
 1. **AI tick** — `entityAITick` writes to velocity (thrust toward player, drag, etc.)
 2. **Physics tick** — `entityPhysicsTick` applies gravity, integrates position, resolves voxel + player collisions, wraps horizontal position, updates visual rolling
+
+AI runs before physics within the same entity so velocity changes are integrated the same tick.
+
+**Pass 2 — all-pairs sphere-vs-sphere resolution:**
+
+`resolveSpherePair(a, b, ww)` invoked for each (i,j) sphere pair (O(n²)). Splitting this out of the per-entity loop means each pair sees finalized post-integration positions on both sides — pair-by-pair inside Pass 1 would be order-dependent and asymmetric.
+
+**Pass 3 — per-entity render offset + upload:**
+
 3. **Render offset** — compute wrap-aware offset vs. player position (same trick as chunk render offsets): if the entity is more than half a world away, shift display by ±worldWidth so it renders on the near wrap
 4. **Upload transform** — build model matrix (`translation * orientation * scale`), apply render offset, write to entity's uniform buffer
-
-AI runs before physics so velocity changes are integrated the same tick.
 
 ### Block placement guard
 

@@ -510,9 +510,33 @@ async function main(): Promise<void> {
 		x: worldCenter,
 		y: worldCenter + 100,
 		z: worldCenter - 100,
-		size: 10,
+		size: 20,
 		vx: 2,
 		vz: 2,
+	});
+
+	entityManager.spawn({
+		shape: Shape.Sphere,
+		material: Material.Marble,
+		role: Role.Rush,
+		x: worldCenter,
+		y: worldCenter + 100,
+		z: worldCenter - 100,
+		size: 10,
+		vx: 3,
+		vz: -2,
+	});
+
+	entityManager.spawn({
+		shape: Shape.Sphere,
+		material: Material.Brick,
+		role: Role.Rush,
+		x: worldCenter,
+		y: worldCenter + 100,
+		z: worldCenter - 100,
+		size: 15,
+		vx: 3,
+		vz: -2,
 	});
 
 	// Initialize block highlight outline

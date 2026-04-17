@@ -17,7 +17,7 @@ const MC_TICK = 0.05;
 const GRAVITY = 0.8;
 const TERMINAL_VELOCITY = -39.2;
 const NEGLIGIBLE = 0.05;
-const RESTING_THRESHOLD = 1.0;
+const RESTING_THRESHOLD = 2.0;
 const PLAYER_RESTITUTION = 0.6;
 const DEFAULT_BLOCK_RESTITUTION = 0.3;
 
@@ -32,7 +32,6 @@ export function entityPhysicsTick(
 	playerPos: Float32Array,
 	playerHalfWidth: number,
 	playerHeight: number,
-	entityRestitution: number,
 	dt: number,
 ): void {
 	// Only spheres for now; other shapes are no-op until their physics lands
@@ -66,15 +65,8 @@ export function entityPhysicsTick(
 
 	const ww = world.widthChunks * CHUNK_SIZE * world.blockSize;
 
-	resolveSphereVsVoxels(entity, world, entityRestitution);
-	resolveSphereVsPlayer(
-		entity,
-		playerPos,
-		playerHalfWidth,
-		playerHeight,
-		entityRestitution,
-		ww,
-	);
+	resolveSphereVsVoxels(entity, world);
+	resolveSphereVsPlayer(entity, playerPos, playerHalfWidth, playerHeight, ww);
 
 	// Wrap horizontal position to match the wrapping world (like the player does)
 	entity.x = ((entity.x % ww) + ww) % ww;
@@ -83,11 +75,7 @@ export function entityPhysicsTick(
 	updateRolling(entity, t);
 }
 
-function resolveSphereVsVoxels(
-	entity: Entity,
-	world: World,
-	entityRestitution: number,
-): void {
+function resolveSphereVsVoxels(entity: Entity, world: World): void {
 	const blockSize = world.blockSize;
 	const r = entity.scale;
 
@@ -120,7 +108,7 @@ function resolveSphereVsVoxels(
 					boxMinY + blockSize,
 					boxMinZ,
 					boxMinZ + blockSize,
-					entityRestitution,
+					entity.restitution,
 					blockRest,
 				);
 			}
@@ -133,7 +121,6 @@ function resolveSphereVsPlayer(
 	playerPos: Float32Array,
 	playerHalfWidth: number,
 	playerHeight: number,
-	entityRestitution: number,
 	ww: number,
 ): void {
 	let px = playerPos[0] ?? 0;
@@ -158,7 +145,7 @@ function resolveSphereVsPlayer(
 		py,
 		pz - playerHalfWidth,
 		pz + playerHalfWidth,
-		entityRestitution,
+		entity.restitution,
 		PLAYER_RESTITUTION,
 	);
 }
@@ -269,6 +256,86 @@ function resolveSphereVsAABB(
 	entity.vx -= factor * vDotN * nx;
 	entity.vy -= factor * vDotN * ny;
 	entity.vz -= factor * vDotN * nz;
+}
+
+/**
+ * Sphere-vs-sphere collision. Wrap-aware contact normal; mass-weighted
+ * depenetration (heavier moves less); classical impulse response along the
+ * normal with combined-max restitution. Sub-threshold approaches get the
+ * resting-contact treatment (zero inward component, no bounce) — same pattern
+ * as wall contacts, prevents micro-jitter when spheres settle into contact
+ * under gravity.
+ *
+ * Momentum is conserved (equal-and-opposite impulse on both spheres).
+ * Angular effects are omitted — consistent with `updateRolling` being purely
+ * cosmetic.
+ */
+export function resolveSpherePair(a: Entity, b: Entity, ww: number): void {
+	const hw = ww / 2;
+
+	// Wrap-aware vector from B to A (horizontal wraps; Y does not)
+	let dx = a.x - b.x;
+	let dz = a.z - b.z;
+	if (dx > hw) dx -= ww;
+	else if (dx < -hw) dx += ww;
+	if (dz > hw) dz -= ww;
+	else if (dz < -hw) dz += ww;
+	const dy = a.y - b.y;
+
+	const distSq = dx * dx + dy * dy + dz * dz;
+	const totalR = a.scale + b.scale;
+	if (distSq >= totalR * totalR) return; // no overlap
+
+	let nx: number, ny: number, nz: number, penetration: number;
+	if (distSq < 1e-6) {
+		// Centers coincide — arbitrary up-normal, full overlap
+		nx = 0;
+		ny = 1;
+		nz = 0;
+		penetration = totalR;
+	} else {
+		const dist = Math.sqrt(distSq);
+		nx = dx / dist;
+		ny = dy / dist;
+		nz = dz / dist;
+		penetration = totalR - dist;
+	}
+
+	// Mass-weighted depenetration: push distance splits so heavier moves less.
+	// aPush = pen * mB/(mA+mB), bPush = pen * mA/(mA+mB), via inverse-mass form.
+	const invMassSum = 1 / a.mass + 1 / b.mass;
+	const aPush = (penetration * (1 / a.mass)) / invMassSum;
+	const bPush = (penetration * (1 / b.mass)) / invMassSum;
+	a.x += nx * aPush;
+	a.y += ny * aPush;
+	a.z += nz * aPush;
+	b.x -= nx * bPush;
+	b.y -= ny * bPush;
+	b.z -= nz * bPush;
+
+	// Grounded flag: whichever sphere sits atop the other gets ground-state
+	if (ny > 0.5) a.grounded = true;
+	if (ny < -0.5) b.grounded = true;
+
+	// Relative velocity along contact normal
+	const vrx = a.vx - b.vx;
+	const vry = a.vy - b.vy;
+	const vrz = a.vz - b.vz;
+	const vn = vrx * nx + vry * ny + vrz * nz;
+	if (vn >= 0) return; // already separating — leave velocity alone
+
+	const inwardSpeed = -vn;
+	const e = Math.max(a.restitution, b.restitution);
+	const factor = inwardSpeed < RESTING_THRESHOLD ? 1 : 1 + e;
+
+	// Impulse magnitude along n: j = factor * inwardSpeed / (1/mA + 1/mB)
+	const j = (factor * inwardSpeed) / invMassSum;
+	a.vx += (j / a.mass) * nx;
+	a.vy += (j / a.mass) * ny;
+	a.vz += (j / a.mass) * nz;
+	b.vx -= (j / b.mass) * nx;
+	b.vy -= (j / b.mass) * ny;
+	b.vz -= (j / b.mass) * nz;
 }
 
 /**

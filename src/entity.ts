@@ -20,7 +20,7 @@ import {
 	destroyEntityRenderData,
 } from './entity-renderer';
 import type { EntityRenderer, EntityRenderData } from './entity-renderer';
-import { entityPhysicsTick } from './entity-physics';
+import { entityPhysicsTick, resolveSpherePair } from './entity-physics';
 import { entityAITick } from './entity-ai';
 import type { World } from './world';
 
@@ -49,6 +49,23 @@ interface MaterialProperties {
 	restitution: number; // bounciness 0..1
 }
 
+// Mass = density * size^MASS_SIZE_POWER, normalized so a reference sphere
+// (density 2, size 10 — roughly player-height modal size) has mass = 1. Keeps
+// AI constants interpretable without re-tuning base values. Mass scales thrust
+// (a = F/m) and drag's time constant, so heavier spheres accelerate AND
+// decelerate slowly. Terminal speed is ~invariant across masses. Bump power
+// to 2 for gentler scaling if n=3 feels too extreme; volumetric is physically
+// honest but dramatic (a 2x-larger sphere is 8x heavier).
+const MASS_SIZE_POWER = 2;
+const MASS_REFERENCE_SIZE = 10;
+const MASS_REFERENCE_DENSITY = 2;
+const MASS_NORMALIZATION =
+	MASS_REFERENCE_DENSITY * MASS_REFERENCE_SIZE ** MASS_SIZE_POWER;
+
+function computeMass(density: number, size: number): number {
+	return (density * size ** MASS_SIZE_POWER) / MASS_NORMALIZATION;
+}
+
 const materials: Record<Material, MaterialProperties> = {
 	[Material.Marble]: {
 		name: 'marble',
@@ -73,7 +90,7 @@ const materials: Record<Material, MaterialProperties> = {
 		texLayer: DARK_MARBLE,
 		textureScale: 1,
 		density: 4,
-		baseSpeed: 2.0,
+		baseSpeed: 1.0,
 		hardness: 1.2,
 		restitution: 0.4,
 	},
@@ -92,6 +109,8 @@ export interface Entity {
 	orientation: Float32Array<ArrayBuffer>;
 	grounded: boolean;
 	scale: number;
+	mass: number;
+	restitution: number;
 	shape: Shape;
 	material: Material;
 	role: Role;
@@ -166,6 +185,8 @@ export class EntityManager {
 			orientation: mat4.identity(),
 			grounded: false,
 			scale: config.size,
+			mass: computeMass(mat.density, config.size),
+			restitution: mat.restitution,
 			shape: config.shape,
 			material: config.material,
 			role: config.role,
@@ -190,31 +211,42 @@ export class EntityManager {
 		const px = playerPos[0] ?? 0;
 		const pz = playerPos[2] ?? 0;
 
+		// Pass 1 — per-entity AI + solo physics (gravity, walls, player)
 		for (const entity of this.entities) {
 			const mat = materials[entity.material];
-
-			// AI runs first — writes to entity velocity
-			entityAITick(entity, playerPos, mat.baseSpeed, ww, dt);
-
-			// Physics integrates velocity → position and resolves collisions
+			entityAITick(entity, playerPos, mat.baseSpeed, entity.mass, ww, dt);
 			entityPhysicsTick(
 				entity,
 				this.world,
 				playerPos,
 				playerHalfWidth,
 				playerHeight,
-				mat.restitution,
 				dt,
 			);
+		}
 
-			// Render-time wrap: if the entity is on the "wrong side" of the
-			// wrapping world relative to the player, offset it to appear at
-			// the closer wrap. Matches the per-chunk wrap offset trick.
+		// Pass 2 — sphere-vs-sphere resolution. O(n²) pair iteration; fine at
+		// small n. Splitting this out of the per-entity loop means each pair
+		// sees finalized post-integration positions on both sides.
+		for (let i = 0; i < this.entities.length; i++) {
+			const a = this.entities[i];
+			if (a.shape !== Shape.Sphere) continue;
+			for (let j = i + 1; j < this.entities.length; j++) {
+				const b = this.entities[j];
+				if (b.shape !== Shape.Sphere) continue;
+				resolveSpherePair(a, b, ww);
+			}
+		}
+
+		// Pass 3 — render-time wrap offset + transform upload.
+		// Render-time wrap: if the entity is on the "wrong side" of the
+		// wrapping world relative to the player, offset it to appear at
+		// the closer wrap. Matches the per-chunk wrap offset trick.
+		for (const entity of this.entities) {
 			const dx = entity.x - px;
 			const dz = entity.z - pz;
 			const offsetX = dx > hw ? -ww : dx < -hw ? ww : 0;
 			const offsetZ = dz > hw ? -ww : dz < -hw ? ww : 0;
-
 			this.uploadTransform(entity, offsetX, offsetZ);
 		}
 	}

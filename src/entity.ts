@@ -13,6 +13,7 @@ import { mat4 } from 'wgpu-matrix';
 import { MARBLE, BRICK, DARK_MARBLE } from './block';
 import { CHUNK_SIZE } from './chunk';
 import { createIcosphere } from './icosphere';
+import { createBeveledCube } from './cube';
 import {
 	createEntityRenderData,
 	updateEntityTransform,
@@ -70,7 +71,7 @@ const materials: Record<Material, MaterialProperties> = {
 	[Material.Marble]: {
 		name: 'marble',
 		texLayer: MARBLE,
-		textureScale: 1,
+		textureScale: 6,
 		density: 2.7,
 		baseSpeed: 1.0,
 		hardness: 0.8,
@@ -79,7 +80,7 @@ const materials: Record<Material, MaterialProperties> = {
 	[Material.Brick]: {
 		name: 'brick',
 		texLayer: BRICK,
-		textureScale: 1,
+		textureScale: 3,
 		density: 1.8,
 		baseSpeed: 0.7,
 		hardness: 1.0,
@@ -88,7 +89,7 @@ const materials: Record<Material, MaterialProperties> = {
 	[Material.DarkMarble]: {
 		name: 'darkMarble',
 		texLayer: DARK_MARBLE,
-		textureScale: 1,
+		textureScale: 6,
 		density: 4,
 		baseSpeed: 1.0,
 		hardness: 1.2,
@@ -163,7 +164,35 @@ export class EntityManager {
 		}
 
 		const mat = materials[config.material];
-		const texScale = config.size / (mat.textureScale * 10);
+		// texScale converts entity-mesh UV to sampled UV. Shape-specific
+		// because mesh UVs are parameterized differently per shape.
+		//
+		// Reference density (blocks): the greedy mesher emits UV in
+		// block-index units divided by textureScale, so one block face
+		// spans 1/textureScale UV — i.e. one texture wrap per
+		// (textureScale × blockSize) world units. For marble that's
+		// 1 wrap per 60 world units (textureScale=6, blockSize=10).
+		//
+		//   Cube — face UV spans -1..+1 in unit-cube space; world face
+		//     width is 2·size. `size/(textureScale·10)` gives sampled UV
+		//     spanning 2·size/(textureScale·10) per face, which equals
+		//     2·size/60 = size/30 wraps for marble — matches block
+		//     density. Uses the same formula as sphere because both
+		//     need the implicit /blockSize that the mesher's
+		//     block-index UV scheme bakes in.
+		//
+		//   Sphere — spherical UV wraps 0..1 once around the equator;
+		//     world circumference is 2π·size. `size/10` gives ~1 wrap
+		//     per equator at size=10, landing near block density
+		//     (~63 vs 60 world units per wrap) by happy coincidence
+		//     of blockSize=10. Intentionally drops textureScale so all
+		//     sphere materials share the same UV density — the bug-
+		//     induced uniform look you tuned to. Add a /textureScale
+		//     here later if material-aware sphere density is wanted.
+		const texScale =
+			config.shape === Shape.Cube
+				? config.size / (mat.textureScale * 10)
+				: config.size / 10;
 		const renderData = createEntityRenderData(
 			this.device,
 			this.renderer,
@@ -211,8 +240,14 @@ export class EntityManager {
 		const px = playerPos[0] ?? 0;
 		const pz = playerPos[2] ?? 0;
 
-		// Pass 1 — per-entity AI + solo physics (gravity, walls, player)
+		// Pass 1 — per-entity AI + solo physics (gravity, walls, player).
+		// Cubes have no physics or AI yet (Phase 1 = static rendering only;
+		// Phase 2 will add AABB-vs-voxel + sphere-vs-cube collision, Phase 3
+		// adds tipping movement). Skipping the loop entirely is the cleanest
+		// way to keep them stationary without introducing cube branches into
+		// sphere-shaped code.
 		for (const entity of this.entities) {
+			if (entity.shape !== Shape.Sphere) continue;
 			const mat = materials[entity.material];
 			entityAITick(entity, playerPos, mat.baseSpeed, entity.mass, ww, dt);
 			entityPhysicsTick(
@@ -333,6 +368,8 @@ export class EntityManager {
 		switch (shape) {
 			case Shape.Sphere:
 				return createIcosphere(3);
+			case Shape.Cube:
+				return createBeveledCube();
 			default:
 				return createIcosphere(0);
 		}

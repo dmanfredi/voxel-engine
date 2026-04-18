@@ -539,6 +539,18 @@ async function main(): Promise<void> {
 		vz: -2,
 	});
 
+	// Phase 1 cube: static spawn for visual verification of the beveled mesh.
+	// Sits in place (no physics or AI yet); compare to the spheres above.
+	entityManager.spawn({
+		shape: Shape.Cube,
+		material: Material.Marble,
+		role: Role.Zone,
+		x: worldCenter + 60,
+		y: worldCenter + 100,
+		z: worldCenter - 100,
+		size: 10,
+	});
+
 	// Initialize block highlight outline
 	// const highlight = initHighlight(device, presentationFormat);
 

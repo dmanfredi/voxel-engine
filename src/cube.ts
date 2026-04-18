@@ -243,12 +243,18 @@ export function createBeveledCube(bevel = 0.08): MeshData {
 		// gives V = 0 on face A's boundary (pos[aB]·dB = inner) and
 		// V = √2·bevel/inner on face B's (pos[aB]·dB = 1). Sign-agnostic.
 		const sqrt2 = Math.sqrt(2);
+		// On vertical chamfers (edge along Y, aC === 1) swap U/V so texture V
+		// maps to world Y — matches the axis-0 face convention in faceUV and
+		// keeps directional textures from rotating 90° at the bevel.
 		const chamferUV = (
 			p: readonly [number, number, number],
-		): [number, number] => [
-			p[aC] / inner,
-			(sqrt2 * (p[aB] * dB - inner)) / inner,
-		];
+		): [number, number] => {
+			const alongEdge = p[aC] / inner;
+			const acrossBevel = (sqrt2 * (p[aB] * dB - inner)) / inner;
+			return aC === 1
+				? [acrossBevel, alongEdge]
+				: [alongEdge, acrossBevel];
+		};
 		const uvAneg = chamferUV(pAneg);
 		const uvApos = chamferUV(pApos);
 		const uvBneg = chamferUV(pBneg);

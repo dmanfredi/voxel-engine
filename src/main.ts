@@ -543,12 +543,12 @@ async function main(): Promise<void> {
 	// Sits in place (no physics or AI yet); compare to the spheres above.
 	entityManager.spawn({
 		shape: Shape.Cube,
-		material: Material.Marble,
+		material: Material.DarkMarble,
 		role: Role.Zone,
 		x: worldCenter + 60,
 		y: worldCenter + 100,
-		z: worldCenter - 100,
-		size: 10,
+		z: worldCenter - 200,
+		size: 20,
 	});
 
 	// Initialize block highlight outline

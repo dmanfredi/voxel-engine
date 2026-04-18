@@ -59,17 +59,23 @@ const VoxelShader = /*wgsl*/ `
 	@fragment fn fs(vsOut: VSOutput) -> @location(0) vec4f {
 		let texColor = textureSampleBias(myTexture, mySampler, vsOut.uv, vsOut.texLayer, MIP_LOD_BIAS);
 
-		// Per-face shading: top brightest, sides medium, bottom darkest
+		// Per-face shading aligned with LIGHT_DIR (sun is up / south / west).
+		// Lit sides brighter than shadowed sides; values roughly track
+		// dot(n, LIGHT_DIR) mapped into [0.5, 1.0].
 		let n = vsOut.normal;
 		var brightness: f32;
 		if (n.y > 0.5) {
-			brightness = 1.0;   // top
+			brightness = 1.0;    // top      (+Y, sun overhead)
 		} else if (n.y < -0.5) {
-			brightness = 0.5;   // bottom
-		} else if (abs(n.x) > 0.5) {
-			brightness = 0.6;   // east/west
+			brightness = 0.5;    // bottom   (-Y, away from sun)
+		} else if (n.z > 0.5) {
+			brightness = 0.9;    // south    (+Z, lit)
+		} else if (n.x < -0.5) {
+			brightness = 0.8;    // west     (-X, lit)
+		} else if (n.x > 0.5) {
+			brightness = 0.6;    // east     (+X, shadowed)
 		} else {
-			brightness = 0.8;   // north/south
+			brightness = 0.55;   // north    (-Z, shadowed)
 		}
 
 		// Sky-tinted specular: sample cubemap along reflection for highlight color

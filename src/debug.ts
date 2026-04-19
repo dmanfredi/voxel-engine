@@ -55,13 +55,13 @@ export function BuildDebug(render: () => void): void {
 	const reflFolder = pane.addFolder({ title: 'Specular' });
 	reflFolder.addBinding(debuggerParams, 'shininess', {
 		label: 'Shininess',
-		min: 0,
-		max: 256,
+		min: -100,
+		max: 100,
 		step: 1,
 	});
 	reflFolder.addBinding(debuggerParams, 'specularStrength', {
 		label: 'Spec Strength',
-		min: 0,
+		min: -1,
 		max: 1,
 		step: 0.05,
 	});

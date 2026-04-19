@@ -21,7 +21,12 @@ import {
 	destroyEntityRenderData,
 } from './entity-renderer';
 import type { EntityRenderer, EntityRenderData } from './entity-renderer';
-import { entityPhysicsTick, resolveSpherePair } from './entity-physics';
+import {
+	entityPhysicsTick,
+	entityCubePhysicsTick,
+	resolveSpherePair,
+	resolveSphereVsCube,
+} from './entity-physics';
 import { entityAITick } from './entity-ai';
 import type { World } from './world';
 
@@ -157,6 +162,20 @@ export class EntityManager {
 	}
 
 	spawn(config: SpawnConfig): number {
+		// Cubes must span a whole number of voxels. Keeps Phase 4 navigation
+		// (tip destinations, scaffold footprints) grid-aligned — no fractional
+		// cell reasoning. Throws at authoring time so the constraint can't
+		// silently drift into the codebase.
+		if (config.shape === Shape.Cube) {
+			const edge = 2 * config.size;
+			const ratio = edge / this.world.blockSize;
+			if (Math.abs(ratio - Math.round(ratio)) > 1e-6) {
+				throw new Error(
+					`Cube size must produce a whole-voxel edge: got size=${String(config.size)} (edge=${String(edge)}) with blockSize=${String(this.world.blockSize)}`,
+				);
+			}
+		}
+
 		let mesh = this.meshCache.get(config.shape);
 		if (!mesh) {
 			mesh = this.generateMesh(config.shape);
@@ -240,36 +259,55 @@ export class EntityManager {
 		const px = playerPos[0] ?? 0;
 		const pz = playerPos[2] ?? 0;
 
-		// Pass 1 — per-entity AI + solo physics (gravity, walls, player).
-		// Cubes have no physics or AI yet (Phase 1 = static rendering only;
-		// Phase 2 will add AABB-vs-voxel + sphere-vs-cube collision, Phase 3
-		// adds tipping movement). Skipping the loop entirely is the cleanest
-		// way to keep them stationary without introducing cube branches into
-		// sphere-shaped code.
+		// Pass 1 — per-entity AI + solo physics, dispatched by shape.
+		// Spheres run AI + sphere physics (gravity, voxel/player contact).
+		// Cubes run cube physics only (gravity + AABB-vs-voxel, no AI). Cube
+		// AI and tipping land in a later phase; for now cubes just fall and
+		// settle.
 		for (const entity of this.entities) {
-			if (entity.shape !== Shape.Sphere) continue;
-			const mat = materials[entity.material];
-			entityAITick(entity, playerPos, mat.baseSpeed, entity.mass, ww, dt);
-			entityPhysicsTick(
-				entity,
-				this.world,
-				playerPos,
-				playerHalfWidth,
-				playerHeight,
-				dt,
-			);
+			if (entity.shape === Shape.Sphere) {
+				const mat = materials[entity.material];
+				entityAITick(
+					entity,
+					playerPos,
+					mat.baseSpeed,
+					entity.mass,
+					ww,
+					dt,
+				);
+				entityPhysicsTick(
+					entity,
+					this.world,
+					playerPos,
+					playerHalfWidth,
+					playerHeight,
+					dt,
+				);
+			} else if (entity.shape === Shape.Cube) {
+				entityCubePhysicsTick(entity, this.world, dt);
+			}
 		}
 
-		// Pass 2 — sphere-vs-sphere resolution. O(n²) pair iteration; fine at
-		// small n. Splitting this out of the per-entity loop means each pair
-		// sees finalized post-integration positions on both sides.
+		// Pass 2 — pair resolution. O(n²) iteration; fine at small n.
+		// Splitting this out of Pass 1 means each pair sees finalized
+		// post-integration positions on both sides. Cubes are treated as
+		// infinite mass vs spheres (sphere bounces, cube doesn't budge),
+		// matching the "cubes are platforms" design.
 		for (let i = 0; i < this.entities.length; i++) {
 			const a = this.entities[i];
-			if (a.shape !== Shape.Sphere) continue;
 			for (let j = i + 1; j < this.entities.length; j++) {
 				const b = this.entities[j];
-				if (b.shape !== Shape.Sphere) continue;
-				resolveSpherePair(a, b, ww);
+				if (a.shape === Shape.Sphere && b.shape === Shape.Sphere) {
+					resolveSpherePair(a, b, ww);
+				} else if (a.shape === Shape.Sphere && b.shape === Shape.Cube) {
+					resolveSphereVsCube(a, b, ww);
+				} else if (a.shape === Shape.Cube && b.shape === Shape.Sphere) {
+					resolveSphereVsCube(b, a, ww);
+				}
+				// TODO(phase 2+): cube-vs-cube depenetration. At spawn cubes
+				// are authored apart and no dynamics currently push them into
+				// each other, so this pair is intentionally a no-op. Revisit
+				// once sphere impulses can shove cubes or tipping lands.
 			}
 		}
 

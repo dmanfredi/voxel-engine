@@ -539,8 +539,9 @@ async function main(): Promise<void> {
 		vz: -2,
 	});
 
-	// Phase 1 cube: static spawn for visual verification of the beveled mesh.
-	// Sits in place (no physics or AI yet); compare to the spheres above.
+	// Phase 2 cube: spawned above terrain, falls under gravity and settles
+	// on the first solid voxel beneath it. Spheres that roll into it will
+	// bounce off (cube treated as infinite mass).
 	entityManager.spawn({
 		shape: Shape.Cube,
 		material: Material.DarkMarble,

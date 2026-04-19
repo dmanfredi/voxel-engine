@@ -1,9 +1,12 @@
 /**
- * Entity physics — semi-implicit Euler integration + impulse-based collision
- * response for spheres. Mirrors the player's physics model in movement.ts for
+ * Entity physics — semi-implicit Euler integration + collision response for
+ * non-voxel entities. Mirrors the player's physics model in movement.ts for
  * consistency (same MC_TICK, same GRAVITY, same terminal velocity).
  *
- * Currently only Sphere shape is handled; other shapes fall through.
+ * Spheres use closest-point narrowphase + restitution-driven bounce.
+ * Cubes use axis-separated AABB-vs-grid snap-and-zero (no bounce — cubes
+ * are treated as platforms/obstacles). Shape dispatch happens at the
+ * EntityManager level, not here.
  */
 
 import { mat4 } from 'wgpu-matrix';
@@ -11,7 +14,6 @@ import { blockRegistry } from './block';
 import { CHUNK_SIZE } from './chunk';
 import type { World } from './world';
 import type { Entity } from './entity';
-import { Shape } from './entity';
 
 const MC_TICK = 0.05;
 const GRAVITY = 0.8;
@@ -34,9 +36,7 @@ export function entityPhysicsTick(
 	playerHeight: number,
 	dt: number,
 ): void {
-	// Only spheres for now; other shapes are no-op until their physics lands
-	if (entity.shape !== Shape.Sphere) return;
-
+	// Caller dispatches by shape; this function is sphere-only.
 	const t = dt / MC_TICK;
 
 	// Gravity + terminal velocity
@@ -336,6 +336,158 @@ export function resolveSpherePair(a: Entity, b: Entity, ww: number): void {
 	b.vx -= (j / b.mass) * nx;
 	b.vy -= (j / b.mass) * ny;
 	b.vz -= (j / b.mass) * nz;
+}
+
+/**
+ * Cube physics tick — gravity + axis-separated AABB-vs-voxel collision.
+ * No bounce on landing (restitution ignored); velocity along the contact
+ * axis is zeroed. Cubes are symmetric around their center: AABB half-extent
+ * equals `entity.scale` on all three axes (mesh spans [-1, +1]³).
+ *
+ * No AI hook, no player collision, no rolling update. Tipping and player
+ * interaction land in later phases.
+ */
+export function entityCubePhysicsTick(
+	entity: Entity,
+	world: World,
+	dt: number,
+): void {
+	const t = dt / MC_TICK;
+
+	entity.vy -= GRAVITY * t;
+	if (entity.vy < TERMINAL_VELOCITY) entity.vy = TERMINAL_VELOCITY;
+
+	if (Math.abs(entity.vx) < NEGLIGIBLE * t) entity.vx = 0;
+	if (Math.abs(entity.vz) < NEGLIGIBLE * t) entity.vz = 0;
+
+	entity.grounded = false;
+
+	const s = entity.scale;
+	const blockSize = world.blockSize;
+
+	// X → Z → Y resolution order mirrors the player's moveAndCollide. Each
+	// axis integrates, then snaps back if the swept AABB lands inside solid.
+	const dx = entity.vx * t;
+	if (dx !== 0) {
+		entity.x += dx;
+		if (resolveCubeAxis(entity, world, blockSize, s, 0, Math.sign(dx))) {
+			entity.vx = 0;
+		}
+	}
+
+	const dz = entity.vz * t;
+	if (dz !== 0) {
+		entity.z += dz;
+		if (resolveCubeAxis(entity, world, blockSize, s, 2, Math.sign(dz))) {
+			entity.vz = 0;
+		}
+	}
+
+	const dy = entity.vy * t;
+	if (dy !== 0) {
+		entity.y += dy;
+		const dir = Math.sign(dy);
+		if (resolveCubeAxis(entity, world, blockSize, s, 1, dir)) {
+			if (dir < 0) entity.grounded = true;
+			entity.vy = 0;
+		}
+	}
+
+	const ww = world.widthChunks * CHUNK_SIZE * blockSize;
+	entity.x = ((entity.x % ww) + ww) % ww;
+	entity.z = ((entity.z % ww) + ww) % ww;
+}
+
+/**
+ * Resolve a cube's AABB against the voxel grid along a single axis. If any
+ * solid block overlaps the AABB, snaps the cube to the contact surface of
+ * the block nearest to the pre-move position (smallest bx for +dir,
+ * largest for -dir) and returns true.
+ *
+ * `axis` is 0 (x), 1 (y), 2 (z); `direction` is the sign of motion.
+ */
+function resolveCubeAxis(
+	entity: Entity,
+	world: World,
+	blockSize: number,
+	s: number,
+	axis: number,
+	direction: number,
+): boolean {
+	const minX = entity.x - s;
+	const maxX = entity.x + s;
+	const minY = entity.y - s;
+	const maxY = entity.y + s;
+	const minZ = entity.z - s;
+	const maxZ = entity.z + s;
+
+	const bxMin = Math.floor(minX / blockSize);
+	const bxMax = Math.floor((maxX - 1e-6) / blockSize);
+	const byMin = Math.floor(minY / blockSize);
+	const byMax = Math.floor((maxY - 1e-6) / blockSize);
+	const bzMin = Math.floor(minZ / blockSize);
+	const bzMax = Math.floor((maxZ - 1e-6) / blockSize);
+
+	let collided = false;
+	let best = direction > 0 ? Infinity : -Infinity;
+
+	for (let bx = bxMin; bx <= bxMax; bx++) {
+		for (let by = byMin; by <= byMax; by++) {
+			for (let bz = bzMin; bz <= bzMax; bz++) {
+				if (!world.isSolid(bx, by, bz)) continue;
+				collided = true;
+				const b = axis === 0 ? bx : axis === 1 ? by : bz;
+				if (direction > 0) {
+					if (b < best) best = b;
+				} else if (b > best) best = b;
+			}
+		}
+	}
+
+	if (!collided) return false;
+
+	const snap =
+		direction > 0 ? best * blockSize - s : (best + 1) * blockSize + s;
+	if (axis === 0) entity.x = snap;
+	else if (axis === 1) entity.y = snap;
+	else entity.z = snap;
+	return true;
+}
+
+/**
+ * Sphere-vs-cube collision. Wrap-aware: shifts the cube to the copy nearest
+ * the sphere before the AABB test. The cube is treated as infinite mass —
+ * only the sphere moves and receives impulse. Cube restitution forced to 0
+ * so bounce is driven by the sphere's own restitution alone; matches the
+ * design intent that cubes act as inelastic platforms.
+ */
+export function resolveSphereVsCube(
+	sphere: Entity,
+	cube: Entity,
+	ww: number,
+): void {
+	const hw = ww / 2;
+	let cx = cube.x;
+	let cz = cube.z;
+	const dxRaw = sphere.x - cx;
+	const dzRaw = sphere.z - cz;
+	if (dxRaw > hw) cx += ww;
+	else if (dxRaw < -hw) cx -= ww;
+	if (dzRaw > hw) cz += ww;
+	else if (dzRaw < -hw) cz -= ww;
+
+	const s = cube.scale;
+	resolveSphereVsAABB(
+		sphere,
+		cx - s,
+		cx + s,
+		cube.y - s,
+		cube.y + s,
+		cz - s,
+		cz + s,
+		sphere.restitution,
+		0,
+	);
 }
 
 /**

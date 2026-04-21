@@ -67,10 +67,15 @@ Simplifications kept per spec:
 
 Debug trigger still `KeyT` — calls `tipAllCubesTowardPlayer` which now routes through `tryTipCube`. No autonomous AI cadence yet; will add per-cube idle timer + direction-selection once scaffold is playtested.
 
+**Climbing (done).** Climb is a 180° single-rotation tip around the top-forward edge of the adjacent wall (shared with the cube's top-leading edge) — a handspring arc. `direction` now carries a `dy` component: `dy=0` is horizontal (90°), `dy=1` is climb (180°). `startCubeTip` branches on dy for pivot Y offset (`-s` horizontal, `+s` climb), sourceOffset Y (inverted), and `endAngle` (π/2 vs π). The rotation axis and destination-beneath scaffold formula are identical — the N³-beneath-destination region is "the ground" for horizontal and "the wall" for climb, and filling its air cells handles both "fill pit" and "complete/create wall" cases with no special-casing.
+
+`tipAllCubesTowardPlayer` now uses a greedy climb fallback: try horizontal first, fall back to climb in the same direction if horizontal is blocked (typically by a wall). Fallback succeeds whenever the upper destination cells are clear.
+
+Intentional geometry note: the 180° arc sweeps the cube up and over through a peak ~s·√2 above the pivot before landing on top of the wall. Reads as a handspring / pole-vault motion. Option A (tipping cubes non-collidable) hides any awkwardness during the arc. Revisit with easing curves or split-primitive climbs if the motion looks bad in playtest.
+
 **Still to do:**
 
-- Direction selection with fallbacks (if the preferred axis is blocked, try the other). Currently picks dominant axis and stalls if infeasible.
-- Vertical climbing — the "place forward, then place above forward" sequence. Probably two consecutive state-machine ticks: first tick places the wall block, next tick tips up onto it.
+- Direction selection with horizontal fallbacks (if the preferred axis is blocked both horizontal and climb, try the other axis).
 - Autonomous AI cadence — per-cube idle timer so cubes tip every ~1s rather than on debug key.
 
 ### Phase 5 — Roles on top

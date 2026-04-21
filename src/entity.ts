@@ -349,15 +349,19 @@ export class EntityManager {
 	 * should call — `startCubeTip` alone only checks for ground, it can't
 	 * create it.
 	 *
-	 * Scaffold policy (Phase 4 basic case, horizontal only):
-	 *   - Destination AABB must be fully air (unchanged from Phase 3).
+	 * Scaffold policy — same formula handles horizontal walks AND climbs:
+	 *   - Destination AABB must be fully air.
 	 *   - N³ region directly beneath the destination: any air cells become
 	 *     the cube's material. Cells already solid are left alone — we never
-	 *     overwrite existing terrain.
+	 *     overwrite existing terrain. For horizontal tips, this region is
+	 *     "the ground" below destination (fills pits). For climbs (dy=1),
+	 *     it's the wall between source and destination (completes or creates
+	 *     the wall the cube tips onto).
 	 *   - If any scaffold cell would overlap an entity, stall. Prevents the
 	 *     cube from crushing spheres (or future entities) to build ground.
-	 *   - Full-cube scaffold even when geometrically only N×N×1 is needed —
-	 *     simplification per the Phase 4 spec. Deep pits get filled.
+	 *   - Full N³ scaffold even when geometrically less is needed —
+	 *     simplification per the Phase 4 spec. Deep pits and tall walls get
+	 *     fully filled.
 	 *
 	 * Returns true if the tip started (scaffold may or may not have been
 	 * needed). Returns false and console.warns on any blocker.
@@ -374,16 +378,17 @@ export class EntityManager {
 		if (entity.shape !== Shape.Cube) return false;
 		if (entity.tip !== null) return false;
 
-		const [dx, , dz] = direction;
+		const [dx, dy, dz] = direction;
 		const blockSize = this.world.blockSize;
 		const s = entity.scale;
 		const edge = 2 * s;
 		const nVox = Math.round(edge / blockSize);
 
 		const destX = entity.x + dx * edge;
+		const destY = entity.y + dy * edge;
 		const destZ = entity.z + dz * edge;
 		const dMinBX = Math.floor((destX - s) / blockSize);
-		const dMinBY = Math.floor((entity.y - s) / blockSize);
+		const dMinBY = Math.floor((destY - s) / blockSize);
 		const dMinBZ = Math.floor((destZ - s) / blockSize);
 
 		// Pre-flight: destination cells must all be air. Checked here (not
@@ -457,6 +462,12 @@ export class EntityManager {
 	 * dominant horizontal axis. Routes through `tryTipCube` so scaffolding
 	 * runs. Used by the KeyT keybind to validate tip + scaffold before AI
 	 * cadence is wired up.
+	 *
+	 * Greedy climb fallback: try horizontal first; if that's blocked (most
+	 * common cause: wall in front), try climbing the same direction. Climb
+	 * scaffolding will fill the wall as needed, so the fallback succeeds
+	 * in any case where the upper destination cells are clear and the cube
+	 * has room to arc over.
 	 */
 	tipAllCubesTowardPlayer(
 		playerPos: Float32Array,
@@ -487,7 +498,10 @@ export class EntityManager {
 			} else {
 				dirZ = dz >= 0 ? 1 : -1;
 			}
-			this.tryTipCube(entity, [dirX, 0, dirZ], onBlockChanged);
+			if (this.tryTipCube(entity, [dirX, 0, dirZ], onBlockChanged)) {
+				continue;
+			}
+			this.tryTipCube(entity, [dirX, 1, dirZ], onBlockChanged);
 		}
 	}
 
@@ -565,7 +579,7 @@ export class EntityManager {
 			// absorbed into the outermost translation so horizontal wrapping
 			// works the same as the idle branch.
 			const tip = entity.tip;
-			const theta = tip.progress * (Math.PI / 2);
+			const theta = tip.progress * tip.endAngle;
 			model = mat4.translation([
 				tip.pivot[0] + offsetX,
 				tip.pivot[1],

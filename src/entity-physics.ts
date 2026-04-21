@@ -36,14 +36,21 @@ const TIP_DURATION = 0.4;
  * its pre-tip pose toward the destination.
  *
  * Composite model matrix:
- *   M = T(pivot) · R(axis, progress·90°) · T(sourceOffset) · baseOrientation · S(scale)
+ *   M = T(pivot) · R(axis, progress·endAngle) · T(sourceOffset) · baseOrientation · S(scale)
  * where sourceOffset = sourceCenter − pivot (both world-space).
+ *
+ * `endAngle` is π/2 for horizontal tips and π for climbs. Climbs pivot around
+ * the top-forward edge of the wall (shared with the cube's top-leading edge),
+ * so the cube sweeps a 180° arc that carries it up and over onto the wall —
+ * a handspring motion. Geometry is unified by branching only pivot Y offset,
+ * sourceOffset Y, and endAngle on dy.
  */
 export interface TipState {
 	progress: number; // 0..1 over TIP_DURATION
 	pivot: Float32Array<ArrayBuffer>; // vec3, world-space pivot edge midpoint
 	sourceOffset: Float32Array<ArrayBuffer>; // vec3, sourceCenter − pivot
 	axis: Float32Array<ArrayBuffer>; // vec3, unit rotation axis
+	endAngle: number; // radians at progress=1 (π/2 horizontal, π climb)
 	baseOrientation: Float32Array<ArrayBuffer>; // mat4, orientation at tip start
 }
 
@@ -479,10 +486,16 @@ function resolveCubeAxis(
 }
 
 /**
- * Kick off a 90° tip in the given axis-aligned direction. Returns false and
+ * Kick off a tip in the given axis-aligned direction. Returns false and
  * warns to console if the tip is infeasible — destination cells not all air,
- * or the cells directly below the destination not all solid (nothing to land
- * on). Also rejects if the entity isn't a cube or is already tipping.
+ * or the cell directly below the destination footprint not solid (no pivot
+ * edge to rotate around). Also rejects if the entity isn't a cube or is
+ * already tipping.
+ *
+ * `direction = [dx, dy, dz]`:
+ *   - dy=0, (dx,dz) axis-aligned unit → horizontal walk (90° tip)
+ *   - dy=+1, (dx,dz) axis-aligned unit → climb up onto adjacent wall (180° tip)
+ *   - Other combinations (corners, dy=-1, straight-up) not supported.
  *
  * On success: entity position snaps to the destination cell, velocity zeros,
  * and `entity.tip` is populated. The render transform compensates so the
@@ -492,9 +505,6 @@ function resolveCubeAxis(
  * Mid-tip collision (vs spheres, vs voxels) is deferred — tipping cubes are
  * simply non-interactive for the brief arc duration. Per the Phase 3 plan
  * (see notes/cube-enemy.md).
- *
- * `direction` must be one of ±X / ±Z unit vectors; corner / diagonal tips
- * aren't supported.
  */
 export function startCubeTip(
 	entity: Entity,
@@ -504,22 +514,24 @@ export function startCubeTip(
 	if (entity.shape !== Shape.Cube) return false;
 	if (entity.tip !== null) return false;
 
-	const [dx, , dz] = direction;
+	const [dx, dy, dz] = direction;
 	const blockSize = world.blockSize;
 	const s = entity.scale;
 	const edge = 2 * s;
 	const nVox = Math.round(edge / blockSize);
 
-	// Source center (current entity position) and destination center
+	// Source center (current entity position) and destination center. For
+	// a climb (dy=1) the destination is one cube-edge forward AND up.
 	const destX = entity.x + dx * edge;
+	const destY = entity.y + dy * edge;
 	const destZ = entity.z + dz * edge;
 
-	// Feasibility: every destination cell is air, every cell directly below
-	// the destination footprint is solid. Uses the destination AABB floored
-	// into block coords — assumes grid-aligned voxel sizing (enforced at
-	// spawn by the whole-voxel-edge check).
+	// Feasibility: every destination cell is air, and the layer immediately
+	// beneath destination is solid (the pivot edge must be a real block
+	// corner). For climbs that layer is the top of the wall; for horizontal
+	// walks it's the ground. Same check, different semantics.
 	const dMinBX = Math.floor((destX - s) / blockSize);
-	const dMinBY = Math.floor((entity.y - s) / blockSize);
+	const dMinBY = Math.floor((destY - s) / blockSize);
 	const dMinBZ = Math.floor((destZ - s) / blockSize);
 	for (let ix = 0; ix < nVox; ix++) {
 		for (let iy = 0; iy < nVox; iy++) {
@@ -544,18 +556,22 @@ export function startCubeTip(
 		}
 	}
 
-	// Pivot = midpoint of the cube's bottom edge on the tip side. Relative
-	// to source center: (dx·s, −s, dz·s).
+	// Pivot selection branches on dy:
+	//   Horizontal (dy=0): bottom-forward edge of source at (dx·s, −s, dz·s).
+	//   Climb (dy=1): top-forward edge of source at (dx·s, +s, dz·s) — this
+	//     edge is shared with the top-back edge of the wall the cube climbs.
+	// sourceOffset = sourceCenter − pivot; inverts pivot's local offset.
+	const pivotYOffset = dy === 0 ? -s : s;
 	const pivotX = entity.x + dx * s;
-	const pivotY = entity.y - s;
+	const pivotY = entity.y + pivotYOffset;
 	const pivotZ = entity.z + dz * s;
+	const sourceOffset = new Float32Array([-dx * s, -pivotYOffset, -dz * s]);
 
-	// sourceOffset = sourceCenter − pivot = (−dx·s, s, −dz·s)
-	const sourceOffset = new Float32Array([-dx * s, s, -dz * s]);
-
-	// Rotation axis = cross(up, direction) = (dz, 0, −dx). 90° around this
-	// maps +Y → direction (top face becomes the leading face after tip).
+	// Rotation axis = cross(up, direction) = (dz, 0, −dx). Same for both
+	// cases — the axis runs along the pivot edge either way. Only the total
+	// rotation amount changes: 90° for horizontal, 180° for climb.
 	const axis = new Float32Array([dz, 0, -dx]);
+	const endAngle = dy === 0 ? Math.PI / 2 : Math.PI;
 
 	// Snapshot orientation into a fresh ArrayBuffer-backed view so the stored
 	// matrix can't be mutated by subsequent orientation updates.
@@ -566,6 +582,7 @@ export function startCubeTip(
 	// post-tip position (for the frames it still runs — tipping cubes are
 	// excluded from pair checks per the plan).
 	entity.x = destX;
+	entity.y = destY;
 	entity.z = destZ;
 	entity.vx = 0;
 	entity.vy = 0;
@@ -576,6 +593,7 @@ export function startCubeTip(
 		pivot: new Float32Array([pivotX, pivotY, pivotZ]),
 		sourceOffset,
 		axis,
+		endAngle,
 		baseOrientation,
 	};
 	return true;
@@ -591,10 +609,12 @@ export function advanceCubeTip(entity: Entity, dt: number): void {
 	if (!tip) return;
 	tip.progress += dt / TIP_DURATION;
 	if (tip.progress >= 1) {
-		// Commit final rotation: orientation = R(axis, 90°) · baseOrientation.
+		// Commit final rotation: orientation = R(axis, endAngle) · baseOrientation.
 		// Matches the world-frame pre-multiplication pattern used by
-		// updateRolling, so subsequent rolls compose correctly.
-		const finalRot = mat4.axisRotation(tip.axis, Math.PI / 2);
+		// updateRolling, so subsequent rolls compose correctly. For a climb,
+		// endAngle=π means the cube lands "upside-down" relative to its
+		// pre-tip pose — the former bottom face is now on top. Intentional.
+		const finalRot = mat4.axisRotation(tip.axis, tip.endAngle);
 		mat4.multiply(finalRot, tip.baseOrientation, entity.orientation);
 		entity.tip = null;
 	}

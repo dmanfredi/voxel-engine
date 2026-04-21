@@ -548,7 +548,7 @@ async function main(): Promise<void> {
 		role: Role.Zone,
 		x: worldCenter + 60,
 		y: worldCenter + 100,
-		z: worldCenter - 200,
+		z: worldCenter - 100,
 		size: 20,
 	});
 

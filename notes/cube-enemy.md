@@ -57,9 +57,21 @@ Implemented. Resolved decisions:
 
 ### Phase 4 — Navigation + climbing
 
-- Direction selection toward player (one of 6 axes per step). Walk if the destination cell is empty and the cell beneath the destination is solid.
-- If the destination beneath is empty: try `tryPlaceBlock` to place a scaffold block. If accepted, walk. If rejected (entity in the way), blocked → the cube stalls. Stalling is a feature.
-- Going up: needs the "place forward, then place above forward" sequence. Probably two consecutive ticks of the state machine — first tick places the side block (turning a horizontal step into a wall to climb), next tick triggers the climb-up sequence.
+**Horizontal walk + auto-scaffold (in progress).** `EntityManager.tryTipCube` wraps `startCubeTip` with a scaffolding step: before delegating to the physics primitive, it fills any air cells in the N³ region directly beneath the destination with the cube's own material (dark-marble cube → DARK_MARBLE blocks, etc.). Two-phase commit — validate all scaffold cells against entity overlap first, then mutate + remesh together. If any cell would crush an entity, the whole tip stalls; no partial scaffold. `onBlockChanged` is passed in by the caller (matches the `autoClimb` pattern) and gets one call per placed block.
+
+Simplifications kept per spec:
+
+- Always places the full N³ sub-cube, even when only N×N×1 is geometrically needed — deep pits get filled in. Simpler than calculating the minimal fill, and the "cube leaves a trail" look is intentional.
+- Existing solid blocks beneath destination are never overwritten. Only air cells become scaffold.
+- Scaffold is free (no BP cost). Deferred until the economy needs it.
+
+Debug trigger still `KeyT` — calls `tipAllCubesTowardPlayer` which now routes through `tryTipCube`. No autonomous AI cadence yet; will add per-cube idle timer + direction-selection once scaffold is playtested.
+
+**Still to do:**
+
+- Direction selection with fallbacks (if the preferred axis is blocked, try the other). Currently picks dominant axis and stalls if infeasible.
+- Vertical climbing — the "place forward, then place above forward" sequence. Probably two consecutive state-machine ticks: first tick places the wall block, next tick tips up onto it.
+- Autonomous AI cadence — per-cube idle timer so cubes tip every ~1s rather than on debug key.
 
 ### Phase 5 — Roles on top
 

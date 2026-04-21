@@ -8,7 +8,10 @@ const WORLD_CENTER = WORLD_WIDTH_BLOCKS / 2;
 const EXTRA_CUBE_COUNT = 12;
 const MIN_SPACING = CUBE_SIZE + 4;
 
-type Cube = { x: number; z: number };
+interface Cube {
+	x: number;
+	z: number;
+}
 
 function makeCubes(): Cube[] {
 	const cubes: Cube[] = [

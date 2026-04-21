@@ -342,12 +342,126 @@ export class EntityManager {
 	}
 
 	/**
-	 * Debug helper — triggers a tip on every idle cube toward the player's
-	 * dominant horizontal axis. Cubes with infeasible destinations warn via
-	 * console and stay idle. Used by the KeyT keybind to validate tip
-	 * animation before AI dispatch is wired up (Phase 4).
+	 * Gameplay-level tip. Before delegating to the low-level `startCubeTip`
+	 * physics primitive, fills in any missing ground beneath the destination
+	 * with an N³ sub-cube of the cube's own material (dark-marble cubes place
+	 * dark-marble blocks, etc.). This is the entry point AI and debug tools
+	 * should call — `startCubeTip` alone only checks for ground, it can't
+	 * create it.
+	 *
+	 * Scaffold policy (Phase 4 basic case, horizontal only):
+	 *   - Destination AABB must be fully air (unchanged from Phase 3).
+	 *   - N³ region directly beneath the destination: any air cells become
+	 *     the cube's material. Cells already solid are left alone — we never
+	 *     overwrite existing terrain.
+	 *   - If any scaffold cell would overlap an entity, stall. Prevents the
+	 *     cube from crushing spheres (or future entities) to build ground.
+	 *   - Full-cube scaffold even when geometrically only N×N×1 is needed —
+	 *     simplification per the Phase 4 spec. Deep pits get filled.
+	 *
+	 * Returns true if the tip started (scaffold may or may not have been
+	 * needed). Returns false and console.warns on any blocker.
+	 *
+	 * `onBlockChanged` is invoked once per scaffold block placed so the
+	 * caller can schedule remeshes. Always called before the tip starts —
+	 * the first frame of the animation already sees the new terrain.
 	 */
-	tipAllCubesTowardPlayer(playerPos: Float32Array): void {
+	tryTipCube(
+		entity: Entity,
+		direction: [number, number, number],
+		onBlockChanged: (bx: number, by: number, bz: number) => void,
+	): boolean {
+		if (entity.shape !== Shape.Cube) return false;
+		if (entity.tip !== null) return false;
+
+		const [dx, , dz] = direction;
+		const blockSize = this.world.blockSize;
+		const s = entity.scale;
+		const edge = 2 * s;
+		const nVox = Math.round(edge / blockSize);
+
+		const destX = entity.x + dx * edge;
+		const destZ = entity.z + dz * edge;
+		const dMinBX = Math.floor((destX - s) / blockSize);
+		const dMinBY = Math.floor((entity.y - s) / blockSize);
+		const dMinBZ = Math.floor((destZ - s) / blockSize);
+
+		// Pre-flight: destination cells must all be air. Checked here (not
+		// just in startCubeTip) so we don't start scaffolding for a tip that
+		// can't happen anyway.
+		for (let ix = 0; ix < nVox; ix++) {
+			for (let iy = 0; iy < nVox; iy++) {
+				for (let iz = 0; iz < nVox; iz++) {
+					if (
+						this.world.isSolid(
+							dMinBX + ix,
+							dMinBY + iy,
+							dMinBZ + iz,
+						)
+					) {
+						console.warn(
+							`cube tip blocked: destination cell (${String(dMinBX + ix)}, ${String(dMinBY + iy)}, ${String(dMinBZ + iz)}) is solid`,
+						);
+						return false;
+					}
+				}
+			}
+		}
+
+		// Collect scaffold work: cells in the N³ directly below destination
+		// that are currently air. Two-phase commit — we validate everything
+		// first (no entity overlaps), then mutate + remesh together. If any
+		// cell fails the entity check, nothing is placed.
+		//
+		// iy ∈ [1, nVox]: iy=1 is the layer immediately under destination
+		// (same layer startCubeTip's ground check reads), iy=nVox is the
+		// deepest layer of the N³ scaffold cube.
+		const scaffoldCells: [number, number, number][] = [];
+		for (let ix = 0; ix < nVox; ix++) {
+			for (let iy = 1; iy <= nVox; iy++) {
+				for (let iz = 0; iz < nVox; iz++) {
+					const bx = dMinBX + ix;
+					const by = dMinBY - iy;
+					const bz = dMinBZ + iz;
+					if (this.world.isSolid(bx, by, bz)) continue;
+					if (this.blockIntersectsEntity(bx, by, bz)) {
+						console.warn(
+							`cube tip blocked: entity in scaffold cell (${String(bx)}, ${String(by)}, ${String(bz)})`,
+						);
+						return false;
+					}
+					scaffoldCells.push([bx, by, bz]);
+				}
+			}
+		}
+
+		// Commit phase — mutate world + notify remesher. Use the cube's own
+		// material for placed blocks (marble cube → MARBLE, brick → BRICK,
+		// dark-marble → DARK_MARBLE) so scaffolded terrain reads as the
+		// cube's trail.
+		const blockId = materials[entity.material].texLayer;
+		for (const [bx, by, bz] of scaffoldCells) {
+			this.world.setBlock(bx, by, bz, blockId);
+			onBlockChanged(bx, by, bz);
+		}
+
+		// startCubeTip re-checks destination + ground. After scaffold,
+		// ground-layer check will now pass. If something unexpected fails,
+		// it returns false and console.warns — blocks are already placed
+		// but nothing catastrophic: the scaffold just becomes inert terrain.
+		return startCubeTip(entity, this.world, direction);
+	}
+
+	/**
+	 * Debug helper — triggers a tip on every idle cube toward the player's
+	 * dominant horizontal axis. Routes through `tryTipCube` so scaffolding
+	 * runs. Used by the KeyT keybind to validate tip + scaffold before AI
+	 * cadence is wired up.
+	 */
+	tipAllCubesTowardPlayer(
+		playerPos: Float32Array,
+		onBlockChanged: (bx: number, by: number, bz: number) => void,
+	): void {
 		const px = playerPos[0] ?? 0;
 		const pz = playerPos[2] ?? 0;
 		const ww = this.world.widthChunks * CHUNK_SIZE * this.world.blockSize;
@@ -373,7 +487,7 @@ export class EntityManager {
 			} else {
 				dirZ = dz >= 0 ? 1 : -1;
 			}
-			startCubeTip(entity, this.world, [dirX, 0, dirZ]);
+			this.tryTipCube(entity, [dirX, 0, dirZ], onBlockChanged);
 		}
 	}
 

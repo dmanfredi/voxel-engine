@@ -942,7 +942,7 @@ async function main(): Promise<void> {
 			refreshDebug();
 		}
 		if (e.code === 'KeyT') {
-			entityManager.tipAllCubesTowardPlayer(cameraPos);
+			entityManager.tipAllCubesTowardPlayer(cameraPos, onBlockChanged);
 		}
 	});
 

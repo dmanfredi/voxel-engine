@@ -41,15 +41,19 @@ What's already in place that this design leans on:
 - Sphere-vs-cube: extend the sphere narrowphase to include cube entities as additional AABBs. From the sphere's POV it's "a block at an arbitrary position." The cube treats sphere impacts as immovable — infinite-mass case of the existing impulse formula falls out cleanly (cube velocity unchanged, sphere reflects).
 - No movement yet — cubes just fall and sit.
 
-### Phase 3 — Tipping movement primitive
+### Phase 3 — Tipping movement primitive ✅
 
-- Discrete state machine: `idle → tip → settle → idle`. While tipping, `entity.orientation` interpolates the rotation around the pivot edge.
-- Position is grid-aligned at rest. During a tip, the rendered position arcs around the pivot, but the canonical `x/y/z` should probably **snap to the destination cell at tip start and animate rotation only**, rather than tracking arc position. Simpler.
-- Mid-tip collision behavior is the open question:
-  - Option A: cube is non-collidable to spheres mid-tip (brief, simple, slightly cheaty)
-  - Option B: swept AABB across the arc
-  - Defer until we're actually animating one.
-- AI not wired yet — drive a tip via debug key to validate the animation feels right.
+Implemented. Resolved decisions:
+
+- **State machine.** Two states: `idle` (`entity.tip === null`) and `tipping` (populated `TipState`). No separate settle phase — the commit step at `progress >= 1` folds the 90° rotation into `entity.orientation` and returns directly to idle.
+- **Position snap.** Entity `x/y/z` snaps to the destination cell at tip start. `TipState` stores the pivot, source→pivot offset, rotation axis, and pre-tip orientation so the render transform can arc the cube visually from the source to the destination while the canonical position stays grid-aligned. Keeps physics and pair collision simple (they see a stable post-snap position, though pair checks are skipped for tipping cubes regardless).
+- **Composite transform.** `M = T(pivot + wrap) · R(axis, θ) · T(sourceOffset) · baseOrientation · S(scale)`. Wrap offset is absorbed into the outermost translation to match horizontal world wrapping. `sourceOffset = sourceCenter − pivot` is `(−dx·s, s, −dz·s)` for the 4 axis-aligned directions. Rotation axis is `cross(up, direction) = (dz, 0, −dx)`; 90° around this maps `+Y → direction` (top face becomes the leading face).
+- **Mid-tip collision: Option A.** Tipping cubes skip physics entirely (no gravity, no voxel collision) and are excluded from sphere-vs-cube pair resolution — spheres pass through them for the ~0.4s arc. The cheat is brief and the alternative (swept AABB across the arc) isn't worth the complexity until a concrete gameplay case demands it.
+- **Feasibility check.** Rejects a tip if any destination cell is solid, or if any cell directly below the destination footprint is air (nothing to land on). Failed tips log `console.warn` — debug-only for now, AI will just pick a different direction.
+- **Tip duration.** `TIP_DURATION = 0.4` seconds, linear easing. Ease-in/out deferred — easy swap inside `advanceCubeTip`.
+- **AI integration.** Not wired yet. Debug trigger: `KeyT` keybind calls `EntityManager.tipAllCubesTowardPlayer`, which picks the dominant horizontal axis from each cube to the player and calls `startCubeTip`.
+- **Textures tumble with the cube.** `baseOrientation` is captured at tip start and composed into the transform; the final rotation folds into `entity.orientation` at commit. Directional textures (brick) rotate with the cube across tips — intended.
+- **Corners intentionally excluded.** Only the 4 axis-aligned edge pivots; no diagonal / corner tipping.
 
 ### Phase 4 — Navigation + climbing
 

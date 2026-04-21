@@ -941,6 +941,9 @@ async function main(): Promise<void> {
 			}
 			refreshDebug();
 		}
+		if (e.code === 'KeyT') {
+			entityManager.tipAllCubesTowardPlayer(cameraPos);
+		}
 	});
 
 	document.addEventListener('keyup', (e) => {

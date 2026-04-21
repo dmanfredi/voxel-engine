@@ -12,6 +12,7 @@
 import { mat4 } from 'wgpu-matrix';
 import { blockRegistry } from './block';
 import { CHUNK_SIZE } from './chunk';
+import { Shape } from './entity';
 import type { World } from './world';
 import type { Entity } from './entity';
 
@@ -22,6 +23,29 @@ const NEGLIGIBLE = 0.05;
 const RESTING_THRESHOLD = 2.0;
 const PLAYER_RESTITUTION = 0.6;
 const DEFAULT_BLOCK_RESTITUTION = 0.3;
+
+// Seconds for one 90° tip. Tweak to taste — too fast looks snappy, too slow
+// looks floaty. Linear interpolation; ease-in/out is a later polish.
+const TIP_DURATION = 0.4;
+
+/**
+ * Mid-tip animation state. Present on a Cube entity between tip start and
+ * completion; null otherwise. Entity position (`x/y/z`) is snapped to the
+ * destination cell at tip start; the composite transform in `uploadTransform`
+ * uses the stored pivot/offset/axis to render the cube arcing back through
+ * its pre-tip pose toward the destination.
+ *
+ * Composite model matrix:
+ *   M = T(pivot) · R(axis, progress·90°) · T(sourceOffset) · baseOrientation · S(scale)
+ * where sourceOffset = sourceCenter − pivot (both world-space).
+ */
+export interface TipState {
+	progress: number; // 0..1 over TIP_DURATION
+	pivot: Float32Array<ArrayBuffer>; // vec3, world-space pivot edge midpoint
+	sourceOffset: Float32Array<ArrayBuffer>; // vec3, sourceCenter − pivot
+	axis: Float32Array<ArrayBuffer>; // vec3, unit rotation axis
+	baseOrientation: Float32Array<ArrayBuffer>; // mat4, orientation at tip start
+}
 
 // Scratch matrices for visual rolling — reused across all entities/frames
 // to avoid per-frame Float32Array allocations.
@@ -452,6 +476,128 @@ function resolveCubeAxis(
 	else if (axis === 1) entity.y = snap;
 	else entity.z = snap;
 	return true;
+}
+
+/**
+ * Kick off a 90° tip in the given axis-aligned direction. Returns false and
+ * warns to console if the tip is infeasible — destination cells not all air,
+ * or the cells directly below the destination not all solid (nothing to land
+ * on). Also rejects if the entity isn't a cube or is already tipping.
+ *
+ * On success: entity position snaps to the destination cell, velocity zeros,
+ * and `entity.tip` is populated. The render transform compensates so the
+ * cube visually starts at its pre-tip position and arcs around the pivot
+ * edge to land at the destination over TIP_DURATION seconds.
+ *
+ * Mid-tip collision (vs spheres, vs voxels) is deferred — tipping cubes are
+ * simply non-interactive for the brief arc duration. Per the Phase 3 plan
+ * (see notes/cube-enemy.md).
+ *
+ * `direction` must be one of ±X / ±Z unit vectors; corner / diagonal tips
+ * aren't supported.
+ */
+export function startCubeTip(
+	entity: Entity,
+	world: World,
+	direction: [number, number, number],
+): boolean {
+	if (entity.shape !== Shape.Cube) return false;
+	if (entity.tip !== null) return false;
+
+	const [dx, , dz] = direction;
+	const blockSize = world.blockSize;
+	const s = entity.scale;
+	const edge = 2 * s;
+	const nVox = Math.round(edge / blockSize);
+
+	// Source center (current entity position) and destination center
+	const destX = entity.x + dx * edge;
+	const destZ = entity.z + dz * edge;
+
+	// Feasibility: every destination cell is air, every cell directly below
+	// the destination footprint is solid. Uses the destination AABB floored
+	// into block coords — assumes grid-aligned voxel sizing (enforced at
+	// spawn by the whole-voxel-edge check).
+	const dMinBX = Math.floor((destX - s) / blockSize);
+	const dMinBY = Math.floor((entity.y - s) / blockSize);
+	const dMinBZ = Math.floor((destZ - s) / blockSize);
+	for (let ix = 0; ix < nVox; ix++) {
+		for (let iy = 0; iy < nVox; iy++) {
+			for (let iz = 0; iz < nVox; iz++) {
+				if (world.isSolid(dMinBX + ix, dMinBY + iy, dMinBZ + iz)) {
+					console.warn(
+						`cube tip blocked: destination cell (${String(dMinBX + ix)}, ${String(dMinBY + iy)}, ${String(dMinBZ + iz)}) is solid`,
+					);
+					return false;
+				}
+			}
+		}
+	}
+	for (let ix = 0; ix < nVox; ix++) {
+		for (let iz = 0; iz < nVox; iz++) {
+			if (!world.isSolid(dMinBX + ix, dMinBY - 1, dMinBZ + iz)) {
+				console.warn(
+					`cube tip blocked: no ground beneath destination at (${String(dMinBX + ix)}, ${String(dMinBY - 1)}, ${String(dMinBZ + iz)})`,
+				);
+				return false;
+			}
+		}
+	}
+
+	// Pivot = midpoint of the cube's bottom edge on the tip side. Relative
+	// to source center: (dx·s, −s, dz·s).
+	const pivotX = entity.x + dx * s;
+	const pivotY = entity.y - s;
+	const pivotZ = entity.z + dz * s;
+
+	// sourceOffset = sourceCenter − pivot = (−dx·s, s, −dz·s)
+	const sourceOffset = new Float32Array([-dx * s, s, -dz * s]);
+
+	// Rotation axis = cross(up, direction) = (dz, 0, −dx). 90° around this
+	// maps +Y → direction (top face becomes the leading face after tip).
+	const axis = new Float32Array([dz, 0, -dx]);
+
+	// Snapshot orientation into a fresh ArrayBuffer-backed view so the stored
+	// matrix can't be mutated by subsequent orientation updates.
+	const baseOrientation = new Float32Array(entity.orientation);
+
+	// Snap position to destination up-front. Simpler than tracking arc
+	// position: physics stays grid-aligned and pair collision sees a stable
+	// post-tip position (for the frames it still runs — tipping cubes are
+	// excluded from pair checks per the plan).
+	entity.x = destX;
+	entity.z = destZ;
+	entity.vx = 0;
+	entity.vy = 0;
+	entity.vz = 0;
+
+	entity.tip = {
+		progress: 0,
+		pivot: new Float32Array([pivotX, pivotY, pivotZ]),
+		sourceOffset,
+		axis,
+		baseOrientation,
+	};
+	return true;
+}
+
+/**
+ * Advance a tip's progress by `dt`. When progress crosses 1.0, commits the
+ * 90° rotation into `entity.orientation` (so the next idle render picks up
+ * the new pose) and clears `entity.tip`.
+ */
+export function advanceCubeTip(entity: Entity, dt: number): void {
+	const tip = entity.tip;
+	if (!tip) return;
+	tip.progress += dt / TIP_DURATION;
+	if (tip.progress >= 1) {
+		// Commit final rotation: orientation = R(axis, 90°) · baseOrientation.
+		// Matches the world-frame pre-multiplication pattern used by
+		// updateRolling, so subsequent rolls compose correctly.
+		const finalRot = mat4.axisRotation(tip.axis, Math.PI / 2);
+		mat4.multiply(finalRot, tip.baseOrientation, entity.orientation);
+		entity.tip = null;
+	}
 }
 
 /**

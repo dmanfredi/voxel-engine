@@ -26,7 +26,10 @@ import {
 	entityCubePhysicsTick,
 	resolveSpherePair,
 	resolveSphereVsCube,
+	startCubeTip,
+	advanceCubeTip,
 } from './entity-physics';
+import type { TipState } from './entity-physics';
 import { entityAITick } from './entity-ai';
 import type { World } from './world';
 
@@ -122,6 +125,10 @@ export interface Entity {
 	role: Role;
 	traits: Trait[];
 	renderData: EntityRenderData;
+	// Non-null only while a Cube is mid-tip. Physics + pair collision skip
+	// entities with an active tip; uploadTransform switches to the tip
+	// composite transform.
+	tip: TipState | null;
 }
 
 export interface SpawnConfig {
@@ -240,6 +247,7 @@ export class EntityManager {
 			role: config.role,
 			traits: config.traits ?? [],
 			renderData,
+			tip: null,
 		});
 
 		// Initial upload with zero offset — next update() will apply proper wrap
@@ -261,9 +269,10 @@ export class EntityManager {
 
 		// Pass 1 — per-entity AI + solo physics, dispatched by shape.
 		// Spheres run AI + sphere physics (gravity, voxel/player contact).
-		// Cubes run cube physics only (gravity + AABB-vs-voxel, no AI). Cube
-		// AI and tipping land in a later phase; for now cubes just fall and
-		// settle.
+		// Cubes either advance an active tip (gravity suspended, position
+		// already snapped to destination) or run cube physics. Mid-tip cubes
+		// are intentionally inert — no AI, no gravity, no voxel collision —
+		// the tip finishes and normal physics resumes next frame.
 		for (const entity of this.entities) {
 			if (entity.shape === Shape.Sphere) {
 				const mat = materials[entity.material];
@@ -284,7 +293,11 @@ export class EntityManager {
 					dt,
 				);
 			} else if (entity.shape === Shape.Cube) {
-				entityCubePhysicsTick(entity, this.world, dt);
+				if (entity.tip !== null) {
+					advanceCubeTip(entity, dt);
+				} else {
+					entityCubePhysicsTick(entity, this.world, dt);
+				}
 			}
 		}
 
@@ -292,11 +305,15 @@ export class EntityManager {
 		// Splitting this out of Pass 1 means each pair sees finalized
 		// post-integration positions on both sides. Cubes are treated as
 		// infinite mass vs spheres (sphere bounces, cube doesn't budge),
-		// matching the "cubes are platforms" design.
+		// matching the "cubes are platforms" design. Mid-tip cubes skip
+		// all pair checks — they're briefly non-collidable so spheres pass
+		// through them during the arc (Option A from the Phase 3 plan).
 		for (let i = 0; i < this.entities.length; i++) {
 			const a = this.entities[i];
+			if (a.shape === Shape.Cube && a.tip !== null) continue;
 			for (let j = i + 1; j < this.entities.length; j++) {
 				const b = this.entities[j];
+				if (b.shape === Shape.Cube && b.tip !== null) continue;
 				if (a.shape === Shape.Sphere && b.shape === Shape.Sphere) {
 					resolveSpherePair(a, b, ww);
 				} else if (a.shape === Shape.Sphere && b.shape === Shape.Cube) {
@@ -321,6 +338,42 @@ export class EntityManager {
 			const offsetX = dx > hw ? -ww : dx < -hw ? ww : 0;
 			const offsetZ = dz > hw ? -ww : dz < -hw ? ww : 0;
 			this.uploadTransform(entity, offsetX, offsetZ);
+		}
+	}
+
+	/**
+	 * Debug helper — triggers a tip on every idle cube toward the player's
+	 * dominant horizontal axis. Cubes with infeasible destinations warn via
+	 * console and stay idle. Used by the KeyT keybind to validate tip
+	 * animation before AI dispatch is wired up (Phase 4).
+	 */
+	tipAllCubesTowardPlayer(playerPos: Float32Array): void {
+		const px = playerPos[0] ?? 0;
+		const pz = playerPos[2] ?? 0;
+		const ww = this.world.widthChunks * CHUNK_SIZE * this.world.blockSize;
+		const hw = ww / 2;
+
+		for (const entity of this.entities) {
+			if (entity.shape !== Shape.Cube) continue;
+			if (entity.tip !== null) continue;
+
+			// Wrap-aware player-relative direction
+			let dx = px - entity.x;
+			let dz = pz - entity.z;
+			if (dx > hw) dx -= ww;
+			else if (dx < -hw) dx += ww;
+			if (dz > hw) dz -= ww;
+			else if (dz < -hw) dz += ww;
+
+			// Snap to dominant axis; ties break toward X.
+			let dirX = 0;
+			let dirZ = 0;
+			if (Math.abs(dx) >= Math.abs(dz)) {
+				dirX = dx >= 0 ? 1 : -1;
+			} else {
+				dirZ = dz >= 0 ? 1 : -1;
+			}
+			startCubeTip(entity, this.world, [dirX, 0, dirZ]);
 		}
 	}
 
@@ -388,18 +441,45 @@ export class EntityManager {
 		offsetX: number,
 		offsetZ: number,
 	): void {
-		const model = mat4.translation([
-			entity.x + offsetX,
-			entity.y,
-			entity.z + offsetZ,
-		]);
-		mat4.multiply(model, entity.orientation, model);
-		mat4.scale(model, [entity.scale, entity.scale, entity.scale], model);
-		updateEntityTransform(
-			this.device.queue,
-			entity.renderData,
-			model as Float32Array<ArrayBuffer>,
-		);
+		let model: Float32Array<ArrayBuffer>;
+		if (entity.tip !== null) {
+			// Tip composite:
+			//   M = T(pivot + wrap) · R(axis, θ) · T(sourceOffset) · baseOri · S
+			// Applied to a mesh vertex q: scale first, then base orientation,
+			// then translate to sourceOffset from pivot, rotate around pivot,
+			// and translate pivot to its world position. The wrap offset is
+			// absorbed into the outermost translation so horizontal wrapping
+			// works the same as the idle branch.
+			const tip = entity.tip;
+			const theta = tip.progress * (Math.PI / 2);
+			model = mat4.translation([
+				tip.pivot[0] + offsetX,
+				tip.pivot[1],
+				tip.pivot[2] + offsetZ,
+			]);
+			const rot = mat4.axisRotation(tip.axis, theta);
+			mat4.multiply(model, rot, model);
+			mat4.translate(model, tip.sourceOffset, model);
+			mat4.multiply(model, tip.baseOrientation, model);
+			mat4.scale(
+				model,
+				[entity.scale, entity.scale, entity.scale],
+				model,
+			);
+		} else {
+			model = mat4.translation([
+				entity.x + offsetX,
+				entity.y,
+				entity.z + offsetZ,
+			]);
+			mat4.multiply(model, entity.orientation, model);
+			mat4.scale(
+				model,
+				[entity.scale, entity.scale, entity.scale],
+				model,
+			);
+		}
+		updateEntityTransform(this.device.queue, entity.renderData, model);
 	}
 
 	private generateMesh(shape: Shape): CachedMesh {

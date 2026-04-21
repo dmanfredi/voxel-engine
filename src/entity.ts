@@ -129,6 +129,15 @@ export interface Entity {
 	// entities with an active tip; uploadTransform switches to the tip
 	// composite transform.
 	tip: TipState | null;
+	// Last climb tip's horizontal direction. Drives the Option-A zigzag:
+	// each vertical-intent climb flips sign from the previous one, netting
+	// +2·edge vertical and zero horizontal across each pair of climbs.
+	// Both zero = cube has never climbed; the AI picks the first direction
+	// from player-relative geometry. Only climb tips (dy=1) update these;
+	// horizontal walks leave them alone so the zigzag resumes intact after
+	// a detour. Set inside `tryTipCube` after `startCubeTip` succeeds.
+	lastClimbDx: number;
+	lastClimbDz: number;
 }
 
 export interface SpawnConfig {
@@ -248,6 +257,8 @@ export class EntityManager {
 			traits: config.traits ?? [],
 			renderData,
 			tip: null,
+			lastClimbDx: 0,
+			lastClimbDz: 0,
 		});
 
 		// Initial upload with zero offset — next update() will apply proper wrap
@@ -454,26 +465,42 @@ export class EntityManager {
 		// ground-layer check will now pass. If something unexpected fails,
 		// it returns false and console.warns — blocks are already placed
 		// but nothing catastrophic: the scaffold just becomes inert terrain.
-		return startCubeTip(entity, this.world, direction);
+		const ok = startCubeTip(entity, this.world, direction);
+		if (ok && dy === 1) {
+			// Remember this climb's horizontal direction so the next climb
+			// alternates (Option-A zigzag for net-vertical progress).
+			entity.lastClimbDx = dx;
+			entity.lastClimbDz = dz;
+		}
+		return ok;
 	}
 
 	/**
-	 * Debug helper — triggers a tip on every idle cube toward the player's
-	 * dominant horizontal axis. Routes through `tryTipCube` so scaffolding
-	 * runs. Used by the KeyT keybind to validate tip + scaffold before AI
-	 * cadence is wired up.
+	 * Debug helper — triggers a tip on every idle cube toward the player.
+	 * Routes through `tryTipCube` so scaffolding runs. Used by the KeyT
+	 * keybind to validate tip + scaffold before AI cadence is wired up.
 	 *
-	 * Greedy climb fallback: try horizontal first; if that's blocked (most
-	 * common cause: wall in front), try climbing the same direction. Climb
-	 * scaffolding will fill the wall as needed, so the fallback succeeds
-	 * in any case where the upper destination cells are clear and the cube
-	 * has room to arc over.
+	 * Targeting policy:
+	 *   - **Player meaningfully above cube (Δy > edge):** vertical-intent
+	 *     mode. Pick a climb by alternating from `lastClimbDx/Dz` — flips
+	 *     sign each tip, so two climbs net to zero horizontal and
+	 *     +2·edge vertical (Option-A zigzag). First climb (both signs 0)
+	 *     seeds direction from the dominant horizontal axis to the player.
+	 *   - **Otherwise:** horizontal walk toward dominant player axis.
+	 *     If horizontal is blocked (typically a wall), fall back to a
+	 *     same-direction climb; scaffolding fills the wall as needed.
+	 *
+	 * Successful climbs update `lastClimbDx/Dz` inside `tryTipCube`, so
+	 * whether a climb fires from the vertical-intent branch or the
+	 * horizontal fallback, the next vertical-intent tip will alternate
+	 * correctly.
 	 */
 	tipAllCubesTowardPlayer(
 		playerPos: Float32Array,
 		onBlockChanged: (bx: number, by: number, bz: number) => void,
 	): void {
 		const px = playerPos[0] ?? 0;
+		const py = playerPos[1] ?? 0;
 		const pz = playerPos[2] ?? 0;
 		const ww = this.world.widthChunks * CHUNK_SIZE * this.world.blockSize;
 		const hw = ww / 2;
@@ -482,15 +509,50 @@ export class EntityManager {
 			if (entity.shape !== Shape.Cube) continue;
 			if (entity.tip !== null) continue;
 
-			// Wrap-aware player-relative direction
+			// Wrap-aware player-relative direction (Y doesn't wrap)
 			let dx = px - entity.x;
+			const dy = py - entity.y;
 			let dz = pz - entity.z;
 			if (dx > hw) dx -= ww;
 			else if (dx < -hw) dx += ww;
 			if (dz > hw) dz -= ww;
 			else if (dz < -hw) dz += ww;
 
-			// Snap to dominant axis; ties break toward X.
+			const edge = 2 * entity.scale;
+
+			// Vertical-intent branch: player is more than one cube-edge
+			// above. Pick a climb by alternating the last climb's horizontal
+			// direction. If the cube has never climbed, seed direction
+			// from the dominant horizontal axis to the player.
+			if (dy > edge) {
+				let climbDx: number;
+				let climbDz: number;
+				if (entity.lastClimbDx !== 0 || entity.lastClimbDz !== 0) {
+					climbDx = -entity.lastClimbDx;
+					climbDz = -entity.lastClimbDz;
+				} else if (Math.abs(dx) >= Math.abs(dz)) {
+					climbDx = dx >= 0 ? 1 : -1;
+					climbDz = 0;
+				} else {
+					climbDx = 0;
+					climbDz = dz >= 0 ? 1 : -1;
+				}
+				if (
+					this.tryTipCube(
+						entity,
+						[climbDx, 1, climbDz],
+						onBlockChanged,
+					)
+				) {
+					continue;
+				}
+				// Alternation pick blocked — fall through to horizontal
+				// behavior. Horizontal→climb fallback may still find a way,
+				// and any climb that fires will re-seed lastClimbDx/Dz so
+				// the zigzag recovers on subsequent tips.
+			}
+
+			// Horizontal walk toward dominant player axis; ties break to X.
 			let dirX = 0;
 			let dirZ = 0;
 			if (Math.abs(dx) >= Math.abs(dz)) {

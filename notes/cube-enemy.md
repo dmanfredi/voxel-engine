@@ -73,9 +73,13 @@ Debug trigger still `KeyT` — calls `tipAllCubesTowardPlayer` which now routes 
 
 Intentional geometry note: the 180° arc sweeps the cube up and over through a peak ~s·√2 above the pivot before landing on top of the wall. Reads as a handspring / pole-vault motion. Option A (tipping cubes non-collidable) hides any awkwardness during the arc. Revisit with easing curves or split-primitive climbs if the motion looks bad in playtest.
 
+**Option-A vertical zigzag (done).** A single edge-pivot tip can't land straight up (any arc around a cube edge ends horizontally displaced from the start), so "pure vertical climb" is achieved by alternating climb directions: tip east-up, then west-up, netting +2·edge vertical and zero horizontal across each pair. Per-cube state `lastClimbDx/Dz` tracks the most recent climb's horizontal direction and gets flipped on the next vertical-intent tip. Both-zero state means "never climbed" — the first climb seeds direction from the dominant horizontal axis to the player. Only climb tips (dy=1) update `lastClimbDx/Dz`; horizontal walks leave it alone so the zigzag resumes intact after a detour.
+
+`tipAllCubesTowardPlayer` now branches: player Δy > edge → vertical-intent mode (alternating climb); otherwise horizontal walk with same-direction climb fallback. Scaffold trail roughly doubles compared to a single-direction climb (pillars on alternating sides), which is the visible cost of staying within the tipping aesthetic rather than adding a separate pillar-jump primitive.
+
 **Still to do:**
 
-- Direction selection with horizontal fallbacks (if the preferred axis is blocked both horizontal and climb, try the other axis).
+- Cross-axis horizontal fallbacks (if the preferred axis is blocked both horizontal and climb, try the other axis).
 - Autonomous AI cadence — per-cube idle timer so cubes tip every ~1s rather than on debug key.
 
 ### Phase 5 — Roles on top

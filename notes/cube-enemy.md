@@ -81,7 +81,7 @@ Intentional geometry note: the 180° arc sweeps the cube up and over through a p
 
 **Per-entity tip timing.** Two cached fields drive cadence, analogous to how sphere AI caches `mass`/`restitution`:
 - `tipDuration = (size / REF_SIZE) / mat.tipSpeed` — **linear in size, density-independent, inversely material-scaled**. `tipSpeed` reads as "tips per second at reference size": a size-10 cube at `tipSpeed = 3.3` takes ~0.3s per tip; size-5 takes half that; size-20 takes double. Because each tip covers `2·size` world units, net world-space chase speed is roughly constant across sizes — a big cube has a long stride but takes proportionally longer to complete it, so both small and large cubes feel about as threatening. No base constant — the material value is the sole magnitude knob.
-- `tipInterval = BASE_TIP_INTERVAL / mat.tipRate`. `tipRate` controls how aggressively the AI fires tips.
+- `tipInterval = 1 / mat.tipRate`. `tipRate` reads as "tip attempts per second" — the AI chase aggression.
 
 **Two per-material knobs (`tipSpeed` + `tipRate`) fully define cube movement.** They're intentionally split rather than folded into one "speed" number:
 - `tipSpeed` is the **rotational agility** cap. It shrinks the tip animation itself, so it sets the theoretical top speed: no matter how often the AI tries to tip, a tip still takes `tipDuration` seconds. Max world-space speed ≈ `2·size / tipDuration`.
@@ -91,7 +91,7 @@ Parallel to sphere-only `baseSpeed`, but cubes need two knobs because discrete t
 
 Why not mass-scale the animation? Initial design used `tipDuration ∝ mass`, but mass scales with `size²`, so a 2× larger cube ended up 4× slower per tip — big cubes felt stuck in tar. Physically, tip period for a uniform cube under gravity depends only on geometry (it's a pendulum), not inertia, so linear-in-size is both simpler and more physically honest. Density still drives `mass` for all impulse/restitution physics; it just no longer dictates animation tempo. A dense cube and a light cube of the same size tip at the same visual rate — per-material slowdown goes through `tipSpeed` (duration) and `tipRate` (cadence) instead. Spawn-time cooldown is randomized in `[0, tipInterval)` so groups don't fire in lockstep.
 
-Why no `BASE_TIP_DURATION` constant? Earlier iterations had `tipDuration = BASE_TIP_DURATION · (size/REF_SIZE) / mat.tipSpeed`, which left two magnitudes (global base vs per-material multiplier) fighting for the same job. Folded the base into the material values directly — `tipSpeed = 3.3` reads as "tips per second at reference size" and is the single magnitude knob. Kept `BASE_TIP_INTERVAL = 1s` for the cadence side since the unit ("seconds between attempts") is already what you'd want to name it; `tipRate` then cleanly means "attempts per second".
+Why no base constants? Earlier iterations had `tipDuration = BASE_TIP_DURATION · (size/REF_SIZE) / mat.tipSpeed` and `tipInterval = BASE_TIP_INTERVAL / mat.tipRate`, which left two magnitudes (global base vs per-material multiplier) fighting for the same job on each side. Folded both bases into the material values directly: `tipSpeed` reads as "tips per second at reference size" and `tipRate` reads as "attempts per second". Per-material values are the single magnitude knobs; no global constants to re-tune separately.
 
 The `KeyT` debug trigger and its `tipAllCubesTowardPlayer` helper are gone — the same targeting logic now lives in the private `tipCubeTowardPlayer` method, called both from the per-frame AI and reusable for future role-specific targeting.
 

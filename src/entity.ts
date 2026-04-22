@@ -62,10 +62,12 @@ interface MaterialProperties {
 	// is how fast each tip animation plays (speed ceiling), `tipRate`
 	// is how eagerly the AI fires tips (chase aggression).
 	tipSpeed: number;
-	// Cube tip-frequency multiplier. `1.0` matches BASE_TIP_INTERVAL;
-	// higher values fire tips more often. Parallel to `baseSpeed` but
-	// cube-specific — the movement profiles differ enough (continuous
-	// thrust vs discrete tips) that sharing one knob would tune poorly.
+	// Cube AI chase aggression — interpreted as "tip attempts per second"
+	// (tipInterval = 1 / tipRate). Parallel to `baseSpeed` but cube-
+	// specific: sphere thrust and cube discrete tipping shape the feel
+	// differently enough that one shared knob would tune poorly.
+	// Cranking past the tipSpeed ceiling gains nothing — no amount of
+	// "attempt more often" beats "each tip takes X seconds."
 	tipRate: number;
 	hardness: number; // durability multiplier
 	restitution: number; // bounciness 0..1
@@ -83,14 +85,6 @@ const MASS_REFERENCE_SIZE = 10;
 const MASS_REFERENCE_DENSITY = 2;
 const MASS_NORMALIZATION =
 	MASS_REFERENCE_DENSITY * MASS_REFERENCE_SIZE ** MASS_SIZE_POWER;
-
-// Reference seconds between per-cube AI tip attempts, at tipRate=1. Each
-// entity caches an effective value (`tipInterval = BASE_TIP_INTERVAL /
-// tipRate`) on spawn. Paired with per-material tipSpeed this produces the
-// "roll-over → pause → roll-over" cadence from the design doc. Fresh
-// spawns randomize the initial cooldown phase so groups don't fire in
-// lockstep.
-const BASE_TIP_INTERVAL = 1.0;
 
 function computeMass(density: number, size: number): number {
 	return (density * size ** MASS_SIZE_POWER) / MASS_NORMALIZATION;
@@ -303,13 +297,13 @@ export class EntityManager {
 		//     agility). Caps the cube's theoretical max speed at
 		//     2·size/tipDuration world units per tip.
 		//   tipRate  — how often the AI attempts a tip (aggression).
-		//     tipInterval = BASE_TIP_INTERVAL / tipRate.
+		//     tipInterval = 1 / tipRate ("attempts per second").
 		// Cranking tipRate alone hits a ceiling at the tipSpeed cap
 		// (no amount of "tip more often" beats "each tip takes X
 		// seconds"). Both knobs are needed to cover the speed/agility
 		// design space.
 		const tipDuration = config.size / MASS_REFERENCE_SIZE / mat.tipSpeed;
-		const tipInterval = BASE_TIP_INTERVAL / mat.tipRate;
+		const tipInterval = 1 / mat.tipRate;
 		this.entities.push({
 			id,
 			x: config.x,

@@ -24,10 +24,6 @@ const RESTING_THRESHOLD = 2.0;
 const PLAYER_RESTITUTION = 0.6;
 const DEFAULT_BLOCK_RESTITUTION = 0.3;
 
-// Seconds for one 90° tip. Tweak to taste — too fast looks snappy, too slow
-// looks floaty. Linear interpolation; ease-in/out is a later polish.
-const TIP_DURATION = 0.4;
-
 /**
  * Mid-tip animation state. Present on a Cube entity between tip start and
  * completion; null otherwise. Entity position (`x/y/z`) is snapped to the
@@ -607,7 +603,7 @@ export function startCubeTip(
 export function advanceCubeTip(entity: Entity, dt: number): void {
 	const tip = entity.tip;
 	if (!tip) return;
-	tip.progress += dt / TIP_DURATION;
+	tip.progress += dt / entity.tipDuration;
 	if (tip.progress >= 1) {
 		// Commit final rotation: orientation = R(axis, endAngle) · baseOrientation.
 		// Matches the world-frame pre-multiplication pattern used by

@@ -53,7 +53,20 @@ interface MaterialProperties {
 	texLayer: number; // index into block texture array
 	textureScale: number; // UV tiling density (matches block registry values)
 	density: number; // drives mass = density * size³
-	baseSpeed: number; // movement speed multiplier
+	baseSpeed: number; // sphere movement speed multiplier (ignored for cubes)
+	// Cube rotational agility — interpreted as "tips per second for a
+	// reference-size (size=10) cube." So `tipSpeed = 3` means a size-10
+	// cube completes a tip in ~0.33s; a size-5 cube in ~0.17s; a size-20
+	// cube in ~0.67s (linear in size). Paired with `tipRate`, these two
+	// knobs fully define a cube material's movement profile: `tipSpeed`
+	// is how fast each tip animation plays (speed ceiling), `tipRate`
+	// is how eagerly the AI fires tips (chase aggression).
+	tipSpeed: number;
+	// Cube tip-frequency multiplier. `1.0` matches BASE_TIP_INTERVAL;
+	// higher values fire tips more often. Parallel to `baseSpeed` but
+	// cube-specific — the movement profiles differ enough (continuous
+	// thrust vs discrete tips) that sharing one knob would tune poorly.
+	tipRate: number;
 	hardness: number; // durability multiplier
 	restitution: number; // bounciness 0..1
 }
@@ -71,12 +84,13 @@ const MASS_REFERENCE_DENSITY = 2;
 const MASS_NORMALIZATION =
 	MASS_REFERENCE_DENSITY * MASS_REFERENCE_SIZE ** MASS_SIZE_POWER;
 
-// Seconds between per-cube AI tip attempts. Paired with TIP_DURATION=0.4s,
-// this gives cubes ~0.6s of idle per cycle — visible beat rather than
-// continuous tumble, matching the design doc's "roll-over → pause → roll-
-// over" cadence. Each fresh cube spawns with a random initial cooldown
-// phase so a group doesn't fire in lockstep.
-const TIP_INTERVAL = 1.0;
+// Reference seconds between per-cube AI tip attempts, at tipRate=1. Each
+// entity caches an effective value (`tipInterval = BASE_TIP_INTERVAL /
+// tipRate`) on spawn. Paired with per-material tipSpeed this produces the
+// "roll-over → pause → roll-over" cadence from the design doc. Fresh
+// spawns randomize the initial cooldown phase so groups don't fire in
+// lockstep.
+const BASE_TIP_INTERVAL = 1.0;
 
 function computeMass(density: number, size: number): number {
 	return (density * size ** MASS_SIZE_POWER) / MASS_NORMALIZATION;
@@ -89,6 +103,8 @@ const materials: Record<Material, MaterialProperties> = {
 		textureScale: 6,
 		density: 2.7,
 		baseSpeed: 1.0,
+		tipSpeed: 3.3,
+		tipRate: 1.5,
 		hardness: 0.8,
 		restitution: 0.4,
 	},
@@ -98,6 +114,8 @@ const materials: Record<Material, MaterialProperties> = {
 		textureScale: 3,
 		density: 1.8,
 		baseSpeed: 0.7,
+		tipSpeed: 3.3,
+		tipRate: 1.2,
 		hardness: 1.0,
 		restitution: 0.2,
 	},
@@ -107,6 +125,8 @@ const materials: Record<Material, MaterialProperties> = {
 		textureScale: 6,
 		density: 4,
 		baseSpeed: 1.0,
+		tipSpeed: 5.0,
+		tipRate: 10.0,
 		hardness: 1.2,
 		restitution: 0.4,
 	},
@@ -147,9 +167,18 @@ export interface Entity {
 	lastClimbDz: number;
 	// Seconds until the next AI tip attempt for a Cube. Decrements each
 	// frame while idle (not mid-tip). When ≤ 0 AND the cube is grounded,
-	// the AI fires a tip and resets to TIP_INTERVAL. Skipped entirely for
+	// the AI fires a tip and resets to `tipInterval`. Skipped entirely for
 	// non-cube shapes (value is irrelevant).
 	tipCooldown: number;
+	// Seconds per tip animation. `(size / REF_SIZE) / mat.tipSpeed` — linear
+	// in size, density-independent, inversely scaled by material tipSpeed.
+	// `advanceCubeTip` divides dt by this to progress the tip. Cached at
+	// spawn so hot paths don't re-compute. Unused by spheres (set to a
+	// sentinel but ignored).
+	tipDuration: number;
+	// Seconds between AI tip attempts (material-scaled via `tipRate`).
+	// Cached at spawn. Unused by spheres.
+	tipInterval: number;
 }
 
 export interface SpawnConfig {
@@ -250,6 +279,37 @@ export class EntityManager {
 		);
 
 		const id = this.nextId++;
+		const mass = computeMass(mat.density, config.size);
+		// Tip timing — cube-only, but computed for all shapes so the fields
+		// can stay non-optional. Spheres never read these values.
+		//
+		// tipDuration scales LINEARLY with size, independent of density,
+		// and divides by the material's tipSpeed. tipSpeed reads as
+		// "tips per second at reference size" — at size=MASS_REFERENCE_SIZE,
+		// tipDuration is exactly `1/tipSpeed` seconds. A 2× larger cube
+		// takes 2× as long per tip (and covers 2× the world distance),
+		// so net world-space speed stays roughly constant across sizes —
+		// small and large cubes feel about as threatening, differing
+		// mostly in stride length. Mass-scaling (size²) was too aggressive:
+		// doubling size quartered the effective chase speed, making big
+		// cubes feel stuck in tar. Density is intentionally omitted from
+		// the animation timing — it still drives `mass` (and therefore
+		// bounce physics), but physically tip period depends on geometry,
+		// not inertia, so a dense cube and a light cube of the same size
+		// rotate at the same visual rate.
+		//
+		// Two per-material knobs together define the movement profile:
+		//   tipSpeed — how fast each tip animation plays (rotational
+		//     agility). Caps the cube's theoretical max speed at
+		//     2·size/tipDuration world units per tip.
+		//   tipRate  — how often the AI attempts a tip (aggression).
+		//     tipInterval = BASE_TIP_INTERVAL / tipRate.
+		// Cranking tipRate alone hits a ceiling at the tipSpeed cap
+		// (no amount of "tip more often" beats "each tip takes X
+		// seconds"). Both knobs are needed to cover the speed/agility
+		// design space.
+		const tipDuration = config.size / MASS_REFERENCE_SIZE / mat.tipSpeed;
+		const tipInterval = BASE_TIP_INTERVAL / mat.tipRate;
 		this.entities.push({
 			id,
 			x: config.x,
@@ -261,7 +321,7 @@ export class EntityManager {
 			orientation: mat4.identity(),
 			grounded: false,
 			scale: config.size,
-			mass: computeMass(mat.density, config.size),
+			mass,
 			restitution: mat.restitution,
 			shape: config.shape,
 			material: config.material,
@@ -274,7 +334,9 @@ export class EntityManager {
 			// Random phase so groups of cubes don't tip in unison.
 			// Non-cube shapes ignore this field.
 			tipCooldown:
-				config.shape === Shape.Cube ? Math.random() * TIP_INTERVAL : 0,
+				config.shape === Shape.Cube ? Math.random() * tipInterval : 0,
+			tipDuration,
+			tipInterval,
 		});
 
 		// Initial upload with zero offset — next update() will apply proper wrap
@@ -336,7 +398,7 @@ export class EntityManager {
 							playerPos,
 							onBlockChanged,
 						);
-						entity.tipCooldown = TIP_INTERVAL;
+						entity.tipCooldown = entity.tipInterval;
 					}
 				}
 				if (entity.tip !== null) {

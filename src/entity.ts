@@ -71,6 +71,13 @@ const MASS_REFERENCE_DENSITY = 2;
 const MASS_NORMALIZATION =
 	MASS_REFERENCE_DENSITY * MASS_REFERENCE_SIZE ** MASS_SIZE_POWER;
 
+// Seconds between per-cube AI tip attempts. Paired with TIP_DURATION=0.4s,
+// this gives cubes ~0.6s of idle per cycle — visible beat rather than
+// continuous tumble, matching the design doc's "roll-over → pause → roll-
+// over" cadence. Each fresh cube spawns with a random initial cooldown
+// phase so a group doesn't fire in lockstep.
+const TIP_INTERVAL = 1.0;
+
 function computeMass(density: number, size: number): number {
 	return (density * size ** MASS_SIZE_POWER) / MASS_NORMALIZATION;
 }
@@ -138,6 +145,11 @@ export interface Entity {
 	// a detour. Set inside `tryTipCube` after `startCubeTip` succeeds.
 	lastClimbDx: number;
 	lastClimbDz: number;
+	// Seconds until the next AI tip attempt for a Cube. Decrements each
+	// frame while idle (not mid-tip). When ≤ 0 AND the cube is grounded,
+	// the AI fires a tip and resets to TIP_INTERVAL. Skipped entirely for
+	// non-cube shapes (value is irrelevant).
+	tipCooldown: number;
 }
 
 export interface SpawnConfig {
@@ -259,6 +271,10 @@ export class EntityManager {
 			tip: null,
 			lastClimbDx: 0,
 			lastClimbDz: 0,
+			// Random phase so groups of cubes don't tip in unison.
+			// Non-cube shapes ignore this field.
+			tipCooldown:
+				config.shape === Shape.Cube ? Math.random() * TIP_INTERVAL : 0,
 		});
 
 		// Initial upload with zero offset — next update() will apply proper wrap
@@ -272,6 +288,7 @@ export class EntityManager {
 		playerPos: Float32Array,
 		playerHalfWidth: number,
 		playerHeight: number,
+		onBlockChanged: (bx: number, by: number, bz: number) => void,
 	): void {
 		const ww = this.world.widthChunks * CHUNK_SIZE * this.world.blockSize;
 		const hw = ww / 2;
@@ -304,6 +321,24 @@ export class EntityManager {
 					dt,
 				);
 			} else if (entity.shape === Shape.Cube) {
+				// AI-then-physics ordering mirrors the sphere branch above:
+				// the AI decides whether to start a tip this frame, and if
+				// it does, we route through advanceCubeTip instead of the
+				// normal physics tick. Cooldown ticks regardless of grounded
+				// state — if a cube is airborne when its timer expires, the
+				// next grounded frame fires immediately rather than adding
+				// another full interval of delay.
+				if (entity.tip === null) {
+					entity.tipCooldown -= dt;
+					if (entity.tipCooldown <= 0 && entity.grounded) {
+						this.tipCubeTowardPlayer(
+							entity,
+							playerPos,
+							onBlockChanged,
+						);
+						entity.tipCooldown = TIP_INTERVAL;
+					}
+				}
 				if (entity.tip !== null) {
 					advanceCubeTip(entity, dt);
 				} else {
@@ -476,9 +511,9 @@ export class EntityManager {
 	}
 
 	/**
-	 * Debug helper — triggers a tip on every idle cube toward the player.
-	 * Routes through `tryTipCube` so scaffolding runs. Used by the KeyT
-	 * keybind to validate tip + scaffold before AI cadence is wired up.
+	 * Per-cube targeting — beeline toward the player. Caller is responsible
+	 * for gating (mid-tip / not-grounded cubes should be skipped before
+	 * calling). Routes through `tryTipCube` so scaffolding runs.
 	 *
 	 * Targeting policy:
 	 *   - **Player meaningfully above cube (Δy > edge):** vertical-intent
@@ -495,7 +530,8 @@ export class EntityManager {
 	 * horizontal fallback, the next vertical-intent tip will alternate
 	 * correctly.
 	 */
-	tipAllCubesTowardPlayer(
+	private tipCubeTowardPlayer(
+		entity: Entity,
 		playerPos: Float32Array,
 		onBlockChanged: (bx: number, by: number, bz: number) => void,
 	): void {
@@ -505,66 +541,55 @@ export class EntityManager {
 		const ww = this.world.widthChunks * CHUNK_SIZE * this.world.blockSize;
 		const hw = ww / 2;
 
-		for (const entity of this.entities) {
-			if (entity.shape !== Shape.Cube) continue;
-			if (entity.tip !== null) continue;
+		// Wrap-aware player-relative direction (Y doesn't wrap)
+		let dx = px - entity.x;
+		const dy = py - entity.y;
+		let dz = pz - entity.z;
+		if (dx > hw) dx -= ww;
+		else if (dx < -hw) dx += ww;
+		if (dz > hw) dz -= ww;
+		else if (dz < -hw) dz += ww;
 
-			// Wrap-aware player-relative direction (Y doesn't wrap)
-			let dx = px - entity.x;
-			const dy = py - entity.y;
-			let dz = pz - entity.z;
-			if (dx > hw) dx -= ww;
-			else if (dx < -hw) dx += ww;
-			if (dz > hw) dz -= ww;
-			else if (dz < -hw) dz += ww;
+		const edge = 2 * entity.scale;
 
-			const edge = 2 * entity.scale;
-
-			// Vertical-intent branch: player is more than one cube-edge
-			// above. Pick a climb by alternating the last climb's horizontal
-			// direction. If the cube has never climbed, seed direction
-			// from the dominant horizontal axis to the player.
-			if (dy > edge) {
-				let climbDx: number;
-				let climbDz: number;
-				if (entity.lastClimbDx !== 0 || entity.lastClimbDz !== 0) {
-					climbDx = -entity.lastClimbDx;
-					climbDz = -entity.lastClimbDz;
-				} else if (Math.abs(dx) >= Math.abs(dz)) {
-					climbDx = dx >= 0 ? 1 : -1;
-					climbDz = 0;
-				} else {
-					climbDx = 0;
-					climbDz = dz >= 0 ? 1 : -1;
-				}
-				if (
-					this.tryTipCube(
-						entity,
-						[climbDx, 1, climbDz],
-						onBlockChanged,
-					)
-				) {
-					continue;
-				}
-				// Alternation pick blocked — fall through to horizontal
-				// behavior. Horizontal→climb fallback may still find a way,
-				// and any climb that fires will re-seed lastClimbDx/Dz so
-				// the zigzag recovers on subsequent tips.
-			}
-
-			// Horizontal walk toward dominant player axis; ties break to X.
-			let dirX = 0;
-			let dirZ = 0;
-			if (Math.abs(dx) >= Math.abs(dz)) {
-				dirX = dx >= 0 ? 1 : -1;
+		// Vertical-intent branch: player is more than one cube-edge above.
+		// Pick a climb by alternating the last climb's horizontal direction.
+		// If the cube has never climbed, seed direction from the dominant
+		// horizontal axis to the player.
+		if (dy > edge) {
+			let climbDx: number;
+			let climbDz: number;
+			if (entity.lastClimbDx !== 0 || entity.lastClimbDz !== 0) {
+				climbDx = -entity.lastClimbDx;
+				climbDz = -entity.lastClimbDz;
+			} else if (Math.abs(dx) >= Math.abs(dz)) {
+				climbDx = dx >= 0 ? 1 : -1;
+				climbDz = 0;
 			} else {
-				dirZ = dz >= 0 ? 1 : -1;
+				climbDx = 0;
+				climbDz = dz >= 0 ? 1 : -1;
 			}
-			if (this.tryTipCube(entity, [dirX, 0, dirZ], onBlockChanged)) {
-				continue;
+			if (
+				this.tryTipCube(entity, [climbDx, 1, climbDz], onBlockChanged)
+			) {
+				return;
 			}
-			this.tryTipCube(entity, [dirX, 1, dirZ], onBlockChanged);
+			// Alternation pick blocked — fall through to horizontal behavior.
+			// Horizontal→climb fallback may still find a way, and any climb
+			// that fires will re-seed lastClimbDx/Dz so the zigzag recovers
+			// on subsequent tips.
 		}
+
+		// Horizontal walk toward dominant player axis; ties break to X.
+		let dirX = 0;
+		let dirZ = 0;
+		if (Math.abs(dx) >= Math.abs(dz)) {
+			dirX = dx >= 0 ? 1 : -1;
+		} else {
+			dirZ = dz >= 0 ? 1 : -1;
+		}
+		if (this.tryTipCube(entity, [dirX, 0, dirZ], onBlockChanged)) return;
+		this.tryTipCube(entity, [dirX, 1, dirZ], onBlockChanged);
 	}
 
 	draw(pass: GPURenderPassEncoder): void {

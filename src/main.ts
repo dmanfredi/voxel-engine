@@ -680,7 +680,13 @@ async function main(): Promise<void> {
 			}
 		}
 
-		entityManager.update(dt, cameraPos, playerHalfWidth, playerHeight);
+		entityManager.update(
+			dt,
+			cameraPos,
+			playerHalfWidth,
+			playerHeight,
+			onBlockChanged,
+		);
 
 		// Raycast from camera to find targeted block
 		currentHit = raycast(cameraPos, cameraFront, world, MAX_REACH);
@@ -940,9 +946,6 @@ async function main(): Promise<void> {
 				playerState.velZ = 0;
 			}
 			refreshDebug();
-		}
-		if (e.code === 'KeyT') {
-			entityManager.tipAllCubesTowardPlayer(cameraPos, onBlockChanged);
 		}
 	});
 

@@ -77,10 +77,13 @@ Intentional geometry note: the 180° arc sweeps the cube up and over through a p
 
 `tipAllCubesTowardPlayer` now branches: player Δy > edge → vertical-intent mode (alternating climb); otherwise horizontal walk with same-direction climb fallback. Scaffold trail roughly doubles compared to a single-direction climb (pillars on alternating sides), which is the visible cost of staying within the tipping aesthetic rather than adding a separate pillar-jump primitive.
 
+**Autonomous AI cadence (done).** Per-cube `tipCooldown` (seconds-to-next-tip) ticks down each idle frame; on expiry, if the cube is grounded, the AI fires `tipCubeTowardPlayer` and resets to `TIP_INTERVAL = 1.0s`. Spawn-time cooldown is randomized in `[0, TIP_INTERVAL)` so groups don't fire in lockstep. Paired with `TIP_DURATION = 0.4s` this gives roughly 0.6s idle / 0.4s tipping per cycle — matches the design doc's "roll-over → pause → roll-over" cadence. The `KeyT` debug trigger and its `tipAllCubesTowardPlayer` helper are gone — the same targeting logic now lives in the private `tipCubeTowardPlayer` method, called both from the per-frame AI and reusable for future role-specific targeting.
+
+Ordering inside `EntityManager.update` Pass 1: AI fires first (may start a tip), then physics/tip-advance dispatch picks up the new state. Cooldown ticks regardless of `grounded` — an airborne cube whose timer expires fires the instant it lands rather than waiting another full interval.
+
 **Still to do:**
 
 - Cross-axis horizontal fallbacks (if the preferred axis is blocked both horizontal and climb, try the other axis).
-- Autonomous AI cadence — per-cube idle timer so cubes tip every ~1s rather than on debug key.
 
 ### Phase 5 — Roles on top
 

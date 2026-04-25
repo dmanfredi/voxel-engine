@@ -21,16 +21,16 @@ import {
 	destroyEntityRenderData,
 } from './entity-renderer';
 import type { EntityRenderer, EntityRenderData } from './entity-renderer';
+import { entityPhysicsTick } from './sphere-physics';
 import {
-	entityPhysicsTick,
 	entityCubePhysicsTick,
-	resolveSpherePair,
-	resolveSphereVsCube,
 	startCubeTip,
 	advanceCubeTip,
-} from './entity-physics';
-import type { TipState } from './entity-physics';
+} from './cube-physics';
+import type { TipState } from './cube-physics';
+import { resolveSpherePair, resolveSphereVsCube } from './entity-interactions';
 import { entityAITick } from './entity-ai';
+import { cubeAITick } from './cube-ai';
 import type { World } from './world';
 
 // ── Axes ────────────────────────────────────────────────────────────
@@ -47,13 +47,37 @@ export type Material = (typeof Material)[keyof typeof Material];
 export type Trait = number;
 
 // ── Material properties ─────────────────────────────────────────────
+//
+// Materials are split into a shared base + optional per-shape sub-objects.
+// Each material identity (marble, brick, etc.) carries one MaterialBase
+// (texture, density, hardness, restitution — properties the cosmetic and
+// physical "what is it made of" universe of the material), plus optional
+// `sphere` / `cube` blocks holding shape-specific behavioral knobs.
+//
+// A material can declare configs for any subset of shapes; spawning checks
+// the relevant sub-object exists and throws otherwise. New shapes are
+// purely additive — no existing material has to grow dummy fields, and
+// shape #N just adds an optional `shape_n: ShapeNMaterial` field here.
 
-interface MaterialProperties {
+interface MaterialBase {
 	name: string;
 	texLayer: number; // index into block texture array
 	textureScale: number; // UV tiling density (matches block registry values)
-	density: number; // drives mass = density * size³
-	baseSpeed: number; // sphere movement speed multiplier (ignored for cubes)
+	density: number; // drives mass = density * size^MASS_SIZE_POWER
+	hardness: number; // durability multiplier (currently unused, reserved)
+	restitution: number; // bounciness 0..1
+}
+
+interface SphereMaterial {
+	// Sphere movement speed multiplier. Scales the rusher AI's thrust
+	// acceleration; mid-air steering applies the same multiplier. Mass-
+	// scaled inside `entity-ai.ts` so terminal speed stays roughly
+	// mass-invariant — this knob shifts how quickly that terminal is
+	// reached, not the ceiling itself.
+	baseSpeed: number;
+}
+
+interface CubeMaterial {
 	// Cube rotational agility — interpreted as "tips per second for a
 	// reference-size (size=10) cube." So `tipSpeed = 3` means a size-10
 	// cube completes a tip in ~0.33s; a size-5 cube in ~0.17s; a size-20
@@ -62,15 +86,19 @@ interface MaterialProperties {
 	// is how fast each tip animation plays (speed ceiling), `tipRate`
 	// is how eagerly the AI fires tips (chase aggression).
 	tipSpeed: number;
-	// Cube AI chase aggression — interpreted as "tip attempts per second"
-	// (tipInterval = 1 / tipRate). Parallel to `baseSpeed` but cube-
-	// specific: sphere thrust and cube discrete tipping shape the feel
-	// differently enough that one shared knob would tune poorly.
+	// Cube AI chase aggression — interpreted as "tip attempts per
+	// second" (tipInterval = 1 / tipRate). Parallel to sphere `baseSpeed`
+	// but cube-specific: sphere thrust and cube discrete tipping shape
+	// the feel differently enough that one shared knob would tune poorly.
 	// Cranking past the tipSpeed ceiling gains nothing — no amount of
 	// "attempt more often" beats "each tip takes X seconds."
 	tipRate: number;
-	hardness: number; // durability multiplier
-	restitution: number; // bounciness 0..1
+}
+
+interface MaterialProperties {
+	base: MaterialBase;
+	sphere?: SphereMaterial;
+	cube?: CubeMaterial;
 }
 
 // Mass = density * size^MASS_SIZE_POWER, normalized so a reference sphere
@@ -92,39 +120,68 @@ function computeMass(density: number, size: number): number {
 
 const materials: Record<Material, MaterialProperties> = {
 	[Material.Marble]: {
-		name: 'marble',
-		texLayer: MARBLE,
-		textureScale: 6,
-		density: 2.7,
-		baseSpeed: 1.0,
-		tipSpeed: 3.3,
-		tipRate: 1.5,
-		hardness: 0.8,
-		restitution: 0.4,
+		base: {
+			name: 'marble',
+			texLayer: MARBLE,
+			textureScale: 6,
+			density: 2.7,
+			hardness: 0.8,
+			restitution: 0.4,
+		},
+		sphere: { baseSpeed: 1.0 },
+		cube: { tipSpeed: 3.3, tipRate: 1.5 },
 	},
 	[Material.Brick]: {
-		name: 'brick',
-		texLayer: BRICK,
-		textureScale: 3,
-		density: 1.8,
-		baseSpeed: 0.7,
-		tipSpeed: 3.3,
-		tipRate: 1.2,
-		hardness: 1.0,
-		restitution: 0.2,
+		base: {
+			name: 'brick',
+			texLayer: BRICK,
+			textureScale: 3,
+			density: 1.8,
+			hardness: 1.0,
+			restitution: 0.2,
+		},
+		sphere: { baseSpeed: 0.7 },
+		cube: { tipSpeed: 3.3, tipRate: 1.2 },
 	},
 	[Material.DarkMarble]: {
-		name: 'darkMarble',
-		texLayer: DARK_MARBLE,
-		textureScale: 6,
-		density: 4,
-		baseSpeed: 1.0,
-		tipSpeed: 5.0,
-		tipRate: 10.0,
-		hardness: 1.2,
-		restitution: 0.4,
+		base: {
+			name: 'darkMarble',
+			texLayer: DARK_MARBLE,
+			textureScale: 6,
+			density: 4,
+			hardness: 1.2,
+			restitution: 0.4,
+		},
+		sphere: { baseSpeed: 1.0 },
+		cube: { tipSpeed: 5.0, tipRate: 10.0 },
 	},
 };
+
+/**
+ * Fetch the sphere config for a material, throwing if the material doesn't
+ * declare one. Authoring-time check — surfaces "tried to spawn a marble
+ * sphere but marble has no sphere config" loudly rather than silently
+ * defaulting. Symmetric with `getCubeMaterial`.
+ */
+function getSphereMaterial(matId: Material): SphereMaterial {
+	const cfg = materials[matId].sphere;
+	if (!cfg) {
+		throw new Error(
+			`Material '${materials[matId].base.name}' has no sphere config — cannot spawn as Sphere`,
+		);
+	}
+	return cfg;
+}
+
+function getCubeMaterial(matId: Material): CubeMaterial {
+	const cfg = materials[matId].cube;
+	if (!cfg) {
+		throw new Error(
+			`Material '${materials[matId].base.name}' has no cube config — cannot spawn as Cube`,
+		);
+	}
+	return cfg;
+}
 
 // ── Entity ──────────────────────────────────────────────────────────
 
@@ -234,6 +291,14 @@ export class EntityManager {
 		}
 
 		const mat = materials[config.material];
+		const matBase = mat.base;
+
+		// Validate per-shape config exists up-front. Throws here rather than
+		// failing later inside a physics tick, so authoring errors surface
+		// at spawn time with a clear message.
+		if (config.shape === Shape.Sphere) getSphereMaterial(config.material);
+		if (config.shape === Shape.Cube) getCubeMaterial(config.material);
+
 		// texScale converts entity-mesh UV to sampled UV. Shape-specific
 		// because mesh UVs are parameterized differently per shape.
 		//
@@ -261,21 +326,24 @@ export class EntityManager {
 		//     here later if material-aware sphere density is wanted.
 		const texScale =
 			config.shape === Shape.Cube
-				? config.size / (mat.textureScale * 10)
+				? config.size / (matBase.textureScale * 10)
 				: config.size / 10;
 		const renderData = createEntityRenderData(
 			this.device,
 			this.renderer,
 			mesh.vertices,
 			mesh.vertexCount,
-			mat.texLayer,
+			matBase.texLayer,
 			texScale,
 		);
 
 		const id = this.nextId++;
-		const mass = computeMass(mat.density, config.size);
-		// Tip timing — cube-only, but computed for all shapes so the fields
-		// can stay non-optional. Spheres never read these values.
+		const mass = computeMass(matBase.density, config.size);
+
+		// Cube-only tip timing — cached per-entity so hot paths don't re-look
+		// up material values. Sphere instances skip this entirely; the fields
+		// stay required on Entity but get sentinel zeros (never read for
+		// non-cubes). See cube-physics.ts / cube-ai.ts for usage.
 		//
 		// tipDuration scales LINEARLY with size, independent of density,
 		// and divides by the material's tipSpeed. tipSpeed reads as
@@ -284,26 +352,22 @@ export class EntityManager {
 		// takes 2× as long per tip (and covers 2× the world distance),
 		// so net world-space speed stays roughly constant across sizes —
 		// small and large cubes feel about as threatening, differing
-		// mostly in stride length. Mass-scaling (size²) was too aggressive:
-		// doubling size quartered the effective chase speed, making big
-		// cubes feel stuck in tar. Density is intentionally omitted from
+		// mostly in stride length. Density is intentionally omitted from
 		// the animation timing — it still drives `mass` (and therefore
 		// bounce physics), but physically tip period depends on geometry,
 		// not inertia, so a dense cube and a light cube of the same size
 		// rotate at the same visual rate.
-		//
-		// Two per-material knobs together define the movement profile:
-		//   tipSpeed — how fast each tip animation plays (rotational
-		//     agility). Caps the cube's theoretical max speed at
-		//     2·size/tipDuration world units per tip.
-		//   tipRate  — how often the AI attempts a tip (aggression).
-		//     tipInterval = 1 / tipRate ("attempts per second").
-		// Cranking tipRate alone hits a ceiling at the tipSpeed cap
-		// (no amount of "tip more often" beats "each tip takes X
-		// seconds"). Both knobs are needed to cover the speed/agility
-		// design space.
-		const tipDuration = config.size / MASS_REFERENCE_SIZE / mat.tipSpeed;
-		const tipInterval = 1 / mat.tipRate;
+		let tipDuration = 0;
+		let tipInterval = 0;
+		let tipCooldown = 0;
+		if (config.shape === Shape.Cube) {
+			const cubeMat = getCubeMaterial(config.material);
+			tipDuration = config.size / MASS_REFERENCE_SIZE / cubeMat.tipSpeed;
+			tipInterval = 1 / cubeMat.tipRate;
+			// Random phase so groups of cubes don't fire in lockstep.
+			tipCooldown = Math.random() * tipInterval;
+		}
+
 		this.entities.push({
 			id,
 			x: config.x,
@@ -316,7 +380,7 @@ export class EntityManager {
 			grounded: false,
 			scale: config.size,
 			mass,
-			restitution: mat.restitution,
+			restitution: matBase.restitution,
 			shape: config.shape,
 			material: config.material,
 			role: config.role,
@@ -325,10 +389,7 @@ export class EntityManager {
 			tip: null,
 			lastClimbDx: 0,
 			lastClimbDz: 0,
-			// Random phase so groups of cubes don't tip in unison.
-			// Non-cube shapes ignore this field.
-			tipCooldown:
-				config.shape === Shape.Cube ? Math.random() * tipInterval : 0,
+			tipCooldown,
 			tipDuration,
 			tipInterval,
 		});
@@ -359,11 +420,11 @@ export class EntityManager {
 		// the tip finishes and normal physics resumes next frame.
 		for (const entity of this.entities) {
 			if (entity.shape === Shape.Sphere) {
-				const mat = materials[entity.material];
+				const sphereMat = getSphereMaterial(entity.material);
 				entityAITick(
 					entity,
 					playerPos,
-					mat.baseSpeed,
+					sphereMat.baseSpeed,
 					entity.mass,
 					ww,
 					dt,
@@ -380,21 +441,10 @@ export class EntityManager {
 				// AI-then-physics ordering mirrors the sphere branch above:
 				// the AI decides whether to start a tip this frame, and if
 				// it does, we route through advanceCubeTip instead of the
-				// normal physics tick. Cooldown ticks regardless of grounded
-				// state — if a cube is airborne when its timer expires, the
-				// next grounded frame fires immediately rather than adding
-				// another full interval of delay.
-				if (entity.tip === null) {
-					entity.tipCooldown -= dt;
-					if (entity.tipCooldown <= 0 && entity.grounded) {
-						this.tipCubeTowardPlayer(
-							entity,
-							playerPos,
-							onBlockChanged,
-						);
-						entity.tipCooldown = entity.tipInterval;
-					}
-				}
+				// normal physics tick.
+				cubeAITick(entity, playerPos, ww, dt, (e, dir) =>
+					this.tryTipCube(e, dir, onBlockChanged),
+				);
 				if (entity.tip !== null) {
 					advanceCubeTip(entity, dt);
 				} else {
@@ -546,7 +596,7 @@ export class EntityManager {
 		// material for placed blocks (marble cube → MARBLE, brick → BRICK,
 		// dark-marble → DARK_MARBLE) so scaffolded terrain reads as the
 		// cube's trail.
-		const blockId = materials[entity.material].texLayer;
+		const blockId = materials[entity.material].base.texLayer;
 		for (const [bx, by, bz] of scaffoldCells) {
 			this.world.setBlock(bx, by, bz, blockId);
 			onBlockChanged(bx, by, bz);
@@ -564,88 +614,6 @@ export class EntityManager {
 			entity.lastClimbDz = dz;
 		}
 		return ok;
-	}
-
-	/**
-	 * Per-cube targeting — beeline toward the player. Caller is responsible
-	 * for gating (mid-tip / not-grounded cubes should be skipped before
-	 * calling). Routes through `tryTipCube` so scaffolding runs.
-	 *
-	 * Targeting policy:
-	 *   - **Player meaningfully above cube (Δy > edge):** vertical-intent
-	 *     mode. Pick a climb by alternating from `lastClimbDx/Dz` — flips
-	 *     sign each tip, so two climbs net to zero horizontal and
-	 *     +2·edge vertical (Option-A zigzag). First climb (both signs 0)
-	 *     seeds direction from the dominant horizontal axis to the player.
-	 *   - **Otherwise:** horizontal walk toward dominant player axis.
-	 *     If horizontal is blocked (typically a wall), fall back to a
-	 *     same-direction climb; scaffolding fills the wall as needed.
-	 *
-	 * Successful climbs update `lastClimbDx/Dz` inside `tryTipCube`, so
-	 * whether a climb fires from the vertical-intent branch or the
-	 * horizontal fallback, the next vertical-intent tip will alternate
-	 * correctly.
-	 */
-	private tipCubeTowardPlayer(
-		entity: Entity,
-		playerPos: Float32Array,
-		onBlockChanged: (bx: number, by: number, bz: number) => void,
-	): void {
-		const px = playerPos[0] ?? 0;
-		const py = playerPos[1] ?? 0;
-		const pz = playerPos[2] ?? 0;
-		const ww = this.world.widthChunks * CHUNK_SIZE * this.world.blockSize;
-		const hw = ww / 2;
-
-		// Wrap-aware player-relative direction (Y doesn't wrap)
-		let dx = px - entity.x;
-		const dy = py - entity.y;
-		let dz = pz - entity.z;
-		if (dx > hw) dx -= ww;
-		else if (dx < -hw) dx += ww;
-		if (dz > hw) dz -= ww;
-		else if (dz < -hw) dz += ww;
-
-		const edge = 2 * entity.scale;
-
-		// Vertical-intent branch: player is more than one cube-edge above.
-		// Pick a climb by alternating the last climb's horizontal direction.
-		// If the cube has never climbed, seed direction from the dominant
-		// horizontal axis to the player.
-		if (dy > edge) {
-			let climbDx: number;
-			let climbDz: number;
-			if (entity.lastClimbDx !== 0 || entity.lastClimbDz !== 0) {
-				climbDx = -entity.lastClimbDx;
-				climbDz = -entity.lastClimbDz;
-			} else if (Math.abs(dx) >= Math.abs(dz)) {
-				climbDx = dx >= 0 ? 1 : -1;
-				climbDz = 0;
-			} else {
-				climbDx = 0;
-				climbDz = dz >= 0 ? 1 : -1;
-			}
-			if (
-				this.tryTipCube(entity, [climbDx, 1, climbDz], onBlockChanged)
-			) {
-				return;
-			}
-			// Alternation pick blocked — fall through to horizontal behavior.
-			// Horizontal→climb fallback may still find a way, and any climb
-			// that fires will re-seed lastClimbDx/Dz so the zigzag recovers
-			// on subsequent tips.
-		}
-
-		// Horizontal walk toward dominant player axis; ties break to X.
-		let dirX = 0;
-		let dirZ = 0;
-		if (Math.abs(dx) >= Math.abs(dz)) {
-			dirX = dx >= 0 ? 1 : -1;
-		} else {
-			dirZ = dz >= 0 ? 1 : -1;
-		}
-		if (this.tryTipCube(entity, [dirX, 0, dirZ], onBlockChanged)) return;
-		this.tryTipCube(entity, [dirX, 1, dirZ], onBlockChanged);
 	}
 
 	draw(pass: GPURenderPassEncoder): void {

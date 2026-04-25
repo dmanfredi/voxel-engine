@@ -133,6 +133,39 @@ ESLint uses `strictTypeChecked` + `stylisticTypeChecked` rulesets. Two rules are
 
 After making code changes, always run `npx prettier --write "src/**/*.ts"` to format before committing or finishing.
 
+### Comment Discipline
+
+Comments earn their keep by carrying *load-bearing why*: non-obvious design choices, invariants the code can't enforce, future-pointers that prevent premature generalization, and pointers to `notes/` design docs. They do **not** restate what the next line of code already says, re-establish architecture that lives in CLAUDE.md or notes/, stack adjectives ("crucial", "carefully"), or narrate fall-through paths the reader can already see.
+
+When writing or revising comments, prefer the tighter form. Example — `cubeAITick`:
+
+Before (verbose, restates the signature, narrates the early return):
+
+```ts
+/**
+ * Per-frame cube AI tick. Decrements the cube's tip cooldown; on expiry,
+ * attempts a tip toward the player if the cube is grounded.
+ *
+ * Cooldown ticks regardless of `grounded` — if a cube is airborne when its
+ * timer expires, the next grounded frame fires immediately rather than
+ * stalling for another full interval. Mid-tip cubes (`entity.tip !== null`)
+ * are skipped entirely; the tip animation will complete on its own and the
+ * next idle frame picks up here.
+ */
+```
+
+After (load-bearing only — the *why* of cooldown ticking when ungrounded):
+
+```ts
+/**
+ * Tick cooldown; on expiry, attempt a tip if grounded. Cooldown ticks
+ * regardless of grounded so airborne cubes fire on the next grounded
+ * frame rather than waiting a full interval. Mid-tip cubes skip entirely.
+ */
+```
+
+Dead code kept as a "we tried this, here's why we didn't keep it" record (e.g. the commented-out friction block in `sphere-physics.ts`) is fine — that's a load-bearing warning, not noise.
+
 ## Key Dependencies
 
 - **wgpu-matrix** — vec3/mat4 math

@@ -1,7 +1,9 @@
+import { SUN_DIRECTION_WGSL } from '../lighting';
 import { buildMaterialLUT } from './shared';
 
 const VoxelShader = /*wgsl*/ `
 	${buildMaterialLUT()}
+	${SUN_DIRECTION_WGSL}
 
 	struct Uniforms {
 		matrix: mat4x4f,
@@ -10,6 +12,10 @@ const VoxelShader = /*wgsl*/ `
 		specularStrength: f32,
 		fogStart: f32,
 		fogEnd: f32,
+		lightMatrix: mat4x4f,
+		shadowStrength: f32,
+		shadowBias: f32,
+		shadowsEnabled: f32,
 	}
 
 	struct Vertex {
@@ -27,6 +33,7 @@ const VoxelShader = /*wgsl*/ `
 		@location(2) normal: vec3f,
 		@location(3) ao: f32,
 		@location(4) worldPos: vec3f,
+		@location(5) shadowPos: vec4f,
 	}
 
 	@group(0) @binding(0) var<uniform> uni: Uniforms;
@@ -34,11 +41,10 @@ const VoxelShader = /*wgsl*/ `
 	@group(0) @binding(2) var myTexture: texture_2d_array<f32>;
 	@group(0) @binding(3) var skySampler: sampler;
 	@group(0) @binding(4) var skyTexture: texture_cube<f32>;
+	@group(0) @binding(5) var shadowSampler: sampler_comparison;
+	@group(0) @binding(6) var shadowTexture: texture_depth_2d;
 
 	@group(1) @binding(0) var<uniform> chunkOffset: vec4f;
-
-	// Light direction matching skybox sun (azimuth 124.6°, elevation 46.9°)
-	const LIGHT_DIR = vec3f(-0.387, 0.730, 0.563);
 
 	@vertex fn vs(vert: Vertex) -> VSOutput {
 		var vsOut: VSOutput;
@@ -49,12 +55,33 @@ const VoxelShader = /*wgsl*/ `
 		vsOut.normal = vert.normal;
 		vsOut.ao = vert.ao;
 		vsOut.worldPos = worldPos;
+		vsOut.shadowPos = uni.lightMatrix * vec4f(worldPos, 1.0);
 		return vsOut;
 	}
 
 	// Negative LOD bias nudges the sampler toward sharper mip levels than the
 	// automatic derivative-based selection would pick. -1.0 is nice.
 	const MIP_LOD_BIAS: f32 = -1.0;
+
+	fn shadowVisibility(shadowPos: vec4f, normal: vec3f) -> f32 {
+		let proj = shadowPos.xyz / shadowPos.w;
+		let uv = vec2f(proj.x * 0.5 + 0.5, 0.5 - proj.y * 0.5);
+		let facing = max(dot(normal, LIGHT_DIR), 0.0);
+		let slopeBias = uni.shadowBias * (1.0 - facing) * 2.0;
+		let visibility = textureSampleCompare(
+			shadowTexture,
+			shadowSampler,
+			uv,
+			proj.z - uni.shadowBias - slopeBias,
+		);
+		let inBounds = proj.x >= -1.0 && proj.x <= 1.0 && proj.y >= -1.0 && proj.y <= 1.0 && proj.z >= 0.0 && proj.z <= 1.0;
+		let sunFacing = dot(normal, LIGHT_DIR) > 0.0;
+		return select(
+			1.0,
+			mix(1.0, visibility, uni.shadowsEnabled),
+			inBounds && sunFacing,
+		);
+	}
 
 	@fragment fn fs(vsOut: VSOutput) -> @location(0) vec4f {
 		let texColor = textureSampleBias(myTexture, mySampler, vsOut.uv, vsOut.texLayer, MIP_LOD_BIAS);
@@ -94,12 +121,17 @@ const VoxelShader = /*wgsl*/ `
 		let H = normalize(LIGHT_DIR + V);
 		let spec = pow(max(dot(n, H), 0.0), effShin);
 		let specular = effSpec * spec * skyColor.rgb;
+		let sunVisibility = shadowVisibility(vsOut.shadowPos, n);
+		let directLight = mix(1.0 - uni.shadowStrength, 1.0, sunVisibility);
 
 		// a nice blue vec3f(0.49, 0.55, 0.68)
 		let shadowColor = vec3f(0.1, 0.1, 0.1); // AO shadow tint
-		let lit = texColor.rgb * brightness;
+		let ambientBrightness = 0.5;
+		let directBrightness = max(brightness - ambientBrightness, 0.0);
+		let shadedBrightness = ambientBrightness + directBrightness * directLight;
+		let lit = texColor.rgb * shadedBrightness;
 		let base = mix(shadowColor, lit, vsOut.ao);
-		let final_color = base + specular;
+		let final_color = base + specular * directLight;
 
 		// Distance fog — sample skybox in eye-to-fragment direction so fog matches the sky behind it
 		let dist = length(vsOut.worldPos - uni.eyePosition);

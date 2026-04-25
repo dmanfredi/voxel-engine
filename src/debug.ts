@@ -16,6 +16,9 @@ export const debuggerParams = {
 	specularStrength: 0,
 	fogStart: 1300,
 	fogEnd: 1400,
+	shadows: true,
+	shadowStrength: 0.45,
+	shadowBias: 0.0015,
 };
 
 let pane: Pane | null = null;
@@ -93,6 +96,23 @@ export function BuildDebug(render: () => void): void {
 		min: 0,
 		max: 2000,
 		step: 10,
+	});
+
+	const shadowFolder = pane.addFolder({ title: 'Shadows' });
+	shadowFolder.addBinding(debuggerParams, 'shadows', {
+		label: 'Enabled',
+	});
+	shadowFolder.addBinding(debuggerParams, 'shadowStrength', {
+		label: 'Strength',
+		min: 0,
+		max: 1,
+		step: 0.05,
+	});
+	shadowFolder.addBinding(debuggerParams, 'shadowBias', {
+		label: 'Bias',
+		min: 0,
+		max: 0.01,
+		step: 0.0001,
 	});
 }
 

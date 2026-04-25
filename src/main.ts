@@ -2,6 +2,11 @@ import { mat4, vec3 } from 'wgpu-matrix';
 import VoxelShader from './shader/voxel';
 import WireframeShader from './shader/wireframe';
 import { initSkybox, drawSkybox, type SkyboxResources } from './skybox';
+import {
+	computeLightViewProjection,
+	initTerrainShadows,
+	SHADOW_HALF_EXTENT,
+} from './shadow';
 
 import { BuildDebug, refreshDebug, debuggerParams, stats } from './debug';
 import { greedyMesh } from './greedy-mesh';
@@ -146,6 +151,16 @@ async function main(): Promise<void> {
 				binding: 4,
 				visibility: GPUShaderStage.FRAGMENT,
 				texture: { sampleType: 'float', viewDimension: 'cube' },
+			},
+			{
+				binding: 5,
+				visibility: GPUShaderStage.FRAGMENT,
+				sampler: { type: 'comparison' },
+			},
+			{
+				binding: 6,
+				visibility: GPUShaderStage.FRAGMENT,
+				texture: { sampleType: 'depth', viewDimension: '2d' },
 			},
 		],
 	});
@@ -298,18 +313,27 @@ async function main(): Promise<void> {
 	});
 
 	// Uniform buffer layout (WGSL std140):
-	// mat4x4f  = 64 bytes (offset 0)
-	// vec3f    = 12 bytes (offset 64, aligned to 16) — eyePosition
-	// f32      = 4 bytes  (offset 76) — shininess (packs into vec3's trailing slot)
-	// f32      = 4 bytes  (offset 80) — specularStrength
-	// Total: 84 bytes, round up to 96 for 16-byte alignment
-	const uniformBufferSize = 96;
+	// mat4x4f  = 64 bytes (offset 0)   viewProjection
+	// vec3f    = 12 bytes (offset 64)  eyePosition
+	// f32      = 4 bytes  (offset 76)  shininess
+	// f32      = 4 bytes  (offset 80)  specularStrength
+	// f32      = 4 bytes  (offset 84)  fogStart
+	// f32      = 4 bytes  (offset 88)  fogEnd
+	// mat4x4f  = 64 bytes (offset 96)  lightViewProjection
+	// f32 x 3  = 12 bytes (offset 160) shadow strength/bias/enabled
+	// Total: 172 bytes, round up to 176 for 16-byte alignment
+	const uniformBufferSize = 176;
 	const uniformBuffer = device.createBuffer({
 		label: 'uniforms',
 		size: uniformBufferSize,
 		usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 	});
 	const uniformValues = new Float32Array(uniformBufferSize / 4);
+	const terrainShadows = initTerrainShadows(
+		device,
+		chunkOffsetBGL,
+		uniformBuffer,
+	);
 
 	const blockTextureView = blockTextureArray.createView({
 		dimension: '2d-array',
@@ -492,6 +516,8 @@ async function main(): Promise<void> {
 				binding: 4,
 				resource: skybox.texture.createView({ dimension: 'cube' }),
 			},
+			{ binding: 5, resource: terrainShadows.sampler },
+			{ binding: 6, resource: terrainShadows.view },
 		],
 	});
 
@@ -733,9 +759,6 @@ async function main(): Promise<void> {
 			},
 		};
 
-		const encoder = device.createCommandEncoder();
-		const pass = encoder.beginRenderPass(renderPassDescriptor);
-
 		const aspect = canvas.clientWidth / canvas.clientHeight;
 		const projection = mat4.perspective(
 			degToRad(60), // fieldOfView,
@@ -751,6 +774,10 @@ async function main(): Promise<void> {
 		);
 		// Compute the view projection matrix
 		const viewProjectionMatrix = mat4.multiply(projection, viewMatrix);
+		const lightViewProjectionMatrix = computeLightViewProjection(
+			cameraPos,
+			SHADOW_HALF_EXTENT,
+		);
 
 		// Upload uniforms: VP matrix + eye position + reflection params
 		uniformValues.set(viewProjectionMatrix);
@@ -761,6 +788,10 @@ async function main(): Promise<void> {
 		uniformValues[20] = debuggerParams.specularStrength; // specularStrength
 		uniformValues[21] = debuggerParams.fogStart; // fogStart
 		uniformValues[22] = debuggerParams.fogEnd; // fogEnd
+		uniformValues.set(lightViewProjectionMatrix, 24);
+		uniformValues[40] = debuggerParams.shadowStrength;
+		uniformValues[41] = debuggerParams.shadowBias;
+		uniformValues[42] = debuggerParams.shadows ? 1 : 0;
 		device.queue.writeBuffer(uniformBuffer, 0, uniformValues);
 
 		// Compute and upload per-chunk wrap offsets
@@ -783,6 +814,29 @@ async function main(): Promise<void> {
 
 			device.queue.writeBuffer(chunkRender.offsetBuffer, 0, offsetData);
 		}
+
+		const encoder = device.createCommandEncoder();
+		const shadowPass = encoder.beginRenderPass({
+			label: 'terrain shadow pass',
+			colorAttachments: [],
+			depthStencilAttachment: {
+				view: terrainShadows.view,
+				depthClearValue: 1,
+				depthLoadOp: 'clear',
+				depthStoreOp: 'store',
+			},
+		});
+
+		shadowPass.setPipeline(terrainShadows.pipeline);
+		shadowPass.setBindGroup(0, terrainShadows.bindGroup);
+		for (const chunkRender of chunkRenderMap.values()) {
+			shadowPass.setBindGroup(1, chunkRender.offsetBindGroup);
+			shadowPass.setVertexBuffer(0, chunkRender.vertexBuffer);
+			shadowPass.draw(chunkRender.numVertices);
+		}
+		shadowPass.end();
+
+		const pass = encoder.beginRenderPass(renderPassDescriptor);
 
 		// Draw all chunk meshes
 		pass.setPipeline(pipeline);

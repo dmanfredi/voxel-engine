@@ -16,6 +16,7 @@ const VoxelShader = /*wgsl*/ `
 		shadowStrength: f32,
 		shadowBias: f32,
 		shadowsEnabled: f32,
+		shadowNormalBias: f32,
 	}
 
 	struct Vertex {
@@ -55,7 +56,8 @@ const VoxelShader = /*wgsl*/ `
 		vsOut.normal = vert.normal;
 		vsOut.ao = vert.ao;
 		vsOut.worldPos = worldPos;
-		vsOut.shadowPos = uni.lightMatrix * vec4f(worldPos, 1.0);
+		let shadowWorldPos = worldPos + vert.normal * uni.shadowNormalBias;
+		vsOut.shadowPos = uni.lightMatrix * vec4f(shadowWorldPos, 1.0);
 		return vsOut;
 	}
 
@@ -76,9 +78,15 @@ const VoxelShader = /*wgsl*/ `
 		);
 		let inBounds = proj.x >= -1.0 && proj.x <= 1.0 && proj.y >= -1.0 && proj.y <= 1.0 && proj.z >= 0.0 && proj.z <= 1.0;
 		let sunFacing = dot(normal, LIGHT_DIR) > 0.0;
+		let edgeDistance = min(
+			min(proj.x + 1.0, 1.0 - proj.x),
+			min(proj.y + 1.0, 1.0 - proj.y),
+		);
+		let edgeFade = clamp(edgeDistance / 0.08, 0.0, 1.0);
+		let fadedVisibility = mix(1.0, visibility, edgeFade);
 		return select(
 			1.0,
-			mix(1.0, visibility, uni.shadowsEnabled),
+			mix(1.0, fadedVisibility, uni.shadowsEnabled),
 			inBounds && sunFacing,
 		);
 	}

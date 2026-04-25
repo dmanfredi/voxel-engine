@@ -21,7 +21,7 @@ import { autoClimb } from './auto-climb';
 import { ChunkLoader } from './chunk-loader';
 import { MeshScheduler } from './mesh-scheduler';
 import { initEntityRenderer } from './entity-renderer';
-import { EntityManager, Shape, Material, Role } from './entity';
+import { EntityManager } from './entity';
 import { tryPlaceBlock } from './placement';
 import { generateMips, numMipLevels } from './mipmap';
 import marbleTextureUrl from '../assets/MarbleBase1024.png';
@@ -320,8 +320,8 @@ async function main(): Promise<void> {
 	// f32      = 4 bytes  (offset 84)  fogStart
 	// f32      = 4 bytes  (offset 88)  fogEnd
 	// mat4x4f  = 64 bytes (offset 96)  lightViewProjection
-	// f32 x 3  = 12 bytes (offset 160) shadow strength/bias/enabled
-	// Total: 172 bytes, round up to 176 for 16-byte alignment
+	// f32 x 4  = 16 bytes (offset 160) shadow strength/bias/enabled/normal bias
+	// Total: 176 bytes
 	const uniformBufferSize = 176;
 	const uniformBuffer = device.createBuffer({
 		label: 'uniforms',
@@ -333,6 +333,7 @@ async function main(): Promise<void> {
 		device,
 		chunkOffsetBGL,
 		uniformBuffer,
+		WORLD_WIDTH * CHUNK_SIZE * BLOCK_SIZE,
 	);
 
 	const blockTextureView = blockTextureArray.createView({
@@ -529,54 +530,54 @@ async function main(): Promise<void> {
 		bindGroup,
 	);
 	const entityManager = new EntityManager(entityRenderer, device, world);
-	entityManager.spawn({
-		shape: Shape.Sphere,
-		material: Material.DarkMarble,
-		role: Role.Rush,
-		x: worldCenter,
-		y: worldCenter + 100,
-		z: worldCenter - 100,
-		size: 20,
-		vx: 2,
-		vz: 2,
-	});
+	// entityManager.spawn({
+	// 	shape: Shape.Sphere,
+	// 	material: Material.DarkMarble,
+	// 	role: Role.Rush,
+	// 	x: worldCenter,
+	// 	y: worldCenter + 100,
+	// 	z: worldCenter - 100,
+	// 	size: 20,
+	// 	vx: 2,
+	// 	vz: 2,
+	// });
 
-	entityManager.spawn({
-		shape: Shape.Sphere,
-		material: Material.Marble,
-		role: Role.Rush,
-		x: worldCenter,
-		y: worldCenter + 100,
-		z: worldCenter - 100,
-		size: 10,
-		vx: 3,
-		vz: -2,
-	});
+	// entityManager.spawn({
+	// 	shape: Shape.Sphere,
+	// 	material: Material.Marble,
+	// 	role: Role.Rush,
+	// 	x: worldCenter,
+	// 	y: worldCenter + 100,
+	// 	z: worldCenter - 100,
+	// 	size: 10,
+	// 	vx: 3,
+	// 	vz: -2,
+	// });
 
-	entityManager.spawn({
-		shape: Shape.Sphere,
-		material: Material.Brick,
-		role: Role.Rush,
-		x: worldCenter,
-		y: worldCenter + 100,
-		z: worldCenter - 100,
-		size: 15,
-		vx: 3,
-		vz: -2,
-	});
+	// entityManager.spawn({
+	// 	shape: Shape.Sphere,
+	// 	material: Material.Brick,
+	// 	role: Role.Rush,
+	// 	x: worldCenter,
+	// 	y: worldCenter + 100,
+	// 	z: worldCenter - 100,
+	// 	size: 15,
+	// 	vx: 3,
+	// 	vz: -2,
+	// });
 
-	// Phase 2 cube: spawned above terrain, falls under gravity and settles
-	// on the first solid voxel beneath it. Spheres that roll into it will
-	// bounce off (cube treated as infinite mass).
-	entityManager.spawn({
-		shape: Shape.Cube,
-		material: Material.DarkMarble,
-		role: Role.Zone,
-		x: worldCenter + 60,
-		y: worldCenter + 100,
-		z: worldCenter - 100,
-		size: 20,
-	});
+	// // Phase 2 cube: spawned above terrain, falls under gravity and settles
+	// // on the first solid voxel beneath it. Spheres that roll into it will
+	// // bounce off (cube treated as infinite mass).
+	// entityManager.spawn({
+	// 	shape: Shape.Cube,
+	// 	material: Material.DarkMarble,
+	// 	role: Role.Zone,
+	// 	x: worldCenter + 60,
+	// 	y: worldCenter + 100,
+	// 	z: worldCenter - 100,
+	// 	size: 20,
+	// });
 
 	// Initialize block highlight outline
 	// const highlight = initHighlight(device, presentationFormat);
@@ -792,6 +793,7 @@ async function main(): Promise<void> {
 		uniformValues[40] = debuggerParams.shadowStrength;
 		uniformValues[41] = debuggerParams.shadowBias;
 		uniformValues[42] = debuggerParams.shadows ? 1 : 0;
+		uniformValues[43] = debuggerParams.shadowNormalBias;
 		device.queue.writeBuffer(uniformBuffer, 0, uniformValues);
 
 		// Compute and upload per-chunk wrap offsets
@@ -832,7 +834,7 @@ async function main(): Promise<void> {
 		for (const chunkRender of chunkRenderMap.values()) {
 			shadowPass.setBindGroup(1, chunkRender.offsetBindGroup);
 			shadowPass.setVertexBuffer(0, chunkRender.vertexBuffer);
-			shadowPass.draw(chunkRender.numVertices);
+			shadowPass.draw(chunkRender.numVertices, 9);
 		}
 		shadowPass.end();
 

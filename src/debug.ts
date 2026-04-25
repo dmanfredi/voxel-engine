@@ -18,7 +18,8 @@ export const debuggerParams = {
 	fogEnd: 1400,
 	shadows: true,
 	shadowStrength: 0.45,
-	shadowBias: 0.0015,
+	shadowBias: 0.0,
+	shadowNormalBias: 0.35,
 };
 
 let pane: Pane | null = null;
@@ -113,6 +114,12 @@ export function BuildDebug(render: () => void): void {
 		min: 0,
 		max: 0.01,
 		step: 0.0001,
+	});
+	shadowFolder.addBinding(debuggerParams, 'shadowNormalBias', {
+		label: 'Normal Bias',
+		min: 0,
+		max: 2,
+		step: 0.05,
 	});
 }
 

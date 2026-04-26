@@ -130,7 +130,15 @@ const VoxelShader = /*wgsl*/ `
 		let spec = pow(max(dot(n, H), 0.0), effShin);
 		let specular = effSpec * spec * skyColor.rgb;
 		let sunVisibility = shadowVisibility(vsOut.shadowPos, n);
-		let directLight = mix(1.0 - uni.shadowStrength, 1.0, sunVisibility);
+
+		let dist = length(vsOut.worldPos - uni.eyePosition);
+		let fogFactor = clamp((uni.fogEnd - dist) / (uni.fogEnd - uni.fogStart), 0.0, 1.0);
+		let shadowFogFade = smoothstep(0.0, 1.0, fogFactor);
+		let directLight = mix(
+			1.0,
+			mix(1.0 - uni.shadowStrength, 1.0, sunVisibility),
+			shadowFogFade,
+		);
 
 		// a nice blue vec3f(0.49, 0.55, 0.68)
 		let shadowColor = vec3f(0.1, 0.1, 0.1); // AO shadow tint
@@ -142,8 +150,6 @@ const VoxelShader = /*wgsl*/ `
 		let final_color = base + specular * directLight;
 
 		// Distance fog — sample skybox in eye-to-fragment direction so fog matches the sky behind it
-		let dist = length(vsOut.worldPos - uni.eyePosition);
-		let fogFactor = clamp((uni.fogEnd - dist) / (uni.fogEnd - uni.fogStart), 0.0, 1.0);
 		let fogColor = textureSample(skyTexture, skySampler, eyeToSurface * vec3f(1, 1, -1)).rgb;
 		let fogged = mix(fogColor, final_color, fogFactor);
 		return vec4f(fogged, texColor.a);

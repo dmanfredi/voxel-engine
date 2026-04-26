@@ -36,22 +36,56 @@ function buildTerrainShadowShader(worldWrapWidth: number): string {
 		shadowStrength: f32,
 		shadowBias: f32,
 		shadowsEnabled: f32,
+		shadowNormalBias: f32,
 	}
 
 	struct Vertex {
 		@location(0) position: vec3f,
 	}
 
+	struct VSOutput {
+		@builtin(position) position: vec4f,
+		@location(0) worldPos: vec3f,
+	}
+
 	@group(0) @binding(0) var<uniform> uni: Uniforms;
 	@group(1) @binding(0) var<uniform> chunkOffset: vec4f;
+
+	const BAYER_4X4 = array<f32, 16>(
+		0.03125, 0.53125, 0.15625, 0.65625,
+		0.78125, 0.28125, 0.90625, 0.40625,
+		0.21875, 0.71875, 0.09375, 0.59375,
+		0.96875, 0.46875, 0.84375, 0.34375,
+	);
+
+	fn ditherThreshold(pixel: vec2f) -> f32 {
+		let p = vec2u(floor(pixel)) % vec2u(4u);
+		return BAYER_4X4[p.y * 4u + p.x];
+	}
 
 	@vertex fn vs(
 		vert: Vertex,
 		@builtin(instance_index) instanceIndex: u32
-	) -> @builtin(position) vec4f {
+	) -> VSOutput {
 		let wrapOffset = WRAP_OFFSETS[instanceIndex];
 		let worldPos = vert.position + chunkOffset.xyz + vec3f(wrapOffset.x, 0.0, wrapOffset.y);
-		return uni.lightMatrix * vec4f(worldPos, 1.0);
+		var out: VSOutput;
+		out.position = uni.lightMatrix * vec4f(worldPos, 1.0);
+		out.worldPos = worldPos;
+		return out;
+	}
+
+	@fragment fn fs(in: VSOutput) {
+		let fogRange = max(uni.fogEnd - uni.fogStart, 0.001);
+		let fogAlpha = smoothstep(
+			0.0,
+			1.0,
+			clamp((uni.fogEnd - length(in.worldPos - uni.eyePosition)) / fogRange, 0.0, 1.0),
+		);
+		let casterAlpha = clamp(chunkOffset.w, 0.0, 1.0) * fogAlpha;
+		if (casterAlpha < ditherThreshold(in.position.xy)) {
+			discard;
+		}
 	}
 `;
 }
@@ -94,7 +128,7 @@ export function initTerrainShadows(
 		entries: [
 			{
 				binding: 0,
-				visibility: GPUShaderStage.VERTEX,
+				visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
 				buffer: { type: 'uniform' },
 			},
 		],
@@ -128,6 +162,11 @@ export function initTerrainShadows(
 					],
 				},
 			],
+		},
+		fragment: {
+			module,
+			entryPoint: 'fs',
+			targets: [],
 		},
 		primitive: {
 			cullMode: 'back',

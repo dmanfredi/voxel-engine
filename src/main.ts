@@ -70,6 +70,9 @@ interface ChunkRenderData {
 	wireframeBindGroup: GPUBindGroup;
 	offsetBuffer: GPUBuffer;
 	offsetBindGroup: GPUBindGroup;
+	offsetX: number;
+	offsetZ: number;
+	shadowCasterAlpha: number;
 	numVertices: number;
 }
 
@@ -118,7 +121,7 @@ async function main(): Promise<void> {
 		entries: [
 			{
 				binding: 0,
-				visibility: GPUShaderStage.VERTEX,
+				visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
 				buffer: { type: 'uniform' },
 			},
 		],
@@ -409,6 +412,9 @@ async function main(): Promise<void> {
 			wireframeBindGroup,
 			offsetBuffer,
 			offsetBindGroup,
+			offsetX: 0,
+			offsetZ: 0,
+			shadowCasterAlpha: 1,
 			numVertices,
 		});
 
@@ -796,23 +802,98 @@ async function main(): Promise<void> {
 		uniformValues[43] = debuggerParams.shadowNormalBias;
 		device.queue.writeBuffer(uniformBuffer, 0, uniformValues);
 
-		// Compute and upload per-chunk wrap offsets
+		const chunkExtent = CHUNK_SIZE * BLOCK_SIZE;
+		const smoothStep01 = (value: number): number => {
+			const t = Math.max(0, Math.min(1, value));
+			return t * t * (3 - 2 * t);
+		};
+
+		function chunkDistanceOutsideCameraAABB(
+			chunkRender: ChunkRenderData,
+		): [number, number, number] {
+			const minX =
+				chunkRender.cx * chunkExtent + chunkRender.offsetX;
+			const maxX = minX + chunkExtent;
+			const minY = chunkRender.cy * chunkExtent;
+			const maxY = minY + chunkExtent;
+			const minZ =
+				chunkRender.cz * chunkExtent + chunkRender.offsetZ;
+			const maxZ = minZ + chunkExtent;
+
+			const dx =
+				cameraPos[0] < minX
+					? minX - cameraPos[0]
+					: cameraPos[0] > maxX
+						? cameraPos[0] - maxX
+						: 0;
+			const dy =
+				cameraPos[1] < minY
+					? minY - cameraPos[1]
+					: cameraPos[1] > maxY
+						? cameraPos[1] - maxY
+						: 0;
+			const dz =
+				cameraPos[2] < minZ
+					? minZ - cameraPos[2]
+					: cameraPos[2] > maxZ
+						? cameraPos[2] - maxZ
+						: 0;
+
+			return [dx, dy, dz];
+		}
+
+		function chunkShadowCasterAlpha(
+			chunkRender: ChunkRenderData,
+		): number {
+			const [dx, dy, dz] =
+				chunkDistanceOutsideCameraAABB(chunkRender);
+			const distance = Math.hypot(dx, dy, dz);
+			const fogRange = Math.max(
+				debuggerParams.fogEnd - debuggerParams.fogStart,
+				1,
+			);
+			const fogAlpha = smoothStep01(
+				(debuggerParams.fogEnd - distance) / fogRange,
+			);
+
+			// Vertical chunks stream before the default fog band. Fade shadow
+			// casters over the outer two vertical chunk bands so load/unload
+			// changes do not appear as hard shadow pops on nearby receivers.
+			const streamFadeEnd = VERTICAL_RADIUS * chunkExtent;
+			const streamFadeStart = Math.max(
+				0,
+				streamFadeEnd - chunkExtent * 2,
+			);
+			const streamAlpha = smoothStep01(
+				(streamFadeEnd - dy) /
+					(streamFadeEnd - streamFadeStart),
+			);
+
+			return Math.min(fogAlpha, streamAlpha);
+		}
+
+		// Compute and upload per-chunk wrap offsets plus shadow caster fade.
 		const ww = world.widthChunks * CHUNK_SIZE * BLOCK_SIZE;
 		const hw = ww / 2;
 		const offsetData = new Float32Array(4);
-		const halfChunk = (CHUNK_SIZE * BLOCK_SIZE) / 2;
+		const halfChunk = chunkExtent / 2;
 		for (const chunkRender of chunkRenderMap.values()) {
 			const dx =
-				chunkRender.cx * CHUNK_SIZE * BLOCK_SIZE +
+				chunkRender.cx * chunkExtent +
 				halfChunk -
 				cameraPos[0];
 			const dz =
-				chunkRender.cz * CHUNK_SIZE * BLOCK_SIZE +
+				chunkRender.cz * chunkExtent +
 				halfChunk -
 				cameraPos[2];
 
 			offsetData[0] = dx > hw ? -ww : dx < -hw ? ww : 0;
 			offsetData[2] = dz > hw ? -ww : dz < -hw ? ww : 0;
+			chunkRender.offsetX = offsetData[0];
+			chunkRender.offsetZ = offsetData[2];
+			chunkRender.shadowCasterAlpha =
+				chunkShadowCasterAlpha(chunkRender);
+			offsetData[3] = chunkRender.shadowCasterAlpha;
 
 			device.queue.writeBuffer(chunkRender.offsetBuffer, 0, offsetData);
 		}
@@ -832,6 +913,7 @@ async function main(): Promise<void> {
 		shadowPass.setPipeline(terrainShadows.pipeline);
 		shadowPass.setBindGroup(0, terrainShadows.bindGroup);
 		for (const chunkRender of chunkRenderMap.values()) {
+			if (chunkRender.shadowCasterAlpha <= 0) continue;
 			shadowPass.setBindGroup(1, chunkRender.offsetBindGroup);
 			shadowPass.setVertexBuffer(0, chunkRender.vertexBuffer);
 			shadowPass.draw(chunkRender.numVertices, 9);

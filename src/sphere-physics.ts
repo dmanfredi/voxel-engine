@@ -40,8 +40,10 @@ export function entityPhysicsTick(
 	const t = dt / MC_TICK;
 
 	// Gravity + terminal velocity
-	entity.vy -= GRAVITY * t;
-	if (entity.vy < TERMINAL_VELOCITY) entity.vy = TERMINAL_VELOCITY;
+	if (!entity.noGravity) {
+		entity.vy -= GRAVITY * t;
+		if (entity.vy < TERMINAL_VELOCITY) entity.vy = TERMINAL_VELOCITY;
+	}
 
 	// Zero tiny horizontal velocities (prevents eternal micro-drift)
 	if (Math.abs(entity.vx) < NEGLIGIBLE * t) entity.vx = 0;

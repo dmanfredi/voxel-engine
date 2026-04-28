@@ -28,7 +28,11 @@ import {
 	advanceCubeTip,
 } from './cube-physics';
 import type { TipState } from './cube-physics';
-import { resolveSpherePair, resolveSphereVsCube } from './entity-interactions';
+import {
+	resolveSpherePair,
+	resolveSphereVsCube,
+	resolvePlayerVsCube,
+} from './entity-interactions';
 import { entityAITick } from './entity-ai';
 import { cubeAITick } from './cube-ai';
 import type { World } from './world';
@@ -153,7 +157,7 @@ const materials: Record<Material, MaterialProperties> = {
 			restitution: 0.4,
 		},
 		sphere: { baseSpeed: 1.0 },
-		cube: { tipSpeed: 5.0, tipRate: 10.0 },
+		cube: { tipSpeed: 0.4, tipRate: 10.0 },
 	},
 };
 
@@ -230,6 +234,8 @@ export interface Entity {
 	// Seconds between AI tip attempts (material-scaled via `tipRate`).
 	// Cached at spawn. Unused by spheres.
 	tipInterval: number;
+	// Skip gravity (debug-only — pin entities in air to watch collisions).
+	noGravity: boolean;
 }
 
 export interface SpawnConfig {
@@ -244,6 +250,7 @@ export interface SpawnConfig {
 	vy?: number;
 	vz?: number;
 	traits?: Trait[];
+	noGravity?: boolean;
 }
 
 // ── Mesh cache ──────────────────────────────────────────────────────
@@ -392,6 +399,7 @@ export class EntityManager {
 			tipCooldown,
 			tipDuration,
 			tipInterval,
+			noGravity: config.noGravity ?? false,
 		});
 
 		// Initial upload with zero offset — next update() will apply proper wrap
@@ -457,15 +465,14 @@ export class EntityManager {
 		// Splitting this out of Pass 1 means each pair sees finalized
 		// post-integration positions on both sides. Cubes are treated as
 		// infinite mass vs spheres (sphere bounces, cube doesn't budge),
-		// matching the "cubes are platforms" design. Mid-tip cubes skip
-		// all pair checks — they're briefly non-collidable so spheres pass
-		// through them during the arc (Option A from the Phase 3 plan).
+		// matching the "cubes are platforms" design. Tipping cubes route
+		// through `getCubeOBB` so the actual oriented box is collidable
+		// during the arc, not just the destination ghost — no AABB-of-OBB
+		// stickiness at peak rotation.
 		for (let i = 0; i < this.entities.length; i++) {
 			const a = this.entities[i];
-			if (a.shape === Shape.Cube && a.tip !== null) continue;
 			for (let j = i + 1; j < this.entities.length; j++) {
 				const b = this.entities[j];
-				if (b.shape === Shape.Cube && b.tip !== null) continue;
 				if (a.shape === Shape.Sphere && b.shape === Shape.Sphere) {
 					resolveSpherePair(a, b, ww);
 				} else if (a.shape === Shape.Sphere && b.shape === Shape.Cube) {
@@ -478,6 +485,21 @@ export class EntityManager {
 				// each other, so this pair is intentionally a no-op. Revisit
 				// once sphere impulses can shove cubes or tipping lands.
 			}
+		}
+
+		// Pass 2.5 — player vs cubes. Player is depenetrated against the
+		// cube's true OBB (full AABB-vs-OBB SAT). Player keeps its own
+		// velocity — main.ts owns player physics; this only constrains pos.
+		// Sphere-vs-player handled inside sphere physics (Pass 1).
+		for (const entity of this.entities) {
+			if (entity.shape !== Shape.Cube) continue;
+			resolvePlayerVsCube(
+				playerPos,
+				playerHalfWidth,
+				playerHeight,
+				entity,
+				ww,
+			);
 		}
 
 		// Pass 3 — render-time wrap offset + transform upload.

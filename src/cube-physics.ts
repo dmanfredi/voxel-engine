@@ -9,7 +9,7 @@
  * based on whether `entity.tip` is null.
  */
 
-import { mat4 } from 'wgpu-matrix';
+import { mat4, vec3 } from 'wgpu-matrix';
 import { CHUNK_SIZE } from './chunk';
 import { Shape } from './entity';
 import type { World } from './world';
@@ -20,6 +20,11 @@ import {
 	TERMINAL_VELOCITY,
 	NEGLIGIBLE,
 } from './entity-physics-shared';
+
+// Scratch buffers for getCubeOBB — reused across cubes/frames.
+const scratchArcRotation = mat4.identity();
+const scratchEffectiveRotation = mat4.identity();
+const scratchCenter = vec3.create();
 
 /**
  * Mid-tip animation state. Position is snapped to the destination cell at
@@ -42,6 +47,22 @@ export interface TipState {
 }
 
 /**
+ * World-space OBB for a cube — center + uniform half-extent + 3 unit axes
+ * (columns of the rotation matrix). Caller owns the struct (declare once,
+ * reuse) so `getCubeOBB` can fill in place. For static cubes, axes come
+ * from `entity.orientation`; for tipping cubes, from `R_arc · baseOrientation`.
+ */
+export interface CubeOBB {
+	cx: number;
+	cy: number;
+	cz: number;
+	s: number;
+	ax: Float32Array<ArrayBuffer>;
+	ay: Float32Array<ArrayBuffer>;
+	az: Float32Array<ArrayBuffer>;
+}
+
+/**
  * Gravity + axis-separated AABB-vs-voxel collision. Velocity along contact
  * axis zeros (no bounce). AABB half-extent = `entity.scale` on all axes.
  */
@@ -52,8 +73,10 @@ export function entityCubePhysicsTick(
 ): void {
 	const t = dt / MC_TICK;
 
-	entity.vy -= GRAVITY * t;
-	if (entity.vy < TERMINAL_VELOCITY) entity.vy = TERMINAL_VELOCITY;
+	if (!entity.noGravity) {
+		entity.vy -= GRAVITY * t;
+		if (entity.vy < TERMINAL_VELOCITY) entity.vy = TERMINAL_VELOCITY;
+	}
 
 	if (Math.abs(entity.vx) < NEGLIGIBLE * t) entity.vx = 0;
 	if (Math.abs(entity.vz) < NEGLIGIBLE * t) entity.vz = 0;
@@ -261,4 +284,54 @@ export function advanceCubeTip(entity: Entity, dt: number): void {
 		mat4.multiply(finalRot, tip.baseOrientation, entity.orientation);
 		entity.tip = null;
 	}
+}
+
+/**
+ * World-space OBB for the cube's geometry. Static: center=position,
+ * axes=entity.orientation columns (one of the cube's 24 symmetric
+ * orientations, so ±world axes). Tipping: center arcs around the pivot,
+ * axes come from `R_arc · baseOrientation`.
+ *
+ * Consumers (sphere closest-point, player SAT) get the actual oriented
+ * shape, not an inflated AABB — no stickiness at peak arc.
+ */
+export function getCubeOBB(entity: Entity, out: CubeOBB): void {
+	const tip = entity.tip;
+	out.s = entity.scale;
+
+	let m: Float32Array;
+	if (tip === null) {
+		out.cx = entity.x;
+		out.cy = entity.y;
+		out.cz = entity.z;
+		m = entity.orientation;
+	} else {
+		mat4.axisRotation(
+			tip.axis,
+			tip.progress * tip.endAngle,
+			scratchArcRotation,
+		);
+		// Current center: pivot + R · sourceOffset.
+		vec3.transformMat4(tip.sourceOffset, scratchArcRotation, scratchCenter);
+		out.cx = tip.pivot[0] + scratchCenter[0];
+		out.cy = tip.pivot[1] + scratchCenter[1];
+		out.cz = tip.pivot[2] + scratchCenter[2];
+		mat4.multiply(
+			scratchArcRotation,
+			tip.baseOrientation,
+			scratchEffectiveRotation,
+		);
+		m = scratchEffectiveRotation;
+	}
+
+	// mat4 is column-major: column 0 = local +x, column 1 = +y, column 2 = +z.
+	out.ax[0] = m[0];
+	out.ax[1] = m[1];
+	out.ax[2] = m[2];
+	out.ay[0] = m[4];
+	out.ay[1] = m[5];
+	out.ay[2] = m[6];
+	out.az[0] = m[8];
+	out.az[1] = m[9];
+	out.az[2] = m[10];
 }

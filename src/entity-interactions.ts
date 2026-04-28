@@ -1,10 +1,12 @@
 /**
- * Cross-shape entity-vs-entity collision. Runs in Pass 2 of
- * `EntityManager.update` so pair resolution sees finalized post-integration
- * positions.
+ * Cross-shape entity-vs-entity (and player-vs-entity) collision. Runs in
+ * Pass 2 / Pass 2.5 of `EntityManager.update` so pair resolution sees
+ * finalized post-integration positions.
  *
  *   - sphere ↔ sphere: mass-weighted depenetration + classical impulse.
- *   - sphere ↔ cube: cube treated as infinite mass; only sphere moves.
+ *   - sphere ↔ cube: OBB closest-point in cube-local space; cube treated
+ *       as infinite mass; only sphere moves. Inelastic on the cube side.
+ *   - player ↔ cube: AABB-vs-OBB SAT; player depenetrated, cube unaffected.
  *   - cube ↔ cube: deferred.
  *
  * Pattern for new pairs: wrap-aware narrowphase (use the world-wrapped copy
@@ -12,9 +14,21 @@
  * restitution with sub-RESTING_THRESHOLD treatment for resting contact.
  */
 
-import { resolveSphereVsAABB } from './sphere-physics';
+import { getCubeOBB, type CubeOBB } from './cube-physics';
 import { RESTING_THRESHOLD } from './entity-physics-shared';
 import type { Entity } from './entity';
+
+// Scratch — the pair loop bounds one cube at a time, so a single shared
+// instance is safe.
+const cubeOBBScratch: CubeOBB = {
+	cx: 0,
+	cy: 0,
+	cz: 0,
+	s: 0,
+	ax: new Float32Array(3),
+	ay: new Float32Array(3),
+	az: new Float32Array(3),
+};
 
 /**
  * Wrap-aware contact normal; mass-weighted depenetration; classical impulse
@@ -89,18 +103,27 @@ export function resolveSpherePair(a: Entity, b: Entity, ww: number): void {
 }
 
 /**
- * Wrap-aware sphere-vs-cube. Cube = infinite mass; only the sphere moves.
- * Cube restitution forced to 0 so bounce comes from the sphere alone
- * (cubes are inelastic platforms by design).
+ * Sphere-vs-OBB closest-point: project sphere center into cube-local space,
+ * clamp to ±s, distance-test in local space, transform contact normal back
+ * to world. Cube = infinite mass, restitution 0 (cubes are inelastic
+ * platforms by design). Wrap-aware.
  */
 export function resolveSphereVsCube(
 	sphere: Entity,
 	cube: Entity,
 	ww: number,
 ): void {
+	getCubeOBB(cube, cubeOBBScratch);
+	let cx = cubeOBBScratch.cx;
+	const cy = cubeOBBScratch.cy;
+	let cz = cubeOBBScratch.cz;
+	const s = cubeOBBScratch.s;
+	const ax = cubeOBBScratch.ax;
+	const ay = cubeOBBScratch.ay;
+	const az = cubeOBBScratch.az;
+
+	// Wrap-shift cube center to the copy nearest the sphere.
 	const hw = ww / 2;
-	let cx = cube.x;
-	let cz = cube.z;
 	const dxRaw = sphere.x - cx;
 	const dzRaw = sphere.z - cz;
 	if (dxRaw > hw) cx += ww;
@@ -108,16 +131,404 @@ export function resolveSphereVsCube(
 	if (dzRaw > hw) cz += ww;
 	else if (dzRaw < -hw) cz -= ww;
 
-	const s = cube.scale;
-	resolveSphereVsAABB(
-		sphere,
-		cx - s,
-		cx + s,
-		cube.y - s,
-		cube.y + s,
-		cz - s,
-		cz + s,
-		sphere.restitution,
-		0,
-	);
+	// World-space delta cube → sphere, then project onto cube-local axes.
+	const dxw = sphere.x - cx;
+	const dyw = sphere.y - cy;
+	const dzw = sphere.z - cz;
+	const lx = dxw * ax[0] + dyw * ax[1] + dzw * ax[2];
+	const ly = dxw * ay[0] + dyw * ay[1] + dzw * ay[2];
+	const lz = dxw * az[0] + dyw * az[1] + dzw * az[2];
+
+	const r = sphere.scale;
+
+	// Closest point on the (cube-local, axis-aligned) box.
+	const cpX = Math.max(-s, Math.min(s, lx));
+	const cpY = Math.max(-s, Math.min(s, ly));
+	const cpZ = Math.max(-s, Math.min(s, lz));
+	const ldx = lx - cpX;
+	const ldy = ly - cpY;
+	const ldz = lz - cpZ;
+	const distSq = ldx * ldx + ldy * ldy + ldz * ldz;
+
+	if (distSq >= r * r) return;
+
+	let lnx: number, lny: number, lnz: number, penetration: number;
+	if (distSq < 1e-6) {
+		// Sphere center inside the OBB — push out along the nearest local face.
+		const dToMinX = lx + s;
+		const dToMaxX = s - lx;
+		const dToMinY = ly + s;
+		const dToMaxY = s - ly;
+		const dToMinZ = lz + s;
+		const dToMaxZ = s - lz;
+
+		let minDist = dToMinX;
+		lnx = -1;
+		lny = 0;
+		lnz = 0;
+		if (dToMaxX < minDist) {
+			minDist = dToMaxX;
+			lnx = 1;
+			lny = 0;
+			lnz = 0;
+		}
+		if (dToMinY < minDist) {
+			minDist = dToMinY;
+			lnx = 0;
+			lny = -1;
+			lnz = 0;
+		}
+		if (dToMaxY < minDist) {
+			minDist = dToMaxY;
+			lnx = 0;
+			lny = 1;
+			lnz = 0;
+		}
+		if (dToMinZ < minDist) {
+			minDist = dToMinZ;
+			lnx = 0;
+			lny = 0;
+			lnz = -1;
+		}
+		if (dToMaxZ < minDist) {
+			minDist = dToMaxZ;
+			lnx = 0;
+			lny = 0;
+			lnz = 1;
+		}
+		penetration = minDist + r;
+	} else {
+		const dist = Math.sqrt(distSq);
+		lnx = ldx / dist;
+		lny = ldy / dist;
+		lnz = ldz / dist;
+		penetration = r - dist;
+	}
+
+	// Local normal back to world: n = lnx·ax + lny·ay + lnz·az.
+	const nx = lnx * ax[0] + lny * ay[0] + lnz * az[0];
+	const ny = lnx * ax[1] + lny * ay[1] + lnz * az[1];
+	const nz = lnx * ax[2] + lny * ay[2] + lnz * az[2];
+
+	sphere.x += nx * penetration;
+	sphere.y += ny * penetration;
+	sphere.z += nz * penetration;
+
+	if (ny > 0.5) sphere.grounded = true;
+
+	const vDotN = sphere.vx * nx + sphere.vy * ny + sphere.vz * nz;
+	if (vDotN >= 0) return;
+
+	const inwardSpeed = -vDotN;
+	const factor = inwardSpeed < RESTING_THRESHOLD ? 1 : 1 + sphere.restitution;
+	sphere.vx -= factor * vDotN * nx;
+	sphere.vy -= factor * vDotN * ny;
+	sphere.vz -= factor * vDotN * nz;
+}
+
+// SAT scratch — single instance, repopulated each call to resolvePlayerVsCube.
+interface SATState {
+	minOverlap: number;
+	mtvX: number;
+	mtvY: number;
+	mtvZ: number;
+}
+const satState: SATState = { minOverlap: 0, mtvX: 0, mtvY: 0, mtvZ: 0 };
+
+/**
+ * Test one separating-axis candidate. Returns false on separation (caller
+ * must bail). Otherwise updates `state` if this axis has the smallest
+ * overlap so far. Skips degenerate axes (parallel face pairs).
+ *
+ * `lx,ly,lz` candidate axis (any length; normalized inside).
+ * `hwx,hh,hwz` AABB half-extents along world axes.
+ * `s, ax,ay,az` OBB uniform half-extent + unit axes.
+ * `dx,dy,dz` OBB.center − AABB.center.
+ */
+function satTestAxis(
+	lx: number,
+	ly: number,
+	lz: number,
+	hwx: number,
+	hh: number,
+	hwz: number,
+	s: number,
+	ax: Float32Array,
+	ay: Float32Array,
+	az: Float32Array,
+	dx: number,
+	dy: number,
+	dz: number,
+	state: SATState,
+): boolean {
+	const lenSq = lx * lx + ly * ly + lz * lz;
+	if (lenSq < 1e-6) return true; // degenerate (parallel axes — already covered)
+
+	const inv = 1 / Math.sqrt(lenSq);
+	const nx = lx * inv;
+	const ny = ly * inv;
+	const nz = lz * inv;
+
+	// AABB radius along n (world axes are 1,0,0 / 0,1,0 / 0,0,1).
+	const rA = hwx * Math.abs(nx) + hh * Math.abs(ny) + hwz * Math.abs(nz);
+	// OBB radius along n; uniform extent s.
+	const rB =
+		s *
+		(Math.abs(ax[0] * nx + ax[1] * ny + ax[2] * nz) +
+			Math.abs(ay[0] * nx + ay[1] * ny + ay[2] * nz) +
+			Math.abs(az[0] * nx + az[1] * ny + az[2] * nz));
+
+	const cd = dx * nx + dy * ny + dz * nz;
+	const overlap = rA + rB - Math.abs(cd);
+	if (overlap <= 0) return false; // separating axis
+
+	if (overlap < state.minOverlap) {
+		state.minOverlap = overlap;
+		// Push AABB away from OBB. d points AABB→OBB; cd>0 means OBB sits on
+		// the +n side, so MTV = −n. Otherwise +n.
+		const sign = cd > 0 ? -1 : 1;
+		state.mtvX = sign * nx;
+		state.mtvY = sign * ny;
+		state.mtvZ = sign * nz;
+	}
+	return true;
+}
+
+/**
+ * Player AABB vs cube OBB — full SAT (15 axes: 3 world + 3 OBB + 9 edge
+ * crosses). On overlap, pushes player along the minimum-translation axis.
+ * Cube is infinite mass — only player moves. No velocity change here;
+ * player's own movement system handles velocity, this just constrains pos.
+ *
+ * Player AABB: X/Z in [pos±halfWidth], Y in [pos.y−height, pos.y]. AABB
+ * center is `(px, py − height/2, pz)` because `playerPos[1]` is the eye,
+ * not the body center.
+ */
+export function resolvePlayerVsCube(
+	playerPos: Float32Array,
+	playerHalfWidth: number,
+	playerHeight: number,
+	cube: Entity,
+	ww: number,
+): void {
+	getCubeOBB(cube, cubeOBBScratch);
+	let cx = cubeOBBScratch.cx;
+	const cy = cubeOBBScratch.cy;
+	let cz = cubeOBBScratch.cz;
+	const s = cubeOBBScratch.s;
+	const ax = cubeOBBScratch.ax;
+	const ay = cubeOBBScratch.ay;
+	const az = cubeOBBScratch.az;
+
+	const px = playerPos[0] ?? 0;
+	const py = playerPos[1] ?? 0;
+	const pz = playerPos[2] ?? 0;
+
+	// Wrap-shift cube to closest copy of player.
+	const hw = ww / 2;
+	const dxRaw = px - cx;
+	const dzRaw = pz - cz;
+	if (dxRaw > hw) cx += ww;
+	else if (dxRaw < -hw) cx -= ww;
+	if (dzRaw > hw) cz += ww;
+	else if (dzRaw < -hw) cz -= ww;
+
+	const hh = playerHeight / 2;
+	const aabbCY = py - hh;
+	const dx = cx - px;
+	const dy = cy - aabbCY;
+	const dz = cz - pz;
+
+	satState.minOverlap = Infinity;
+	satState.mtvX = 0;
+	satState.mtvY = 0;
+	satState.mtvZ = 0;
+
+	// 3 world face axes
+	if (
+		!satTestAxis(
+			1,
+			0,
+			0,
+			playerHalfWidth,
+			hh,
+			playerHalfWidth,
+			s,
+			ax,
+			ay,
+			az,
+			dx,
+			dy,
+			dz,
+			satState,
+		)
+	)
+		return;
+	if (
+		!satTestAxis(
+			0,
+			1,
+			0,
+			playerHalfWidth,
+			hh,
+			playerHalfWidth,
+			s,
+			ax,
+			ay,
+			az,
+			dx,
+			dy,
+			dz,
+			satState,
+		)
+	)
+		return;
+	if (
+		!satTestAxis(
+			0,
+			0,
+			1,
+			playerHalfWidth,
+			hh,
+			playerHalfWidth,
+			s,
+			ax,
+			ay,
+			az,
+			dx,
+			dy,
+			dz,
+			satState,
+		)
+	)
+		return;
+
+	// 3 OBB face axes
+	if (
+		!satTestAxis(
+			ax[0],
+			ax[1],
+			ax[2],
+			playerHalfWidth,
+			hh,
+			playerHalfWidth,
+			s,
+			ax,
+			ay,
+			az,
+			dx,
+			dy,
+			dz,
+			satState,
+		)
+	)
+		return;
+	if (
+		!satTestAxis(
+			ay[0],
+			ay[1],
+			ay[2],
+			playerHalfWidth,
+			hh,
+			playerHalfWidth,
+			s,
+			ax,
+			ay,
+			az,
+			dx,
+			dy,
+			dz,
+			satState,
+		)
+	)
+		return;
+	if (
+		!satTestAxis(
+			az[0],
+			az[1],
+			az[2],
+			playerHalfWidth,
+			hh,
+			playerHalfWidth,
+			s,
+			ax,
+			ay,
+			az,
+			dx,
+			dy,
+			dz,
+			satState,
+		)
+	)
+		return;
+
+	// 9 edge crosses: world_i × obb_j for i,j ∈ {0,1,2}.
+	for (let j = 0; j < 3; j++) {
+		const obb = j === 0 ? ax : j === 1 ? ay : az;
+		// (1,0,0) × obb = (0, −obb.z, obb.y)
+		if (
+			!satTestAxis(
+				0,
+				-obb[2],
+				obb[1],
+				playerHalfWidth,
+				hh,
+				playerHalfWidth,
+				s,
+				ax,
+				ay,
+				az,
+				dx,
+				dy,
+				dz,
+				satState,
+			)
+		)
+			return;
+		// (0,1,0) × obb = (obb.z, 0, −obb.x)
+		if (
+			!satTestAxis(
+				obb[2],
+				0,
+				-obb[0],
+				playerHalfWidth,
+				hh,
+				playerHalfWidth,
+				s,
+				ax,
+				ay,
+				az,
+				dx,
+				dy,
+				dz,
+				satState,
+			)
+		)
+			return;
+		// (0,0,1) × obb = (−obb.y, obb.x, 0)
+		if (
+			!satTestAxis(
+				-obb[1],
+				obb[0],
+				0,
+				playerHalfWidth,
+				hh,
+				playerHalfWidth,
+				s,
+				ax,
+				ay,
+				az,
+				dx,
+				dy,
+				dz,
+				satState,
+			)
+		)
+			return;
+	}
+
+	// All 15 axes overlap → translate AABB along MTV by minOverlap.
+	playerPos[0] = px + satState.mtvX * satState.minOverlap;
+	playerPos[1] = py + satState.mtvY * satState.minOverlap;
+	playerPos[2] = pz + satState.mtvZ * satState.minOverlap;
 }

@@ -8,7 +8,7 @@ import { greedyMesh } from './greedy-mesh';
 import { FREECAM, physicsTick, createPlayerState } from './movement';
 import { World } from './world';
 import { CHUNK_SIZE, chunkKey } from './chunk';
-import { AIR, MARBLE, extractBlockProps } from './block';
+import { MARBLE, extractBlockProps } from './block';
 import { raycast, type RaycastHit } from './raycast';
 // import { initHighlight, drawHighlight } from './highlight';
 import { createGameState } from './game-state';
@@ -503,41 +503,41 @@ async function main(): Promise<void> {
 		bindGroup,
 	);
 	const entityManager = new EntityManager(entityRenderer, device, world);
-	entityManager.spawn({
-		shape: Shape.Sphere,
-		material: Material.DarkMarble,
-		role: Role.Rush,
-		x: worldCenter,
-		y: worldCenter + 100,
-		z: worldCenter - 100,
-		size: 20,
-		vx: 2,
-		vz: 2,
-	});
+	// entityManager.spawn({
+	// 	shape: Shape.Sphere,
+	// 	material: Material.DarkMarble,
+	// 	role: Role.Rush,
+	// 	x: worldCenter,
+	// 	y: worldCenter + 100,
+	// 	z: worldCenter - 100,
+	// 	size: 20,
+	// 	vx: 2,
+	// 	vz: 2,
+	// });
 
-	entityManager.spawn({
-		shape: Shape.Sphere,
-		material: Material.Marble,
-		role: Role.Rush,
-		x: worldCenter,
-		y: worldCenter + 100,
-		z: worldCenter - 100,
-		size: 10,
-		vx: 3,
-		vz: -2,
-	});
+	// entityManager.spawn({
+	// 	shape: Shape.Sphere,
+	// 	material: Material.Marble,
+	// 	role: Role.Rush,
+	// 	x: worldCenter,
+	// 	y: worldCenter + 100,
+	// 	z: worldCenter - 100,
+	// 	size: 10,
+	// 	vx: 3,
+	// 	vz: -2,
+	// });
 
-	entityManager.spawn({
-		shape: Shape.Sphere,
-		material: Material.Brick,
-		role: Role.Rush,
-		x: worldCenter,
-		y: worldCenter + 100,
-		z: worldCenter - 100,
-		size: 15,
-		vx: 3,
-		vz: -2,
-	});
+	// entityManager.spawn({
+	// 	shape: Shape.Sphere,
+	// 	material: Material.Brick,
+	// 	role: Role.Rush,
+	// 	x: worldCenter,
+	// 	y: worldCenter + 100,
+	// 	z: worldCenter - 100,
+	// 	size: 15,
+	// 	vx: 3,
+	// 	vz: -2,
+	// });
 
 	// Phase 2 cube: spawned above terrain, falls under gravity and settles
 	// on the first solid voxel beneath it. Spheres that roll into it will
@@ -852,12 +852,20 @@ async function main(): Promise<void> {
 		if (!currentHit) return;
 
 		if (e.button === 0) {
-			// Left click = break block (gains 1 BP)
+			// DEBUG: left click spawns a no-gravity sphere at the targeted
+			// face, for sanity-checking cube-vs-sphere collision in slow-mo.
 			const [bx, by, bz] = currentHit.blockPos;
-			world.setBlock(bx, by, bz, AIR);
-			onBlockChanged(bx, by, bz);
-			gameState.bp++;
-			updateBPDisplay();
+			const [nx, ny, nz] = currentHit.faceNormal;
+			entityManager.spawn({
+				shape: Shape.Sphere,
+				material: Material.Marble,
+				role: Role.Zone,
+				x: (bx + nx + 0.5) * BLOCK_SIZE,
+				y: (by + ny + 0.5) * BLOCK_SIZE,
+				z: (bz + nz + 0.5) * BLOCK_SIZE,
+				size: BLOCK_SIZE,
+				noGravity: true,
+			});
 		} else if (e.button === 2) {
 			// Right click = place block (costs 1 BP)
 			if (gameState.bp <= 0) return;

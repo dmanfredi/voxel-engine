@@ -544,11 +544,21 @@ async function main(): Promise<void> {
 	// bounce off (cube treated as infinite mass).
 	entityManager.spawn({
 		shape: Shape.Cube,
-		material: Material.DarkMarble,
+		material: Material.Marble,
 		role: Role.Zone,
 		x: worldCenter + 60,
 		y: worldCenter + 100,
 		z: worldCenter - 100,
+		size: 10,
+	});
+
+	entityManager.spawn({
+		shape: Shape.Cube,
+		material: Material.DarkMarble,
+		role: Role.Zone,
+		x: worldCenter - 60,
+		y: worldCenter + 100,
+		z: worldCenter + 100,
 		size: 20,
 	});
 
@@ -683,6 +693,7 @@ async function main(): Promise<void> {
 		entityManager.update(
 			dt,
 			cameraPos,
+			playerState,
 			playerHalfWidth,
 			playerHeight,
 			onBlockChanged,

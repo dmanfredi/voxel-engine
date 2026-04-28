@@ -33,6 +33,7 @@ import {
 	resolveSphereVsCube,
 	resolvePlayerVsCube,
 } from './entity-interactions';
+import type { PlayerVelLike } from './entity-interactions';
 import { entityAITick } from './entity-ai';
 import { cubeAITick } from './cube-ai';
 import type { World } from './world';
@@ -133,7 +134,7 @@ const materials: Record<Material, MaterialProperties> = {
 			restitution: 0.4,
 		},
 		sphere: { baseSpeed: 1.0 },
-		cube: { tipSpeed: 3.3, tipRate: 1.5 },
+		cube: { tipSpeed: 4.0, tipRate: 8.0 },
 	},
 	[Material.Brick]: {
 		base: {
@@ -145,7 +146,7 @@ const materials: Record<Material, MaterialProperties> = {
 			restitution: 0.2,
 		},
 		sphere: { baseSpeed: 0.7 },
-		cube: { tipSpeed: 3.3, tipRate: 1.2 },
+		cube: { tipSpeed: 5.0, tipRate: 10.0 },
 	},
 	[Material.DarkMarble]: {
 		base: {
@@ -157,7 +158,7 @@ const materials: Record<Material, MaterialProperties> = {
 			restitution: 0.4,
 		},
 		sphere: { baseSpeed: 1.0 },
-		cube: { tipSpeed: 0.4, tipRate: 10.0 },
+		cube: { tipSpeed: 5.0, tipRate: 10.0 },
 	},
 };
 
@@ -411,6 +412,7 @@ export class EntityManager {
 	update(
 		dt: number,
 		playerPos: Float32Array,
+		playerVel: PlayerVelLike,
 		playerHalfWidth: number,
 		playerHeight: number,
 		onBlockChanged: (bx: number, by: number, bz: number) => void,
@@ -488,13 +490,15 @@ export class EntityManager {
 		}
 
 		// Pass 2.5 — player vs cubes. Player is depenetrated against the
-		// cube's true OBB (full AABB-vs-OBB SAT). Player keeps its own
-		// velocity — main.ts owns player physics; this only constrains pos.
-		// Sphere-vs-player handled inside sphere physics (Pass 1).
+		// cube's true OBB (full AABB-vs-OBB SAT). Tipping cubes also fling
+		// the player along their horizontal arc direction; static cubes
+		// leave velocity alone. Sphere-vs-player handled inside sphere
+		// physics (Pass 1).
 		for (const entity of this.entities) {
 			if (entity.shape !== Shape.Cube) continue;
 			resolvePlayerVsCube(
 				playerPos,
+				playerVel,
 				playerHalfWidth,
 				playerHeight,
 				entity,

@@ -44,6 +44,12 @@ export interface TipState {
 	axis: Float32Array<ArrayBuffer>; // vec3, unit rotation axis
 	endAngle: number; // radians at progress=1 (π/2 horizontal, π climb)
 	baseOrientation: Float32Array<ArrayBuffer>; // mat4, orientation at tip start
+	// Horizontal direction of the tip (the dx/dz from the input tuple). Read
+	// by collision to fling depenetrated entities along the arc — derivable
+	// from `axis` but stored explicitly so the fling site doesn't have to
+	// reverse-engineer the axis convention.
+	dx: number;
+	dz: number;
 }
 
 /**
@@ -264,6 +270,8 @@ export function startCubeTip(
 		axis,
 		endAngle,
 		baseOrientation,
+		dx,
+		dz,
 	};
 	return true;
 }

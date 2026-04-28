@@ -12,7 +12,18 @@
  * Pattern for new pairs: wrap-aware narrowphase (use the world-wrapped copy
  * of `b` closest to `a`), inverse-mass depenetration, combined-max
  * restitution with sub-RESTING_THRESHOLD treatment for resting contact.
+ *
+ * Fling: when a tipping cube depenetrates an entity, the entity's velocity
+ * along the tip's horizontal direction is raised to at least the cube's
+ * average arc speed × FLING_BOOST. Models the cube "smacking" the entity
+ * along its rotation. Hardcoded direction (dx,dz) — vertical fling on
+ * climbs is intentionally ignored (simple, satisfying enough).
  */
+
+// Boost over the cube's average horizontal arc speed (`edge / tipDuration`).
+const FLING_BOOST = 0.4;
+const MAX_FLING_SPEED = 60;
+const MIN_FLING_SPEED = 20;
 
 import { getCubeOBB, type CubeOBB } from './cube-physics';
 import { RESTING_THRESHOLD } from './entity-physics-shared';
@@ -217,13 +228,32 @@ export function resolveSphereVsCube(
 	if (ny > 0.5) sphere.grounded = true;
 
 	const vDotN = sphere.vx * nx + sphere.vy * ny + sphere.vz * nz;
-	if (vDotN >= 0) return;
+	if (vDotN < 0) {
+		const inwardSpeed = -vDotN;
+		const factor =
+			inwardSpeed < RESTING_THRESHOLD ? 1 : 1 + sphere.restitution;
+		sphere.vx -= factor * vDotN * nx;
+		sphere.vy -= factor * vDotN * ny;
+		sphere.vz -= factor * vDotN * nz;
+	}
 
-	const inwardSpeed = -vDotN;
-	const factor = inwardSpeed < RESTING_THRESHOLD ? 1 : 1 + sphere.restitution;
-	sphere.vx -= factor * vDotN * nx;
-	sphere.vy -= factor * vDotN * ny;
-	sphere.vz -= factor * vDotN * nz;
+	// Fling — only fires when the cube is actively tipping. Raises horizontal
+	// velocity along the tip direction to at least the boosted arc speed; if
+	// the entity is already moving that fast (or faster), no-op. Naturally
+	// handles continuous contact: each frame tops the entity back up to
+	// flingSpeed without runaway acceleration.
+	const tip = cube.tip;
+	if (tip !== null) {
+		let flingSpeed = (FLING_BOOST * (2 * cube.scale)) / cube.tipDuration;
+		flingSpeed = Math.min(flingSpeed, MIN_FLING_SPEED);
+		flingSpeed = Math.max(flingSpeed, MAX_FLING_SPEED);
+		const along = sphere.vx * tip.dx + sphere.vz * tip.dz;
+		if (along < flingSpeed) {
+			const delta = flingSpeed - along;
+			sphere.vx += delta * tip.dx;
+			sphere.vz += delta * tip.dz;
+		}
+	}
 }
 
 // SAT scratch — single instance, repopulated each call to resolvePlayerVsCube.
@@ -294,11 +324,21 @@ function satTestAxis(
 	return true;
 }
 
+/** Minimal player velocity contract — `PlayerState` from movement.ts satisfies it. */
+export interface PlayerVelLike {
+	velX: number;
+	velY: number;
+	velZ: number;
+}
+
 /**
  * Player AABB vs cube OBB — full SAT (15 axes: 3 world + 3 OBB + 9 edge
  * crosses). On overlap, pushes player along the minimum-translation axis.
- * Cube is infinite mass — only player moves. No velocity change here;
- * player's own movement system handles velocity, this just constrains pos.
+ * Cube is infinite mass — only the player moves.
+ *
+ * If the cube is mid-tip, fling: raise player's horizontal velocity along
+ * (tip.dx, tip.dz) to at least the cube's boosted arc speed. Otherwise
+ * leaves velocity alone (player's movement system owns it).
  *
  * Player AABB: X/Z in [pos±halfWidth], Y in [pos.y−height, pos.y]. AABB
  * center is `(px, py − height/2, pz)` because `playerPos[1]` is the eye,
@@ -306,6 +346,7 @@ function satTestAxis(
  */
 export function resolvePlayerVsCube(
 	playerPos: Float32Array,
+	playerVel: PlayerVelLike,
 	playerHalfWidth: number,
 	playerHeight: number,
 	cube: Entity,
@@ -531,4 +572,20 @@ export function resolvePlayerVsCube(
 	playerPos[0] = px + satState.mtvX * satState.minOverlap;
 	playerPos[1] = py + satState.mtvY * satState.minOverlap;
 	playerPos[2] = pz + satState.mtvZ * satState.minOverlap;
+
+	// Fling — same shape as sphere fling. Tipping cubes drag the player
+	// along their horizontal arc direction; static cubes leave velocity alone.
+	const tip = cube.tip;
+	if (tip !== null) {
+		let flingSpeed = (FLING_BOOST * (2 * cube.scale)) / cube.tipDuration;
+		flingSpeed = Math.min(flingSpeed, MAX_FLING_SPEED);
+		flingSpeed = Math.max(flingSpeed, MIN_FLING_SPEED);
+		const along = playerVel.velX * tip.dx + playerVel.velZ * tip.dz;
+		console.log(flingSpeed);
+		if (along < flingSpeed) {
+			const delta = flingSpeed - along;
+			playerVel.velX += delta * tip.dx;
+			playerVel.velZ += delta * tip.dz;
+		}
+	}
 }

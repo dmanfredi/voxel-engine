@@ -605,6 +605,28 @@ async function main(): Promise<void> {
 	}
 	updateBPDisplay();
 
+	/** Schedule a slab of chunks (inclusive ranges). X/Z wrap; Y does not.
+	 *  Caller passes raw chunk coords; wrapping happens here at schedule time. */
+	function scheduleChunkSlab(
+		cxMin: number,
+		cxMax: number,
+		cyMin: number,
+		cyMax: number,
+		czMin: number,
+		czMax: number,
+	): void {
+		const w = world.widthChunks;
+		for (let cx = cxMin; cx <= cxMax; cx++) {
+			const wcx = ((cx % w) + w) % w;
+			for (let cy = cyMin; cy <= cyMax; cy++) {
+				for (let cz = czMin; cz <= czMax; cz++) {
+					const wcz = ((cz % w) + w) % w;
+					scheduleMeshChunk(wcx, cy, wcz, 'interactive');
+				}
+			}
+		}
+	}
+
 	/** Schedule remeshing for a chunk and any boundary neighbors affected by a block change. */
 	function onBlockChanged(bx: number, by: number, bz: number): void {
 		// Wrap horizontal block coords so chunk lookups resolve correctly
@@ -634,6 +656,69 @@ async function main(): Promise<void> {
 			scheduleMeshChunk(cx, cy, (((cz - 1) % w) + w) % w, 'interactive');
 		if (lz === CHUNK_SIZE - 1)
 			scheduleMeshChunk(cx, cy, (cz + 1) % w, 'interactive');
+	}
+
+	/**
+	 * Region equivalent of `onBlockChanged` for bulk placements 
+	 * Bounds are inclusive in block coords. Schedules every
+	 * chunk overlapping the region, plus the 6 outer-face neighbor slabs
+	 * when the region's edges hug chunk boundaries (cross-chunk AO).
+	 *
+	 * Use this instead of looping `onBlockChanged` per cell — for an N³
+	 * scaffold whose blocks live in 1-2 chunks, that loop calls the
+	 * scheduler N³ times only to dedup down to the same handful of unique
+	 * chunks. This routes straight to the unique chunks once.
+	 *
+	 * X/Z wrap works without special-casing: chunk indices wrap inside
+	 * `scheduleChunkSlab`, and the outer-face fan-out uses local block
+	 * coords which are wrap-invariant. A cross-seam region (e.g.
+	 * minBX=318, maxBX=321 in a 320-wide world) just produces a slab
+	 * that spans the seam — both chunks end up scheduled, cross-chunk AO
+	 * picks up the new padding from the other side. Y does not wrap.
+	 *
+	 * Sole constraint: region width < world width on each axis (otherwise
+	 * the slab over-iterates). Scaffolds are tiny vs. the world, so it's
+	 * never tight.
+	 */
+	function onRegionChanged(
+		minBX: number,
+		minBY: number,
+		minBZ: number,
+		maxBX: number,
+		maxBY: number,
+		maxBZ: number,
+	): void {
+		const cMinX = Math.floor(minBX / CHUNK_SIZE);
+		const cMaxX = Math.floor(maxBX / CHUNK_SIZE);
+		const cMinY = Math.floor(minBY / CHUNK_SIZE);
+		const cMaxY = Math.floor(maxBY / CHUNK_SIZE);
+		const cMinZ = Math.floor(minBZ / CHUNK_SIZE);
+		const cMaxZ = Math.floor(maxBZ / CHUNK_SIZE);
+
+		scheduleChunkSlab(cMinX, cMaxX, cMinY, cMaxY, cMinZ, cMaxZ);
+
+		// Outer-face fan-out: only the region's outer edges can need cross-
+		// chunk AO. Interior chunk boundaries inside the region are already
+		// covered on both sides because both chunks are in the slab.
+		const lMinX = ((minBX % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+		const lMaxX = ((maxBX % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+		const lMinY = ((minBY % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+		const lMaxY = ((maxBY % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+		const lMinZ = ((minBZ % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+		const lMaxZ = ((maxBZ % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+
+		if (lMinX === 0)
+			scheduleChunkSlab(cMinX - 1, cMinX - 1, cMinY, cMaxY, cMinZ, cMaxZ);
+		if (lMaxX === CHUNK_SIZE - 1)
+			scheduleChunkSlab(cMaxX + 1, cMaxX + 1, cMinY, cMaxY, cMinZ, cMaxZ);
+		if (lMinY === 0)
+			scheduleChunkSlab(cMinX, cMaxX, cMinY - 1, cMinY - 1, cMinZ, cMaxZ);
+		if (lMaxY === CHUNK_SIZE - 1)
+			scheduleChunkSlab(cMinX, cMaxX, cMaxY + 1, cMaxY + 1, cMinZ, cMaxZ);
+		if (lMinZ === 0)
+			scheduleChunkSlab(cMinX, cMaxX, cMinY, cMaxY, cMinZ - 1, cMinZ - 1);
+		if (lMaxZ === CHUNK_SIZE - 1)
+			scheduleChunkSlab(cMinX, cMaxX, cMinY, cMaxY, cMaxZ + 1, cMaxZ + 1);
 	}
 
 	function requestRender() {
@@ -696,7 +781,7 @@ async function main(): Promise<void> {
 			playerState,
 			playerHalfWidth,
 			playerHeight,
-			onBlockChanged,
+			onRegionChanged,
 		);
 
 		// Raycast from camera to find targeted block

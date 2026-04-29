@@ -415,7 +415,14 @@ export class EntityManager {
 		playerVel: PlayerVelLike,
 		playerHalfWidth: number,
 		playerHeight: number,
-		onBlockChanged: (bx: number, by: number, bz: number) => void,
+		onRegionChanged: (
+			minBX: number,
+			minBY: number,
+			minBZ: number,
+			maxBX: number,
+			maxBY: number,
+			maxBZ: number,
+		) => void,
 	): void {
 		const ww = this.world.widthChunks * CHUNK_SIZE * this.world.blockSize;
 		const hw = ww / 2;
@@ -453,7 +460,7 @@ export class EntityManager {
 				// it does, we route through advanceCubeTip instead of the
 				// normal physics tick.
 				cubeAITick(entity, playerPos, ww, dt, (e, dir) =>
-					this.tryTipCube(e, dir, onBlockChanged),
+					this.tryTipCube(e, dir, onRegionChanged),
 				);
 				if (entity.tip !== null) {
 					advanceCubeTip(entity, dt);
@@ -544,14 +551,24 @@ export class EntityManager {
 	 * Returns true if the tip started (scaffold may or may not have been
 	 * needed). Returns false and console.warns on any blocker.
 	 *
-	 * `onBlockChanged` is invoked once per scaffold block placed so the
-	 * caller can schedule remeshes. Always called before the tip starts —
-	 * the first frame of the animation already sees the new terrain.
+	 * `onRegionChanged` fires once with the scaffold's block-coord bbox if
+	 * any cells were placed (skipped if scaffold was a no-op). One call
+	 * regardless of N³ — much cheaper than per-cell notify, which would
+	 * pummel the scheduler with redundant work that all dedups to the same
+	 * 1-2 chunks. Always called before the tip starts so the first frame
+	 * of the animation already sees the new terrain.
 	 */
 	tryTipCube(
 		entity: Entity,
 		direction: [number, number, number],
-		onBlockChanged: (bx: number, by: number, bz: number) => void,
+		onRegionChanged: (
+			minBX: number,
+			minBY: number,
+			minBZ: number,
+			maxBX: number,
+			maxBY: number,
+			maxBZ: number,
+		) => void,
 	): boolean {
 		if (entity.shape !== Shape.Cube) return false;
 		if (entity.tip !== null) return false;
@@ -618,14 +635,26 @@ export class EntityManager {
 			}
 		}
 
-		// Commit phase — mutate world + notify remesher. Use the cube's own
-		// material for placed blocks (marble cube → MARBLE, brick → BRICK,
-		// dark-marble → DARK_MARBLE) so scaffolded terrain reads as the
-		// cube's trail.
+		// Commit phase — mutate world, then a single region notify covering
+		// the full scaffold bbox. Use the cube's own material for placed
+		// blocks (marble cube → MARBLE, brick → BRICK, dark-marble →
+		// DARK_MARBLE) so scaffolded terrain reads as the cube's trail.
 		const blockId = materials[entity.material].base.texLayer;
 		for (const [bx, by, bz] of scaffoldCells) {
 			this.world.setBlock(bx, by, bz, blockId);
-			onBlockChanged(bx, by, bz);
+		}
+		// Region bbox = full theoretical scaffold extent (validation loop
+		// bounds). Slightly over-broad if some cells were already solid, but
+		// those chunks would be in the slab anyway — same chunk set, one call.
+		if (scaffoldCells.length > 0) {
+			onRegionChanged(
+				dMinBX,
+				dMinBY - nVox,
+				dMinBZ,
+				dMinBX + nVox - 1,
+				dMinBY - 1,
+				dMinBZ + nVox - 1,
+			);
 		}
 
 		// startCubeTip re-checks destination + ground. After scaffold,

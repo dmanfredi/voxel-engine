@@ -1,9 +1,13 @@
 import { SUN_DIRECTION_WGSL } from '../lighting';
+import { SHADOW_MAP_SIZE } from '../shadow';
 import { buildMaterialLUT } from './shared';
+
+const SHADOW_TEXEL_SIZE = (1 / SHADOW_MAP_SIZE).toFixed(12);
 
 const VoxelShader = /*wgsl*/ `
 	${buildMaterialLUT()}
 	${SUN_DIRECTION_WGSL}
+	const SHADOW_TEXEL_SIZE = vec2f(${SHADOW_TEXEL_SIZE}, ${SHADOW_TEXEL_SIZE});
 
 	struct Uniforms {
 		matrix: mat4x4f,
@@ -65,17 +69,32 @@ const VoxelShader = /*wgsl*/ `
 	// automatic derivative-based selection would pick. -1.0 is nice.
 	const MIP_LOD_BIAS: f32 = -1.0;
 
+	fn shadowCompare(uv: vec2f, depth: f32, offset: vec2f) -> f32 {
+		return textureSampleCompare(
+			shadowTexture,
+			shadowSampler,
+			uv + offset * SHADOW_TEXEL_SIZE,
+			depth,
+		);
+	}
+
 	fn shadowVisibility(shadowPos: vec4f, normal: vec3f) -> f32 {
 		let proj = shadowPos.xyz / shadowPos.w;
 		let uv = vec2f(proj.x * 0.5 + 0.5, 0.5 - proj.y * 0.5);
 		let facing = max(dot(normal, LIGHT_DIR), 0.0);
 		let slopeBias = uni.shadowBias * (1.0 - facing) * 2.0;
-		let visibility = textureSampleCompare(
-			shadowTexture,
-			shadowSampler,
-			uv,
-			proj.z - uni.shadowBias - slopeBias,
-		);
+		let depth = proj.z - uni.shadowBias - slopeBias;
+		let visibility = (
+			shadowCompare(uv, depth, vec2f(-1.0, -1.0)) +
+			shadowCompare(uv, depth, vec2f(0.0, -1.0)) * 2.0 +
+			shadowCompare(uv, depth, vec2f(1.0, -1.0)) +
+			shadowCompare(uv, depth, vec2f(-1.0, 0.0)) * 2.0 +
+			shadowCompare(uv, depth, vec2f(0.0, 0.0)) * 4.0 +
+			shadowCompare(uv, depth, vec2f(1.0, 0.0)) * 2.0 +
+			shadowCompare(uv, depth, vec2f(-1.0, 1.0)) +
+			shadowCompare(uv, depth, vec2f(0.0, 1.0)) * 2.0 +
+			shadowCompare(uv, depth, vec2f(1.0, 1.0))
+		) / 16.0;
 		let inBounds = proj.x >= -1.0 && proj.x <= 1.0 && proj.y >= -1.0 && proj.y <= 1.0 && proj.z >= 0.0 && proj.z <= 1.0;
 		let sunFacing = dot(normal, LIGHT_DIR) > 0.0;
 		let edgeDistance = min(

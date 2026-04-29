@@ -1,5 +1,5 @@
 import { CHUNK_SIZE } from '../chunk';
-import { MARBLE } from '../block';
+import { DARK_MARBLE } from '../block';
 
 const LEVELS = [3, 9, 27, 81] as const;
 const GRID_SPACING = 48;
@@ -117,7 +117,7 @@ export default function mengerSky(
 									y * CHUNK_SIZE * CHUNK_SIZE +
 									z * CHUNK_SIZE +
 									x;
-								blocks[index] = MARBLE;
+								blocks[index] = DARK_MARBLE;
 							}
 						}
 					}

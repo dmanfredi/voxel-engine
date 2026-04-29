@@ -10,9 +10,33 @@ function f32Literal(n: number): string {
 	return s.includes('.') || s.includes('e') ? s : `${s}.0`;
 }
 
+const BAYER_8X8 = [
+	0, 48, 12, 60, 3, 51, 15, 63, 32, 16, 44, 28, 35, 19, 47, 31, 8, 56, 4,
+	52, 11, 59, 7, 55, 40, 24, 36, 20, 43, 27, 39, 23, 2, 50, 14, 62, 1, 49,
+	13, 61, 34, 18, 46, 30, 33, 17, 45, 29, 10, 58, 6, 54, 9, 57, 5, 53, 42,
+	26, 38, 22, 41, 25, 37, 21,
+];
+
+function wgslVec3(v: Float32Array): string {
+	return `vec3f(${f32Literal(v[0])}, ${f32Literal(v[1])}, ${f32Literal(v[2])})`;
+}
+
 function buildTerrainShadowShader(worldWrapWidth: number): string {
+	const lightDir = vec3.normalize(
+		vec3.create(SUN_DIRECTION[0], SUN_DIRECTION[1], SUN_DIRECTION[2]),
+	);
+	const lightX = vec3.normalize(vec3.cross(vec3.create(0, 1, 0), lightDir));
+	const lightY = vec3.normalize(vec3.cross(lightDir, lightX));
+	const ditherCellSize = (SHADOW_HALF_EXTENT * 2) / SHADOW_MAP_SIZE;
+	const bayer8x8 = BAYER_8X8.map((n) =>
+		f32Literal((n + 0.5) / 64),
+	).join(', ');
+
 	return /* wgsl */ `
 	const WORLD_WRAP_WIDTH = ${f32Literal(worldWrapWidth)};
+	const SHADOW_DITHER_CELL_SIZE = ${f32Literal(ditherCellSize)};
+	const LIGHT_DITHER_X = ${wgslVec3(lightX)};
+	const LIGHT_DITHER_Y = ${wgslVec3(lightY)};
 	const WRAP_OFFSETS = array<vec2f, 9>(
 		vec2f(-WORLD_WRAP_WIDTH, -WORLD_WRAP_WIDTH),
 		vec2f(0.0, -WORLD_WRAP_WIDTH),
@@ -51,16 +75,23 @@ function buildTerrainShadowShader(worldWrapWidth: number): string {
 	@group(0) @binding(0) var<uniform> uni: Uniforms;
 	@group(1) @binding(0) var<uniform> chunkOffset: vec4f;
 
-	const BAYER_4X4 = array<f32, 16>(
-		0.03125, 0.53125, 0.15625, 0.65625,
-		0.78125, 0.28125, 0.90625, 0.40625,
-		0.21875, 0.71875, 0.09375, 0.59375,
-		0.96875, 0.46875, 0.84375, 0.34375,
+	const BAYER_8X8 = array<f32, 64>(
+		${bayer8x8},
 	);
 
-	fn ditherThreshold(pixel: vec2f) -> f32 {
-		let p = vec2u(floor(pixel)) % vec2u(4u);
-		return BAYER_4X4[p.y * 4u + p.x];
+	fn wrap8(v: i32) -> u32 {
+		return u32(((v % 8i) + 8i) % 8i);
+	}
+
+	fn ditherThreshold(worldPos: vec3f) -> f32 {
+		let lightSpacePos = vec2f(
+			dot(worldPos, LIGHT_DITHER_X),
+			dot(worldPos, LIGHT_DITHER_Y),
+		);
+		let cell = vec2i(floor(lightSpacePos / SHADOW_DITHER_CELL_SIZE));
+		let x = wrap8(cell.x);
+		let y = wrap8(cell.y);
+		return BAYER_8X8[y * 8u + x];
 	}
 
 	@vertex fn vs(
@@ -83,7 +114,7 @@ function buildTerrainShadowShader(worldWrapWidth: number): string {
 			clamp((uni.fogEnd - length(in.worldPos - uni.eyePosition)) / fogRange, 0.0, 1.0),
 		);
 		let casterAlpha = clamp(chunkOffset.w, 0.0, 1.0) * fogAlpha;
-		if (casterAlpha < ditherThreshold(in.position.xy)) {
+		if (casterAlpha < ditherThreshold(in.worldPos)) {
 			discard;
 		}
 	}

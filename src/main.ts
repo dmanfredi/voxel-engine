@@ -21,7 +21,7 @@ import { autoClimb } from './auto-climb';
 import { ChunkLoader } from './chunk-loader';
 import { MeshScheduler } from './mesh-scheduler';
 import { initEntityRenderer } from './entity-renderer';
-import { EntityManager } from './entity';
+import { EntityManager, Shape, Material, Role } from './entity';
 import { tryPlaceBlock } from './placement';
 import { generateMips, numMipLevels } from './mipmap';
 import marbleTextureUrl from '../assets/MarbleBase1024.png';
@@ -575,15 +575,15 @@ async function main(): Promise<void> {
 	// // Phase 2 cube: spawned above terrain, falls under gravity and settles
 	// // on the first solid voxel beneath it. Spheres that roll into it will
 	// // bounce off (cube treated as infinite mass).
-	// entityManager.spawn({
-	// 	shape: Shape.Cube,
-	// 	material: Material.DarkMarble,
-	// 	role: Role.Zone,
-	// 	x: worldCenter + 60,
-	// 	y: worldCenter + 100,
-	// 	z: worldCenter - 100,
-	// 	size: 20,
-	// });
+	entityManager.spawn({
+		shape: Shape.Cube,
+		material: Material.DarkMarble,
+		role: Role.Zone,
+		x: worldCenter + 60,
+		y: worldCenter + 100,
+		z: worldCenter - 100,
+		size: 20,
+	});
 
 	// Initialize block highlight outline
 	// const highlight = initHighlight(device, presentationFormat);
@@ -811,13 +811,11 @@ async function main(): Promise<void> {
 		function chunkDistanceOutsideCameraAABB(
 			chunkRender: ChunkRenderData,
 		): [number, number, number] {
-			const minX =
-				chunkRender.cx * chunkExtent + chunkRender.offsetX;
+			const minX = chunkRender.cx * chunkExtent + chunkRender.offsetX;
 			const maxX = minX + chunkExtent;
 			const minY = chunkRender.cy * chunkExtent;
 			const maxY = minY + chunkExtent;
-			const minZ =
-				chunkRender.cz * chunkExtent + chunkRender.offsetZ;
+			const minZ = chunkRender.cz * chunkExtent + chunkRender.offsetZ;
 			const maxZ = minZ + chunkExtent;
 
 			const dx =
@@ -842,11 +840,8 @@ async function main(): Promise<void> {
 			return [dx, dy, dz];
 		}
 
-		function chunkShadowCasterAlpha(
-			chunkRender: ChunkRenderData,
-		): number {
-			const [dx, dy, dz] =
-				chunkDistanceOutsideCameraAABB(chunkRender);
+		function chunkShadowCasterAlpha(chunkRender: ChunkRenderData): number {
+			const [dx, dy, dz] = chunkDistanceOutsideCameraAABB(chunkRender);
 			const distance = Math.hypot(dx, dy, dz);
 			const fogRange = Math.max(
 				debuggerParams.fogEnd - debuggerParams.fogStart,
@@ -865,8 +860,7 @@ async function main(): Promise<void> {
 				streamFadeEnd - chunkExtent * 2,
 			);
 			const streamAlpha = smoothStep01(
-				(streamFadeEnd - dy) /
-					(streamFadeEnd - streamFadeStart),
+				(streamFadeEnd - dy) / (streamFadeEnd - streamFadeStart),
 			);
 
 			return Math.min(fogAlpha, streamAlpha);
@@ -878,21 +872,14 @@ async function main(): Promise<void> {
 		const offsetData = new Float32Array(4);
 		const halfChunk = chunkExtent / 2;
 		for (const chunkRender of chunkRenderMap.values()) {
-			const dx =
-				chunkRender.cx * chunkExtent +
-				halfChunk -
-				cameraPos[0];
-			const dz =
-				chunkRender.cz * chunkExtent +
-				halfChunk -
-				cameraPos[2];
+			const dx = chunkRender.cx * chunkExtent + halfChunk - cameraPos[0];
+			const dz = chunkRender.cz * chunkExtent + halfChunk - cameraPos[2];
 
 			offsetData[0] = dx > hw ? -ww : dx < -hw ? ww : 0;
 			offsetData[2] = dz > hw ? -ww : dz < -hw ? ww : 0;
 			chunkRender.offsetX = offsetData[0];
 			chunkRender.offsetZ = offsetData[2];
-			chunkRender.shadowCasterAlpha =
-				chunkShadowCasterAlpha(chunkRender);
+			chunkRender.shadowCasterAlpha = chunkShadowCasterAlpha(chunkRender);
 			offsetData[3] = chunkRender.shadowCasterAlpha;
 
 			device.queue.writeBuffer(chunkRender.offsetBuffer, 0, offsetData);

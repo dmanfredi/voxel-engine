@@ -245,8 +245,8 @@ export function resolveSphereVsCube(
 	const tip = cube.tip;
 	if (tip !== null) {
 		let flingSpeed = (FLING_BOOST * (2 * cube.scale)) / cube.tipDuration;
-		flingSpeed = Math.min(flingSpeed, MIN_FLING_SPEED);
-		flingSpeed = Math.max(flingSpeed, MAX_FLING_SPEED);
+		flingSpeed = Math.max(flingSpeed, MIN_FLING_SPEED); // floor
+		flingSpeed = Math.min(flingSpeed, MAX_FLING_SPEED); // ceiling
 		const along = sphere.vx * tip.dx + sphere.vz * tip.dz;
 		if (along < flingSpeed) {
 			const delta = flingSpeed - along;
@@ -578,10 +578,9 @@ export function resolvePlayerVsCube(
 	const tip = cube.tip;
 	if (tip !== null) {
 		let flingSpeed = (FLING_BOOST * (2 * cube.scale)) / cube.tipDuration;
-		flingSpeed = Math.min(flingSpeed, MAX_FLING_SPEED);
-		flingSpeed = Math.max(flingSpeed, MIN_FLING_SPEED);
+		flingSpeed = Math.max(flingSpeed, MIN_FLING_SPEED); // floor
+		flingSpeed = Math.min(flingSpeed, MAX_FLING_SPEED); // ceiling
 		const along = playerVel.velX * tip.dx + playerVel.velZ * tip.dz;
-		console.log(flingSpeed);
 		if (along < flingSpeed) {
 			const delta = flingSpeed - along;
 			playerVel.velX += delta * tip.dx;

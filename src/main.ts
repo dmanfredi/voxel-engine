@@ -8,7 +8,7 @@ import { greedyMesh } from './greedy-mesh';
 import { FREECAM, physicsTick, createPlayerState } from './movement';
 import { World } from './world';
 import { CHUNK_SIZE, chunkKey } from './chunk';
-import { MARBLE, extractBlockProps } from './block';
+import { AIR, MARBLE, extractBlockProps } from './block';
 import { raycast, type RaycastHit } from './raycast';
 // import { initHighlight, drawHighlight } from './highlight';
 import { createGameState } from './game-state';
@@ -863,20 +863,12 @@ async function main(): Promise<void> {
 		if (!currentHit) return;
 
 		if (e.button === 0) {
-			// DEBUG: left click spawns a no-gravity sphere at the targeted
-			// face, for sanity-checking cube-vs-sphere collision in slow-mo.
+			// Left click = break block (gains 1 BP)
 			const [bx, by, bz] = currentHit.blockPos;
-			const [nx, ny, nz] = currentHit.faceNormal;
-			entityManager.spawn({
-				shape: Shape.Sphere,
-				material: Material.Marble,
-				role: Role.Zone,
-				x: (bx + nx + 0.5) * BLOCK_SIZE,
-				y: (by + ny + 0.5) * BLOCK_SIZE,
-				z: (bz + nz + 0.5) * BLOCK_SIZE,
-				size: BLOCK_SIZE,
-				noGravity: true,
-			});
+			world.setBlock(bx, by, bz, AIR);
+			onBlockChanged(bx, by, bz);
+			gameState.bp++;
+			updateBPDisplay();
 		} else if (e.button === 2) {
 			// Right click = place block (costs 1 BP)
 			if (gameState.bp <= 0) return;

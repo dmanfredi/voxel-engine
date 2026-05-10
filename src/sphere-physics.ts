@@ -9,6 +9,7 @@ import { blockRegistry } from './block';
 import { CHUNK_SIZE } from './chunk';
 import type { World } from './world';
 import type { Entity } from './entity';
+import { Trait } from './entity';
 import {
 	MC_TICK,
 	GRAVITY,
@@ -20,6 +21,23 @@ import {
 // Per-surface restitution; combined with entity restitution via max().
 const PLAYER_RESTITUTION = 0.6;
 const DEFAULT_BLOCK_RESTITUTION = 0.3;
+
+// Contact shell — width (world units) of the "in-contact" band outside the
+// sphere's geometric radius. Resolution still depenetrates only when the
+// real radius overlaps; the shell exists purely so a sphere resting at
+// exactly r from a surface still registers `attached` and a contact normal.
+//
+// Without this, a sticky sphere sitting on a flat floor oscillates between
+// `attached` (frame N: gravity dips it into the floor → resolver pushes
+// out → contact recorded) and `!attached` (frame N+1: gravity gated by
+// `attached`, no penetration, no contacts found → `attached` flips false).
+// AI thrust ramping up gets nuked every other frame by the suction zero,
+// crawling the sphere along at ~1 unit/sec instead of ~8.
+//
+// 0.5 units is well below BLOCK_SIZE=10 (no false positives from adjacent
+// blocks) and well above the integration error a single tick can introduce
+// at terminal velocity (also ~0.5/tick worst case).
+const SHELL = 0.5;
 
 // Scratch matrices for rolling — shared across entities/frames.
 const scratchRotation = mat4.identity();
@@ -39,8 +57,17 @@ export function entityPhysicsTick(
 ): void {
 	const t = dt / MC_TICK;
 
+	// Sticky entities skip gravity while in contact with any surface — that's
+	// the defining behavior. `attached` reflects last frame's collisions, so
+	// the very first tick after spawn still falls until the sphere meets a
+	// surface; from then on, contact is sustained tick-to-tick because the
+	// AI thrust pushes into the surface and the resolver re-asserts contact.
+	const sticky = entity.traits.includes(Trait.Sticky);
+	const stickyAttached = sticky && entity.attached;
+	const wasAttached = entity.attached;
+
 	// Gravity + terminal velocity
-	if (!entity.noGravity) {
+	if (!entity.noGravity && !stickyAttached) {
 		entity.vy -= GRAVITY * t;
 		if (entity.vy < TERMINAL_VELOCITY) entity.vy = TERMINAL_VELOCITY;
 	}
@@ -62,13 +89,47 @@ export function entityPhysicsTick(
 	entity.y += entity.vy * t;
 	entity.z += entity.vz * t;
 
-	// Reset grounded before resolution; any contact with upward normal sets it
+	// Reset contact state before resolution. `grounded` and `attached` get
+	// re-set by any qualifying contact during the resolution passes. Contact
+	// normal accumulator is summed across all AABB hits this tick (sphere
+	// vs N voxels, sphere vs player, sphere vs cube faces) and normalized
+	// once below — keeps wedged-corner cases producing a sensible "outward"
+	// direction without per-contact normalization.
 	entity.grounded = false;
+	entity.attached = false;
+	entity.contactNx = 0;
+	entity.contactNy = 0;
+	entity.contactNz = 0;
 
 	const ww = world.widthChunks * CHUNK_SIZE * world.blockSize;
 
 	resolveSphereVsVoxels(entity, world);
 	resolveSphereVsPlayer(entity, playerPos, playerHalfWidth, playerHeight, ww);
+
+	if (entity.attached) {
+		const len = Math.hypot(
+			entity.contactNx,
+			entity.contactNy,
+			entity.contactNz,
+		);
+		if (len > 1e-6) {
+			entity.contactNx /= len;
+			entity.contactNy /= len;
+			entity.contactNz /= len;
+		}
+	}
+
+	// Suction-cup stick: a sticky sphere that just transitioned from
+	// airborne to attached gets vy cleared. Falling onto a wall accumulates
+	// vy that lives in the contact tangent plane (wall normal is horizontal),
+	// so the resolver doesn't touch it — the AI then has to drag-decelerate
+	// ~terminal velocity worth of downward motion before any climb can begin,
+	// producing a multi-second pause. Zeroing only vy fixes that without
+	// throwing away lateral momentum (a sphere sliding into a wall keeps its
+	// sideways drift; a sphere landing on a floor keeps any horizontal speed).
+	if (sticky && entity.attached && !wasAttached) {
+		entity.vy = 0;
+	}
 
 	// Wrap horizontal position (matches player wrapping)
 	entity.x = ((entity.x % ww) + ww) % ww;
@@ -80,14 +141,17 @@ export function entityPhysicsTick(
 function resolveSphereVsVoxels(entity: Entity, world: World): void {
 	const blockSize = world.blockSize;
 	const r = entity.scale;
+	// Iterate over the shell-inflated AABB so blocks one tick away from real
+	// overlap still get a chance to register a shell-only contact.
+	const rShell = r + SHELL;
 
 	// AABB in block coordinates
-	const bxMin = Math.floor((entity.x - r) / blockSize);
-	const bxMax = Math.floor((entity.x + r) / blockSize);
-	const byMin = Math.floor((entity.y - r) / blockSize);
-	const byMax = Math.floor((entity.y + r) / blockSize);
-	const bzMin = Math.floor((entity.z - r) / blockSize);
-	const bzMax = Math.floor((entity.z + r) / blockSize);
+	const bxMin = Math.floor((entity.x - rShell) / blockSize);
+	const bxMax = Math.floor((entity.x + rShell) / blockSize);
+	const byMin = Math.floor((entity.y - rShell) / blockSize);
+	const byMax = Math.floor((entity.y + rShell) / blockSize);
+	const bzMin = Math.floor((entity.z - rShell) / blockSize);
+	const bzMax = Math.floor((entity.z + rShell) / blockSize);
 
 	for (let bx = bxMin; bx <= bxMax; bx++) {
 		for (let by = byMin; by <= byMax; by++) {
@@ -153,8 +217,16 @@ function resolveSphereVsPlayer(
 }
 
 /**
- * Sphere-vs-AABB closest-point test. On overlap: depenetrate along the
- * contact normal and resolve velocity (bounce or resting contact).
+ * Sphere-vs-AABB closest-point test with shell-aware contact reporting.
+ *
+ *   - distSq ≥ (r+SHELL)²    → no overlap, return.
+ *   - r² ≤ distSq < (r+SHELL)² → shell-only contact: record normal +
+ *     `attached`/`grounded` so sticky AI and resting state remain stable,
+ *     but skip depenetration and velocity response (no real penetration).
+ *   - distSq < r²            → real overlap: full depenetration + velocity
+ *     response (bounce or resting), exactly as before.
+ *
+ * Sphere-center-inside-box is always a real overlap (penetration ≥ r).
  * Reused by `entity-interactions.ts` for sphere-vs-cube.
  */
 export function resolveSphereVsAABB(
@@ -169,6 +241,7 @@ export function resolveSphereVsAABB(
 	otherRestitution: number,
 ): void {
 	const r = entity.scale;
+	const rShell = r + SHELL;
 
 	// Closest point on AABB to sphere center
 	const cpX = Math.max(boxMinX, Math.min(entity.x, boxMaxX));
@@ -180,7 +253,7 @@ export function resolveSphereVsAABB(
 	const dz = entity.z - cpZ;
 	const distSq = dx * dx + dy * dy + dz * dz;
 
-	if (distSq >= r * r) return; // no overlap
+	if (distSq >= rShell * rShell) return; // beyond shell
 
 	let nx: number, ny: number, nz: number, penetration: number;
 
@@ -238,13 +311,24 @@ export function resolveSphereVsAABB(
 		penetration = r - dist;
 	}
 
+	// Contact reporting fires for shell-or-real overlap. Sticky AI and
+	// resting-state stability depend on this being set even when the sphere
+	// isn't actually penetrating — that's the whole point of the shell.
+	if (ny > 0.5) entity.grounded = true;
+	entity.attached = true;
+	entity.contactNx += nx;
+	entity.contactNy += ny;
+	entity.contactNz += nz;
+
+	// Shell-only contact: no real overlap → nothing to depenetrate, and
+	// nothing to bounce off. Skip the rest. (penetration < 0 means the
+	// sphere's surface is `|penetration|` units away from the box.)
+	if (penetration <= 0) return;
+
 	// Depenetrate
 	entity.x += nx * penetration;
 	entity.y += ny * penetration;
 	entity.z += nz * penetration;
-
-	// Grounded flag: contact normal points substantially upward
-	if (ny > 0.5) entity.grounded = true;
 
 	// Velocity response
 	const vDotN = entity.vx * nx + entity.vy * ny + entity.vz * nz;
@@ -262,19 +346,47 @@ export function resolveSphereVsAABB(
 }
 
 /**
- * Visual rolling — accumulate rotation around the axis perpendicular to
- * horizontal velocity. No angular physics; purely cosmetic.
+ * Visual rolling — rotate around `(v_tangent × n) / |v_tangent × n|`, where
+ * n is the contact normal and v_tangent is velocity projected onto the
+ * surface plane. Equivalent to the canonical `ω = (n × v) / r` for rolling
+ * without slipping, just with the sign convention the original floor-only
+ * code happened to use; preserved so existing rolling looks identical.
+ *
+ * Falls back to n = (0,1,0) when airborne. That keeps falling/non-sticky
+ * spheres looking the same as before (axis stays in the XZ plane, vy
+ * doesn't contribute), while sticky spheres climbing a wall pick up the
+ * actual contact normal and roll around the correct axis.
+ *
+ * Purely cosmetic — no angular momentum carries between frames.
  */
 function updateRolling(entity: Entity, t: number): void {
-	const hSpeedSq = entity.vx * entity.vx + entity.vz * entity.vz;
-	if (hSpeedSq < 1e-4) return;
+	const nx = entity.attached ? entity.contactNx : 0;
+	const ny = entity.attached ? entity.contactNy : 1;
+	const nz = entity.attached ? entity.contactNz : 0;
 
-	const hSpeed = Math.sqrt(hSpeedSq);
-	const axisX = -entity.vz / hSpeed;
-	const axisZ = entity.vx / hSpeed;
-	const angle = -(hSpeed * t) / entity.scale;
+	// Strip normal component → tangent velocity along the surface
+	const vDotN = entity.vx * nx + entity.vy * ny + entity.vz * nz;
+	const vtx = entity.vx - vDotN * nx;
+	const vty = entity.vy - vDotN * ny;
+	const vtz = entity.vz - vDotN * nz;
+	const vtSpeedSq = vtx * vtx + vty * vty + vtz * vtz;
+	if (vtSpeedSq < 1e-4) return;
+	const vtSpeed = Math.sqrt(vtSpeedSq);
 
-	mat4.axisRotation([axisX, 0, axisZ], angle, scratchRotation);
+	// axis = v_tangent × n
+	const axisX = vty * nz - vtz * ny;
+	const axisY = vtz * nx - vtx * nz;
+	const axisZ = vtx * ny - vty * nx;
+	const axisLen = Math.hypot(axisX, axisY, axisZ);
+	if (axisLen < 1e-6) return;
+
+	const angle = -(vtSpeed * t) / entity.scale;
+
+	mat4.axisRotation(
+		[axisX / axisLen, axisY / axisLen, axisZ / axisLen],
+		angle,
+		scratchRotation,
+	);
 	// Pre-multiply: orientation = R * orientation (rotation in world frame)
 	mat4.multiply(scratchRotation, entity.orientation, scratchOrientation);
 	mat4.copy(scratchOrientation, entity.orientation);

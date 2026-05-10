@@ -9,7 +9,7 @@
  */
 
 import type { Entity } from './entity';
-import { Role } from './entity';
+import { Role, Trait } from './entity';
 
 const MC_TICK = 0.05;
 const RUSH_GROUND_ACCEL = 1.0;
@@ -60,13 +60,24 @@ function rush(
 	const t = dt / MC_TICK;
 	const hw = ww / 2;
 
-	// Wrap-aware horizontal direction to player
+	// Wrap-aware direction to player. Y doesn't wrap.
 	let dx = (playerPos[0] ?? 0) - entity.x;
+	const dy = (playerPos[1] ?? 0) - entity.y;
 	let dz = (playerPos[2] ?? 0) - entity.z;
 	if (dx > hw) dx -= ww;
 	else if (dx < -hw) dx += ww;
 	if (dz > hw) dz -= ww;
 	else if (dz < -hw) dz += ww;
+
+	// Sticky spheres mid-contact climb in 3D: thrust toward player projected
+	// onto the contact tangent plane, drag applies to vy too (otherwise
+	// vertical climb has nothing to oppose it). Sticky-but-detached falls
+	// back to flat behavior — they're airborne, treat them like any rusher.
+	const sticky = entity.traits.includes(Trait.Sticky);
+	if (sticky && entity.attached) {
+		rushSticky(entity, dx, dy, dz, baseSpeed, mass, t);
+		return;
+	}
 
 	const distSq = dx * dx + dz * dz;
 	if (distSq > 1e-4) {
@@ -88,6 +99,70 @@ function rush(
 	if (hSpeedSq > MAX_H_SPEED * MAX_H_SPEED) {
 		const scale = MAX_H_SPEED / Math.sqrt(hSpeedSq);
 		entity.vx *= scale;
+		entity.vz *= scale;
+	}
+}
+
+/**
+ * Sticky 3D rush. Thrust direction is projected onto the contact tangent
+ * plane (subtract component along the contact normal), so accel goes into
+ * sliding along the surface, not pushing into it. Drag is applied to all
+ * three axes — without vy drag, climbing with no gravity would let vy grow
+ * unbounded. Speed cap reuses MAX_H_SPEED on the 3D magnitude (rough match
+ * to the rolling cap; sticky spheres shouldn't be appreciably faster).
+ *
+ * Uses RUSH_GROUND_ACCEL / GROUND_DRAG unconditionally — by definition the
+ * sphere is in contact with a surface, so ground feel is right whether
+ * that surface is a floor, wall, or ceiling.
+ */
+function rushSticky(
+	entity: Entity,
+	dx: number,
+	dy: number,
+	dz: number,
+	baseSpeed: number,
+	mass: number,
+	t: number,
+): void {
+	const distSq = dx * dx + dy * dy + dz * dz;
+	if (distSq > 1e-4) {
+		const dist = Math.sqrt(distSq);
+		let dirX = dx / dist;
+		let dirY = dy / dist;
+		let dirZ = dz / dist;
+
+		// Project onto tangent plane: dir -= (dir · n) n
+		const dotN =
+			dirX * entity.contactNx +
+			dirY * entity.contactNy +
+			dirZ * entity.contactNz;
+		dirX -= dotN * entity.contactNx;
+		dirY -= dotN * entity.contactNy;
+		dirZ -= dotN * entity.contactNz;
+
+		const tangentLen = Math.hypot(dirX, dirY, dirZ);
+		// Player directly along the contact normal (e.g. exactly on the
+		// other side of a thin ceiling) → tangent direction collapses to
+		// zero. Skip thrust this frame; drag still runs.
+		if (tangentLen > 1e-4) {
+			const accel = (RUSH_GROUND_ACCEL * baseSpeed) / mass;
+			entity.vx += (dirX / tangentLen) * accel * t;
+			entity.vy += (dirY / tangentLen) * accel * t;
+			entity.vz += (dirZ / tangentLen) * accel * t;
+		}
+	}
+
+	const dragT = GROUND_DRAG ** (t / mass);
+	entity.vx *= dragT;
+	entity.vy *= dragT;
+	entity.vz *= dragT;
+
+	const speedSq =
+		entity.vx * entity.vx + entity.vy * entity.vy + entity.vz * entity.vz;
+	if (speedSq > MAX_H_SPEED * MAX_H_SPEED) {
+		const scale = MAX_H_SPEED / Math.sqrt(speedSq);
+		entity.vx *= scale;
+		entity.vy *= scale;
 		entity.vz *= scale;
 	}
 }

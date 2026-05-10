@@ -49,7 +49,12 @@ export type Role = (typeof Role)[keyof typeof Role];
 export const Material = { Marble: 0, Brick: 1, DarkMarble: 2 } as const;
 export type Material = (typeof Material)[keyof typeof Material];
 
-export type Trait = number;
+// Bolt-on behavioral modifiers, orthogonal to shape/role/material.
+//   Sticky — sphere clings to any voxel surface (gravity gated, AI thrusts
+//   in 3D and projects onto the contact tangent plane). Detaches the moment
+//   it loses contact (geometric only — no force threshold).
+export const Trait = { Sticky: 0 } as const;
+export type Trait = (typeof Trait)[keyof typeof Trait];
 
 // ── Material properties ─────────────────────────────────────────────
 //
@@ -200,6 +205,18 @@ export interface Entity {
 	vz: number;
 	orientation: Float32Array<ArrayBuffer>;
 	grounded: boolean;
+	// Sphere-only: any solid contact this tick (floor, wall, ceiling, cube
+	// face). Distinct from `grounded` (upward contact only) — rolling,
+	// cube AI, and the resting-contact threshold still want "on a floor."
+	// Sticky AI uses `grounded || attached` to keep ground-like accel/drag
+	// while clinging to walls.
+	attached: boolean;
+	// Sphere-only: accumulated unit normal from this tick's contacts,
+	// summed across all AABB resolutions then normalized. Drives sticky
+	// AI's tangent-plane projection. Garbage when `attached === false`.
+	contactNx: number;
+	contactNy: number;
+	contactNz: number;
 	scale: number;
 	mass: number;
 	restitution: number;
@@ -386,6 +403,10 @@ export class EntityManager {
 			vz: config.vz ?? 0,
 			orientation: mat4.identity(),
 			grounded: false,
+			attached: false,
+			contactNx: 0,
+			contactNy: 0,
+			contactNz: 0,
 			scale: config.size,
 			mass,
 			restitution: matBase.restitution,

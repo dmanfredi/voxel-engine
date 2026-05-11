@@ -37,13 +37,16 @@ const FLOOR_Y = 156;
 // to roll around between obstacles without immediately falling off.
 const FLOOR_HALF_WIDTH = 50;
 
-// Obstacle row layout. 8 cells × 8 blocks each = 64 blocks of total width,
-// centered on spawn so the row extends symmetrically east/west. ROW_Z
+// Obstacle row layout. 8 cells × 12 blocks each = 96 blocks of total width,
+// centered on spawn so the row extends symmetrically east/west. Each
+// obstacle's 8×8 footprint sits with a 2-block buffer on every X side
+// (4 blocks of clearance between adjacent obstacles), giving the player
+// and AI room to maneuver around any one shape in isolation. ROW_Z
 // places the row 24 blocks south of spawn so the player can see all 8
 // obstacles in a single forward-facing glance.
-const CELL_W = 8;
+const CELL_W = 12;
 const NUM_CELLS = 8;
-const ROW_START_X = SPAWN_BX - (NUM_CELLS * CELL_W) / 2; // 128
+const ROW_START_X = SPAWN_BX - (NUM_CELLS * CELL_W) / 2; // 112
 const ROW_Z = SPAWN_BZ - 24; // 136
 
 // Obstacles sit atop the floor — first block above the floor surface.
@@ -122,7 +125,7 @@ export default function jungleGym(
 			cx,
 			cy,
 			cz,
-			x0 + 3,
+			x0 + 5,
 			OBSTACLE_Y,
 			ROW_Z + 3,
 			3,
@@ -141,7 +144,7 @@ export default function jungleGym(
 			cx,
 			cy,
 			cz,
-			x0 + 2,
+			x0 + 4,
 			OBSTACLE_Y,
 			ROW_Z + 2,
 			5,
@@ -163,7 +166,7 @@ export default function jungleGym(
 				cx,
 				cy,
 				cz,
-				x0 + 2,
+				x0 + 4,
 				OBSTACLE_Y,
 				ROW_Z + i * 2,
 				5,
@@ -183,7 +186,7 @@ export default function jungleGym(
 			cx,
 			cy,
 			cz,
-			x0 + 1,
+			x0 + 3,
 			OBSTACLE_Y,
 			ROW_Z + 3,
 			6,
@@ -196,7 +199,7 @@ export default function jungleGym(
 			cx,
 			cy,
 			cz,
-			x0 + 6,
+			x0 + 8,
 			OBSTACLE_Y + 2,
 			ROW_Z + 3,
 			1,
@@ -217,7 +220,7 @@ export default function jungleGym(
 			cx,
 			cy,
 			cz,
-			x0 + 1,
+			x0 + 3,
 			OBSTACLE_Y,
 			ROW_Z + 3,
 			2,
@@ -230,7 +233,7 @@ export default function jungleGym(
 			cx,
 			cy,
 			cz,
-			x0 + 1,
+			x0 + 3,
 			OBSTACLE_Y + 6,
 			ROW_Z + 3,
 			6,
@@ -250,7 +253,7 @@ export default function jungleGym(
 			cx,
 			cy,
 			cz,
-			x0 + 1,
+			x0 + 3,
 			OBSTACLE_Y,
 			ROW_Z + 3,
 			2,
@@ -263,7 +266,7 @@ export default function jungleGym(
 			cx,
 			cy,
 			cz,
-			x0 + 5,
+			x0 + 7,
 			OBSTACLE_Y,
 			ROW_Z + 3,
 			2,
@@ -276,7 +279,7 @@ export default function jungleGym(
 			cx,
 			cy,
 			cz,
-			x0 + 1,
+			x0 + 3,
 			OBSTACLE_Y + 6,
 			ROW_Z + 3,
 			6,
@@ -295,7 +298,7 @@ export default function jungleGym(
 			cx,
 			cy,
 			cz,
-			x0 + 2,
+			x0 + 4,
 			OBSTACLE_Y,
 			ROW_Z + 2,
 			5,
@@ -306,7 +309,7 @@ export default function jungleGym(
 	}
 
 	// Cell 7: Two parallel walls — 1×6×6 each, separated by 2 blocks in X
-	// (gap from x0+3 to x0+5). Sphere stuck on one wall: stays attached
+	// (gap from x0+5 to x0+7). Sphere stuck on one wall: stays attached
 	// (correct) vs. drifts to the neighbor (detachment bug).
 	{
 		const x0 = ROW_START_X + 7 * CELL_W;
@@ -315,7 +318,7 @@ export default function jungleGym(
 			cx,
 			cy,
 			cz,
-			x0 + 2,
+			x0 + 4,
 			OBSTACLE_Y,
 			ROW_Z + 1,
 			1,
@@ -328,7 +331,7 @@ export default function jungleGym(
 			cx,
 			cy,
 			cz,
-			x0 + 5,
+			x0 + 7,
 			OBSTACLE_Y,
 			ROW_Z + 1,
 			1,

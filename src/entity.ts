@@ -36,6 +36,7 @@ import {
 import type { PlayerVelLike } from './entity-interactions';
 import { entityAITick } from './entity-ai';
 import { cubeAITick } from './cube-ai';
+import { FlowField } from './flow-field';
 import type { World } from './world';
 
 // ── Axes ────────────────────────────────────────────────────────────
@@ -118,7 +119,7 @@ interface MaterialProperties {
 // decelerate slowly. Terminal speed is ~invariant across masses. Bump power
 // to 2 for gentler scaling if n=3 feels too extreme; volumetric is physically
 // honest but dramatic (a 2x-larger sphere is 8x heavier).
-const MASS_SIZE_POWER = 2;
+const MASS_SIZE_POWER = 1;
 const MASS_REFERENCE_SIZE = 10;
 const MASS_REFERENCE_DENSITY = 2;
 const MASS_NORMALIZATION =
@@ -158,7 +159,7 @@ const materials: Record<Material, MaterialProperties> = {
 			name: 'darkMarble',
 			texLayer: DARK_MARBLE,
 			textureScale: 6,
-			density: 4,
+			density: 1,
 			hardness: 1.2,
 			restitution: 0.4,
 		},
@@ -287,11 +288,26 @@ export class EntityManager {
 	private device: GPUDevice;
 	private world: World;
 	private meshCache = new Map<Shape, CachedMesh>();
+	// One flow field per manager — all spheres pursue the same player and
+	// can share the field. Updated whenever the player crosses a voxel
+	// cell boundary or terrain inside the field changes.
+	private flowField = new FlowField();
 
 	constructor(renderer: EntityRenderer, device: GPUDevice, world: World) {
 		this.renderer = renderer;
 		this.device = device;
 		this.world = world;
+	}
+
+	/**
+	 * Mark the flow field stale. Call this when terrain changes inside
+	 * the field's bounds (block placement / break / scaffolding). The
+	 * next `update()` will recompute regardless of whether the player
+	 * moved cells. No-op if you call it when nothing's actually different
+	 * — recompute is cheap-ish and BFS handles a no-change case fine.
+	 */
+	invalidateFlowField(): void {
+		this.flowField.invalidate();
 	}
 
 	spawn(config: SpawnConfig): number {
@@ -447,8 +463,25 @@ export class EntityManager {
 	): void {
 		const ww = this.world.widthChunks * CHUNK_SIZE * this.world.blockSize;
 		const hw = ww / 2;
+		const blockSize = this.world.blockSize;
 		const px = playerPos[0] ?? 0;
+		const py = playerPos[1] ?? 0;
 		const pz = playerPos[2] ?? 0;
+
+		// Refresh the flow field if the player has crossed a cell boundary
+		// (or terrain invalidation flagged it stale). BFS is single-shot
+		// synchronous on the main thread — fine while it's <5ms; revisit
+		// with a worker if it shows up in profiling. Player feet aren't
+		// available here (only eye position), so we snap the eye cell as
+		// the BFS source. Spheres path toward the player's eye height
+		// rather than feet, which reads as "they're climbing toward you"
+		// not "they're crawling at your ankles."
+		const playerBX = Math.floor(px / blockSize);
+		const playerBY = Math.floor(py / blockSize);
+		const playerBZ = Math.floor(pz / blockSize);
+		if (this.flowField.needsUpdate(playerBX, playerBY, playerBZ)) {
+			this.flowField.update(this.world, playerBX, playerBY, playerBZ);
+		}
 
 		// Pass 1 — per-entity AI + solo physics, dispatched by shape.
 		// Spheres run AI + sphere physics (gravity, voxel/player contact).
@@ -465,6 +498,8 @@ export class EntityManager {
 					sphereMat.baseSpeed,
 					entity.mass,
 					ww,
+					blockSize,
+					this.flowField,
 					dt,
 				);
 				entityPhysicsTick(

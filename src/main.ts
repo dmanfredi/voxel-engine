@@ -512,7 +512,7 @@ async function main(): Promise<void> {
 		x: worldCenter + 30,
 		y: worldCenter + 100,
 		z: worldCenter + 30,
-		size: 8,
+		size: 5,
 		traits: [Trait.Sticky],
 	});
 

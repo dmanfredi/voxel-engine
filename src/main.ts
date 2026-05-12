@@ -16,7 +16,7 @@ import { autoClimb } from './auto-climb';
 import { ChunkLoader } from './chunk-loader';
 import { MeshScheduler } from './mesh-scheduler';
 import { initEntityRenderer } from './entity-renderer';
-import { EntityManager, Shape, Material, Role, Trait } from './entity';
+import { EntityManager, Shape, Material, Role } from './entity';
 import { tryPlaceBlock } from './placement';
 import { generateMips, numMipLevels } from './mipmap';
 import marbleTextureUrl from '../assets/MarbleBase1024.png';
@@ -504,7 +504,8 @@ async function main(): Promise<void> {
 	);
 	const entityManager = new EntityManager(entityRenderer, device, world);
 
-	// Sticky test sphere — clings to walls/ceilings and chases in 3D.
+	// Test sphere — all spheres now cling to walls/ceilings by default and
+	// chase in 3D when attached.
 	entityManager.spawn({
 		shape: Shape.Sphere,
 		material: Material.DarkMarble,
@@ -512,8 +513,7 @@ async function main(): Promise<void> {
 		x: worldCenter + 30,
 		y: worldCenter + 100,
 		z: worldCenter + 30,
-		size: 8,
-		traits: [Trait.Sticky],
+		size: 20,
 	});
 
 	// entityManager.spawn({
@@ -747,7 +747,7 @@ async function main(): Promise<void> {
 		lastT = t;
 
 		if (debuggerParams.freecam) {
-			FREECAM(keysDown, cameraPos, cameraFront, cameraUp, dt * 500);
+			FREECAM(keysDown, cameraPos, cameraFront, cameraUp, dt * 300);
 		} else {
 			physicsTick(
 				playerState,

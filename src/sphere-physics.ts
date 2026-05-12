@@ -9,7 +9,6 @@ import { blockRegistry } from './block';
 import { CHUNK_SIZE } from './chunk';
 import type { World } from './world';
 import type { Entity } from './entity';
-import { Trait } from './entity';
 import {
 	MC_TICK,
 	GRAVITY,
@@ -27,17 +26,25 @@ const DEFAULT_BLOCK_RESTITUTION = 0.3;
 // real radius overlaps; the shell exists purely so a sphere resting at
 // exactly r from a surface still registers `attached` and a contact normal.
 //
-// Without this, a sticky sphere sitting on a flat floor oscillates between
+// Without this, a sphere sitting on a flat floor oscillates between
 // `attached` (frame N: gravity dips it into the floor → resolver pushes
 // out → contact recorded) and `!attached` (frame N+1: gravity gated by
 // `attached`, no penetration, no contacts found → `attached` flips false).
-// AI thrust ramping up gets nuked every other frame by the suction zero,
-// crawling the sphere along at ~1 unit/sec instead of ~8.
+// AI thrust ramps up only to be sabotaged on alternate frames, crawling
+// the sphere along at ~1 unit/sec instead of ~8.
 //
 // 0.5 units is well below BLOCK_SIZE=10 (no false positives from adjacent
 // blocks) and well above the integration error a single tick can introduce
 // at terminal velocity (also ~0.5/tick worst case).
 const SHELL = 0.5;
+
+// Snap-back search radius. Larger than SHELL so the sphere can find a
+// corner block from the far side of a convex edge and arc around it
+// instead of detaching into air. Smaller than R so strong impulses
+// (sphere bonk, cube tip launch) can clear it in one frame and genuinely
+// detach. At v=8 units/sec and 60fps the per-frame drift is ~0.13 —
+// SNAP=4 gives ~30x headroom.
+const SNAP = 4;
 
 // Scratch matrices for rolling — shared across entities/frames.
 const scratchRotation = mat4.identity();
@@ -57,17 +64,11 @@ export function entityPhysicsTick(
 ): void {
 	const t = dt / MC_TICK;
 
-	// Sticky entities skip gravity while in contact with any surface — that's
-	// the defining behavior. `attached` reflects last frame's collisions, so
-	// the very first tick after spawn still falls until the sphere meets a
-	// surface; from then on, contact is sustained tick-to-tick because the
-	// AI thrust pushes into the surface and the resolver re-asserts contact.
-	const sticky = entity.traits.includes(Trait.Sticky);
-	const stickyAttached = sticky && entity.attached;
-	const wasAttached = entity.attached;
-
-	// Gravity + terminal velocity
-	if (!entity.noGravity && !stickyAttached) {
+	// Sticky-by-default: skip gravity while attached. `attached` reflects
+	// last frame's contacts, so the first tick after spawn falls until the
+	// sphere meets a surface; from then on AI thrust + resolver re-assertion
+	// sustain it.
+	if (!entity.noGravity && !entity.attached) {
 		entity.vy -= GRAVITY * t;
 		if (entity.vy < TERMINAL_VELOCITY) entity.vy = TERMINAL_VELOCITY;
 	}
@@ -95,6 +96,7 @@ export function entityPhysicsTick(
 	// vs N voxels, sphere vs player, sphere vs cube faces) and normalized
 	// once below — keeps wedged-corner cases producing a sensible "outward"
 	// direction without per-contact normalization.
+	const wasAttached = entity.attached;
 	entity.grounded = false;
 	entity.attached = false;
 	entity.contactNx = 0;
@@ -119,16 +121,11 @@ export function entityPhysicsTick(
 		}
 	}
 
-	// Suction-cup stick: a sticky sphere that just transitioned from
-	// airborne to attached gets vy cleared. Falling onto a wall accumulates
-	// vy that lives in the contact tangent plane (wall normal is horizontal),
-	// so the resolver doesn't touch it — the AI then has to drag-decelerate
-	// ~terminal velocity worth of downward motion before any climb can begin,
-	// producing a multi-second pause. Zeroing only vy fixes that without
-	// throwing away lateral momentum (a sphere sliding into a wall keeps its
-	// sideways drift; a sphere landing on a floor keeps any horizontal speed).
-	if (sticky && entity.attached && !wasAttached) {
-		entity.vy = 0;
+	// Snap-back: extend attachment across convex edges by projecting the
+	// center to exactly r from the closest solid in the snap band. See
+	// applySnap for the contact-state preservation rule.
+	if (wasAttached) {
+		applySnap(entity, world, entity.attached);
 	}
 
 	// Wrap horizontal position (matches player wrapping)
@@ -217,14 +214,110 @@ function resolveSphereVsPlayer(
 }
 
 /**
+ * Project the sphere center to exactly r from the closest point on the
+ * union of solid voxels within `r + SNAP`, and zero the normal-component
+ * of velocity. Bends trajectory around convex edges (sphere rolling off
+ * a platform lip arcs around the corner instead of detaching).
+ *
+ * Contact state writes are gated on `!preAttached`: when the per-voxel
+ * resolver already found contacts this frame, leave its summed sum-of-
+ * normals alone. At a concave wedge (sphere pressed into floor + wall)
+ * the sum points diagonally outward so AI thrust keeps a +Y tangent
+ * component and the sphere climbs; single-closest-point would collapse
+ * to whichever block won the iteration tiebreak, killing the climb.
+ *
+ * Only called when `wasAttached` — never pulls a freshly-airborne
+ * sphere onto a surface.
+ */
+function applySnap(entity: Entity, world: World, preAttached: boolean): void {
+	const blockSize = world.blockSize;
+	const r = entity.scale;
+	const reach = r + SNAP;
+
+	const bxMin = Math.floor((entity.x - reach) / blockSize);
+	const bxMax = Math.floor((entity.x + reach) / blockSize);
+	const byMin = Math.floor((entity.y - reach) / blockSize);
+	const byMax = Math.floor((entity.y + reach) / blockSize);
+	const bzMin = Math.floor((entity.z - reach) / blockSize);
+	const bzMax = Math.floor((entity.z + reach) / blockSize);
+
+	let bestDistSq = reach * reach;
+	let bestCpX = 0;
+	let bestCpY = 0;
+	let bestCpZ = 0;
+	let found = false;
+
+	for (let bx = bxMin; bx <= bxMax; bx++) {
+		for (let by = byMin; by <= byMax; by++) {
+			for (let bz = bzMin; bz <= bzMax; bz++) {
+				if (!blockRegistry.isSolid(world.getBlock(bx, by, bz)))
+					continue;
+
+				const boxMinX = bx * blockSize;
+				const boxMinY = by * blockSize;
+				const boxMinZ = bz * blockSize;
+				const boxMaxX = boxMinX + blockSize;
+				const boxMaxY = boxMinY + blockSize;
+				const boxMaxZ = boxMinZ + blockSize;
+
+				const cpX = Math.max(boxMinX, Math.min(entity.x, boxMaxX));
+				const cpY = Math.max(boxMinY, Math.min(entity.y, boxMaxY));
+				const cpZ = Math.max(boxMinZ, Math.min(entity.z, boxMaxZ));
+
+				const dx = entity.x - cpX;
+				const dy = entity.y - cpY;
+				const dz = entity.z - cpZ;
+				const distSq = dx * dx + dy * dy + dz * dz;
+
+				// Strict `< bestDistSq` and `> 1e-6` — the latter skips the
+				// center-inside-box case (no well-defined normal from a zero
+				// vector; the regular resolver's inside-box branch already
+				// handled depenetration).
+				if (distSq < bestDistSq && distSq > 1e-6) {
+					bestDistSq = distSq;
+					bestCpX = cpX;
+					bestCpY = cpY;
+					bestCpZ = cpZ;
+					found = true;
+				}
+			}
+		}
+	}
+
+	if (!found) return;
+
+	const dist = Math.sqrt(bestDistSq);
+	const nx = (entity.x - bestCpX) / dist;
+	const ny = (entity.y - bestCpY) / dist;
+	const nz = (entity.z - bestCpZ) / dist;
+
+	entity.x = bestCpX + nx * r;
+	entity.y = bestCpY + ny * r;
+	entity.z = bestCpZ + nz * r;
+
+	const vDotN = entity.vx * nx + entity.vy * ny + entity.vz * nz;
+	entity.vx -= vDotN * nx;
+	entity.vy -= vDotN * ny;
+	entity.vz -= vDotN * nz;
+
+	if (!preAttached) {
+		entity.attached = true;
+		entity.grounded = ny > 0.5;
+		entity.contactNx = nx;
+		entity.contactNy = ny;
+		entity.contactNz = nz;
+	}
+}
+
+/**
  * Sphere-vs-AABB closest-point test with shell-aware contact reporting.
  *
  *   - distSq ≥ (r+SHELL)²    → no overlap, return.
  *   - r² ≤ distSq < (r+SHELL)² → shell-only contact: record normal +
- *     `attached`/`grounded` so sticky AI and resting state remain stable,
- *     but skip depenetration and velocity response (no real penetration).
- *   - distSq < r²            → real overlap: full depenetration + velocity
- *     response (bounce or resting), exactly as before.
+ *     `attached`/`grounded` so attached AI and resting state remain
+ *     stable, but skip depenetration and velocity response.
+ *   - distSq < r²            → real overlap: full depenetration +
+ *     velocity response (bounce or resting).
  *
  * Sphere-center-inside-box is always a real overlap (penetration ≥ r).
  * Reused by `entity-interactions.ts` for sphere-vs-cube.

@@ -9,7 +9,7 @@
  */
 
 import type { Entity } from './entity';
-import { Role, Trait } from './entity';
+import { Role } from './entity';
 
 const MC_TICK = 0.05;
 const RUSH_GROUND_ACCEL = 1.0;
@@ -69,13 +69,10 @@ function rush(
 	if (dz > hw) dz -= ww;
 	else if (dz < -hw) dz += ww;
 
-	// Sticky spheres mid-contact climb in 3D: thrust toward player projected
-	// onto the contact tangent plane, drag applies to vy too (otherwise
-	// vertical climb has nothing to oppose it). Sticky-but-detached falls
-	// back to flat behavior — they're airborne, treat them like any rusher.
-	const sticky = entity.traits.includes(Trait.Sticky);
-	if (sticky && entity.attached) {
-		rushSticky(entity, dx, dy, dz, baseSpeed, mass, t);
+	// Attached → 3D climb on tangent plane. Airborne → horizontal-only
+	// chase (mostly the spawn drop or post-bonk recovery).
+	if (entity.attached) {
+		rushAttached(entity, dx, dy, dz, baseSpeed, mass, t);
 		return;
 	}
 
@@ -104,18 +101,15 @@ function rush(
 }
 
 /**
- * Sticky 3D rush. Thrust direction is projected onto the contact tangent
- * plane (subtract component along the contact normal), so accel goes into
- * sliding along the surface, not pushing into it. Drag is applied to all
- * three axes — without vy drag, climbing with no gravity would let vy grow
- * unbounded. Speed cap reuses MAX_H_SPEED on the 3D magnitude (rough match
- * to the rolling cap; sticky spheres shouldn't be appreciably faster).
+ * 3D rush along the contact tangent plane. Drag applies to all three
+ * axes — without vy drag, climbing with no gravity would let vy grow
+ * unbounded. Speed cap reuses MAX_H_SPEED on the 3D magnitude.
  *
- * Uses RUSH_GROUND_ACCEL / GROUND_DRAG unconditionally — by definition the
- * sphere is in contact with a surface, so ground feel is right whether
- * that surface is a floor, wall, or ceiling.
+ * Uses RUSH_GROUND_ACCEL / GROUND_DRAG unconditionally — by definition
+ * the sphere is in contact with a surface, so ground feel is right
+ * whether that surface is a floor, wall, or ceiling.
  */
-function rushSticky(
+function rushAttached(
 	entity: Entity,
 	dx: number,
 	dy: number,

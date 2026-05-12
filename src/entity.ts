@@ -1,12 +1,11 @@
 /**
  * Entity system — types, lifecycle management, and world integration.
  *
- * Enemies are defined by 5 composable axes:
+ * Enemies are defined by 4 composable axes:
  *   Shape    → mesh geometry, movement physics, behavior palette
  *   Role     → specific AI strategy from the shape's palette
  *   Material → texture, physical stats (density, speed, hardness, restitution)
  *   Size     → stat scaling (passed as `size` at spawn)
- *   Traits   → bolt-on behavioral modifiers (future)
  */
 
 import { mat4 } from 'wgpu-matrix';
@@ -48,13 +47,6 @@ export type Role = (typeof Role)[keyof typeof Role];
 
 export const Material = { Marble: 0, Brick: 1, DarkMarble: 2 } as const;
 export type Material = (typeof Material)[keyof typeof Material];
-
-// Bolt-on behavioral modifiers, orthogonal to shape/role/material.
-//   Sticky — sphere clings to any voxel surface (gravity gated, AI thrusts
-//   in 3D and projects onto the contact tangent plane). Detaches the moment
-//   it loses contact (geometric only — no force threshold).
-export const Trait = { Sticky: 0 } as const;
-export type Trait = (typeof Trait)[keyof typeof Trait];
 
 // ── Material properties ─────────────────────────────────────────────
 //
@@ -206,13 +198,13 @@ export interface Entity {
 	orientation: Float32Array<ArrayBuffer>;
 	grounded: boolean;
 	// Sphere-only: any solid contact this tick (floor, wall, ceiling, cube
-	// face). Distinct from `grounded` (upward contact only) — rolling,
-	// cube AI, and the resting-contact threshold still want "on a floor."
-	// Sticky AI uses `grounded || attached` to keep ground-like accel/drag
-	// while clinging to walls.
+	// face). Distinct from `grounded` (upward contact only) — `attached`
+	// drives the 3D pursuit branch in entity-ai, gates gravity (spheres
+	// glue to surfaces), and includes shell-grazing contacts so resting
+	// state doesn't oscillate frame-to-frame.
 	attached: boolean;
 	// Sphere-only: accumulated unit normal from this tick's contacts,
-	// summed across all AABB resolutions then normalized. Drives sticky
+	// summed across all AABB resolutions then normalized. Drives the
 	// AI's tangent-plane projection. Garbage when `attached === false`.
 	contactNx: number;
 	contactNy: number;
@@ -223,7 +215,6 @@ export interface Entity {
 	shape: Shape;
 	material: Material;
 	role: Role;
-	traits: Trait[];
 	renderData: EntityRenderData;
 	// Non-null only while a Cube is mid-tip. Physics + pair collision skip
 	// entities with an active tip; uploadTransform switches to the tip
@@ -267,7 +258,6 @@ export interface SpawnConfig {
 	vx?: number;
 	vy?: number;
 	vz?: number;
-	traits?: Trait[];
 	noGravity?: boolean;
 }
 
@@ -413,7 +403,6 @@ export class EntityManager {
 			shape: config.shape,
 			material: config.material,
 			role: config.role,
-			traits: config.traits ?? [],
 			renderData,
 			tip: null,
 			lastClimbDx: 0,

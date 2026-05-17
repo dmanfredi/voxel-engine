@@ -35,6 +35,7 @@ import {
 import type { PlayerVelLike } from './entity-interactions';
 import { entityAITick } from './entity-ai';
 import { cubeAITick } from './cube-ai';
+import { FlowField } from './flow-field';
 import type { World } from './world';
 
 // ── Axes ────────────────────────────────────────────────────────────
@@ -277,11 +278,25 @@ export class EntityManager {
 	private device: GPUDevice;
 	private world: World;
 	private meshCache = new Map<Shape, CachedMesh>();
+	// One shared flow field — all spheres pursue the same player and read
+	// the same distance grid. Refreshed when the player crosses a voxel cell
+	// boundary or terrain inside the field changes (callers invoke
+	// invalidateFlowField after world mutations; see notes/sticky-spheres.md).
+	private flowField = new FlowField();
 
 	constructor(renderer: EntityRenderer, device: GPUDevice, world: World) {
 		this.renderer = renderer;
 		this.device = device;
 		this.world = world;
+	}
+
+	/**
+	 * Mark the flow field stale so the next AI tick rebuilds it. Call after
+	 * any world mutation (block place/break, scaffold, auto-climb). Cheap;
+	 * the actual BFS work happens on the next tick if needed.
+	 */
+	invalidateFlowField(): void {
+		this.flowField.invalidate();
 	}
 
 	spawn(config: SpawnConfig): number {
@@ -436,8 +451,42 @@ export class EntityManager {
 	): void {
 		const ww = this.world.widthChunks * CHUNK_SIZE * this.world.blockSize;
 		const hw = ww / 2;
+		const blockSize = this.world.blockSize;
 		const px = playerPos[0] ?? 0;
+		const py = playerPos[1] ?? 0;
 		const pz = playerPos[2] ?? 0;
+
+		// Refresh the flow field if the player crossed a cell boundary,
+		// terrain invalidation flagged it stale, or the max sphere reach
+		// changed. BFS is synchronous on the main thread — fine while small;
+		// revisit with a worker if profiling shows it. Eye-position cell is
+		// the BFS source (player feet aren't available here), which reads as
+		// "spheres climb toward you" rather than "they crawl at your ankles."
+		//
+		// maxReach drives the near-surface dilation in FlowField — must be
+		// at least 1 (so BFS can wrap convex edges) and at least
+		// ceil(largestSphereRadius / blockSize) so big spheres' center cells
+		// land inside the dilated band.
+		const playerBX = Math.floor(px / blockSize);
+		const playerBY = Math.floor(py / blockSize);
+		const playerBZ = Math.floor(pz / blockSize);
+		let maxReach = 1;
+		for (const e of this.entities) {
+			if (e.shape !== Shape.Sphere) continue;
+			const reach = Math.ceil(e.scale / blockSize);
+			if (reach > maxReach) maxReach = reach;
+		}
+		if (
+			this.flowField.needsUpdate(playerBX, playerBY, playerBZ, maxReach)
+		) {
+			this.flowField.update(
+				this.world,
+				playerBX,
+				playerBY,
+				playerBZ,
+				maxReach,
+			);
+		}
 
 		// Pass 1 — per-entity AI + solo physics, dispatched by shape.
 		// Spheres run AI + sphere physics (gravity, voxel/player contact).
@@ -454,6 +503,8 @@ export class EntityManager {
 					sphereMat.baseSpeed,
 					entity.mass,
 					ww,
+					blockSize,
+					this.flowField,
 					dt,
 				);
 				entityPhysicsTick(
@@ -665,6 +716,7 @@ export class EntityManager {
 				dMinBY - 1,
 				dMinBZ + nVox - 1,
 			);
+			this.flowField.invalidate();
 		}
 
 		// startCubeTip re-checks destination + ground. After scaffold,

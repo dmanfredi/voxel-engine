@@ -26,5 +26,7 @@ export function tryPlaceBlock(
 	blockId: BlockId,
 ): boolean {
 	if (entityManager.blockIntersectsEntity(bx, by, bz)) return false;
-	return world.setBlock(bx, by, bz, blockId);
+	const ok = world.setBlock(bx, by, bz, blockId);
+	if (ok) entityManager.invalidateFlowField();
+	return ok;
 }

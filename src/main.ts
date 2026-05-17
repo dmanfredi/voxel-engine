@@ -513,7 +513,7 @@ async function main(): Promise<void> {
 		x: worldCenter + 30,
 		y: worldCenter + 100,
 		z: worldCenter + 30,
-		size: 20,
+		size: 10,
 	});
 
 	// entityManager.spawn({
@@ -965,6 +965,7 @@ async function main(): Promise<void> {
 			const [bx, by, bz] = currentHit.blockPos;
 			world.setBlock(bx, by, bz, AIR);
 			onBlockChanged(bx, by, bz);
+			entityManager.invalidateFlowField();
 			gameState.bp++;
 			updateBPDisplay();
 		} else if (e.button === 2) {

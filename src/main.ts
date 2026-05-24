@@ -19,6 +19,7 @@ import { initEntityRenderer } from './entity-renderer';
 import { EntityManager, Shape, Material, Role } from './entity';
 import { tryPlaceBlock } from './placement';
 import { generateMips, numMipLevels } from './mipmap';
+import { initToolbar } from './toolbar';
 import marbleTextureUrl from '../assets/MarbleBase1024.png';
 import bricksTextureUrl from '../assets/Bricks060_1K-PNG_Color.png';
 import darkMarbleTextureUrl from '../assets/DarkMarble.png';
@@ -1102,4 +1103,8 @@ async function main(): Promise<void> {
 		tick(t);
 	});
 }
+
+// Toolbar UI
+initToolbar();
+
 await main();

@@ -34,6 +34,8 @@ canvas {
 	pointer-events: none;
 
 	.cursor {
+		position: absolute;
+
 		width: 7px;
 		height: 7px;
 
@@ -49,12 +51,10 @@ canvas {
 	}
 
 	.bp-orb {
-		position: absolute;
-		bottom: -60px;
-
 		width: 150px;
 		height: 150px;
 		border-radius: 50%;
+		margin-bottom: -30px;
 
 		background: #28292e;
 		border: 3px solid rgba(187, 188, 196, 0.34);
@@ -72,5 +72,26 @@ canvas {
 			padding-bottom: 40px;
 			letter-spacing: 1.5px;
 		}
+	}
+
+	.toolbar-elements {
+		position: relative;
+		align-self: flex-end;
+
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+
+		/* background-color: antiquewhite; */
+		height: 100px;
+		width: 600px;
+	}
+
+	.toolbar-item {
+		width: 80px;
+		height: 80px;
+		background: #28292e;
+		border: 1px solid rgba(187, 188, 196, 0.34);
+		/* border: 1px solid red; */
 	}
 }

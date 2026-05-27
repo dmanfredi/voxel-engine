@@ -22,7 +22,6 @@ import { generateMips, numMipLevels } from './mipmap';
 import { initToolbar } from './toolbar';
 import { ProjectileManager } from './projectile-manager';
 import { initProjectileRenderer } from './projectile-renderer';
-import { obbHitbox, type ProjectileProfile } from './projectile';
 import marbleTextureUrl from '../assets/MarbleBase1024.png';
 import bricksTextureUrl from '../assets/Bricks060_1K-PNG_Color.png';
 import darkMarbleTextureUrl from '../assets/DarkMarble.png';
@@ -649,23 +648,6 @@ async function main(): Promise<void> {
 		projectileRenderer,
 	);
 
-	// Debug pickaxe profile — temporary, will move onto the Tool type
-	// (task #6) and then be selected via the toolbar.
-	// Hitbox sized to match visualSize so collision fires the moment the
-	// cube touches a solid (no visual-leads-collision clipping).
-	const debugPickaxeVisualSize = 10;
-	const debugPickaxeProfile: ProjectileProfile = {
-		strength: 50,
-		speed: 3 * BLOCK_SIZE,
-		hitbox: obbHitbox(debugPickaxeVisualSize * 0.5),
-		maxLifetime: 5,
-		visualSize: debugPickaxeVisualSize,
-	};
-
-	// Scratch buffers for spawn — avoid per-keypress allocation
-	const spawnOrigin = new Float32Array(3);
-	const spawnDirection = new Float32Array(3);
-
 	/** Schedule a slab of chunks (inclusive ranges). X/Z wrap; Y does not.
 	 *  Caller passes raw chunk coords; wrapping happens here at schedule time. */
 	function scheduleChunkSlab(
@@ -1114,30 +1096,6 @@ async function main(): Promise<void> {
 				playerState.velZ = 0;
 			}
 			refreshDebug();
-		}
-		// Debug: spawn a pickaxe projectile from camera. Temporary —
-		// LMB takes over in task #7 and this keybind goes away.
-		if (e.code === 'KeyP') {
-			spawnOrigin[0] =
-				cameraPos[0] +
-				cameraFront[0] * (BLOCK_SIZE * 0.5) -
-				cameraUp[0] * (BLOCK_SIZE * 0.5);
-			spawnOrigin[1] =
-				cameraPos[1] +
-				cameraFront[1] * (BLOCK_SIZE * 0.5) -
-				cameraUp[1] * (BLOCK_SIZE * 0.5);
-			spawnOrigin[2] =
-				cameraPos[2] +
-				cameraFront[2] * (BLOCK_SIZE * 0.5) -
-				cameraUp[2] * (BLOCK_SIZE * 0.5);
-			spawnDirection[0] = cameraFront[0];
-			spawnDirection[1] = cameraFront[1];
-			spawnDirection[2] = cameraFront[2];
-			projectileManager.spawn(
-				debugPickaxeProfile,
-				spawnOrigin,
-				spawnDirection,
-			);
 		}
 	});
 

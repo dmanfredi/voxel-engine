@@ -20,6 +20,9 @@ import { EntityManager, Shape, Material, Role } from './entity';
 import { tryPlaceBlock } from './placement';
 import { generateMips, numMipLevels } from './mipmap';
 import { initToolbar } from './toolbar';
+import { ProjectileManager } from './projectile-manager';
+import { initProjectileRenderer } from './projectile-renderer';
+import { obbHitbox, type ProjectileProfile } from './projectile';
 import marbleTextureUrl from '../assets/MarbleBase1024.png';
 import bricksTextureUrl from '../assets/Bricks060_1K-PNG_Color.png';
 import darkMarbleTextureUrl from '../assets/DarkMarble.png';
@@ -505,6 +508,15 @@ async function main(): Promise<void> {
 	);
 	const entityManager = new EntityManager(entityRenderer, device, world);
 
+	// Projectile renderer — own pipeline + shader, reads only binding 0 of
+	// the shared group 0 (the VP-matrix uniform). No texture sampling.
+	const projectileRenderer = initProjectileRenderer(
+		device,
+		presentationFormat,
+		mainGroup0BGL,
+		bindGroup,
+	);
+
 	// Test sphere — all spheres now cling to walls/ceilings by default and
 	// chase in 3D when attached.
 	entityManager.spawn({
@@ -618,6 +630,41 @@ async function main(): Promise<void> {
 		bpOrbEl.textContent = String(gameState.bp);
 	}
 	updateBPDisplay();
+
+	// Projectile system. Constructed here (rather than next to entityManager)
+	// so its onBlockBroken callback can close over gameState + updateBPDisplay.
+	// onBlockChanged is a hoisted function declaration so referencing it from
+	// the callback is safe even though it's defined further down.
+	const projectileManager = new ProjectileManager(
+		world,
+		{
+			onBlockBroken: (bx, by, bz) => {
+				onBlockChanged(bx, by, bz);
+				entityManager.invalidateFlowField();
+				gameState.bp++;
+				updateBPDisplay();
+			},
+		},
+		device,
+		projectileRenderer,
+	);
+
+	// Debug pickaxe profile — temporary, will move onto the Tool type
+	// (task #6) and then be selected via the toolbar.
+	// Hitbox sized to match visualSize so collision fires the moment the
+	// cube touches a solid (no visual-leads-collision clipping).
+	const debugPickaxeVisualSize = 10;
+	const debugPickaxeProfile: ProjectileProfile = {
+		strength: 50,
+		speed: 3 * BLOCK_SIZE,
+		hitbox: obbHitbox(debugPickaxeVisualSize * 0.5),
+		maxLifetime: 5,
+		visualSize: debugPickaxeVisualSize,
+	};
+
+	// Scratch buffers for spawn — avoid per-keypress allocation
+	const spawnOrigin = new Float32Array(3);
+	const spawnDirection = new Float32Array(3);
 
 	/** Schedule a slab of chunks (inclusive ranges). X/Z wrap; Y does not.
 	 *  Caller passes raw chunk coords; wrapping happens here at schedule time. */
@@ -798,6 +845,8 @@ async function main(): Promise<void> {
 			onRegionChanged,
 		);
 
+		projectileManager.update(dt);
+
 		// Raycast from camera to find targeted block
 		currentHit = raycast(cameraPos, cameraFront, world, MAX_REACH);
 		debuggerParams.targetBlock = currentHit
@@ -931,6 +980,14 @@ async function main(): Promise<void> {
 		// Draw entities (after terrain, before skybox)
 		entityManager.draw(pass);
 
+		// Draw projectiles — own pipeline, slot before skybox so the
+		// less-equal cubemap pass is the final color contributor.
+		projectileManager.draw(pass);
+
+		// Debug: cyan OBB outline + magenta cells the hitbox overlaps.
+		// Always-on while diagnosing — remove or gate when settled.
+		projectileManager.drawDebugWireframes(pass);
+
 		// Draw skybox (after geometry, uses less-equal depth test)
 		drawSkybox(pass, device, skybox, viewMatrix, projection);
 
@@ -1057,6 +1114,30 @@ async function main(): Promise<void> {
 				playerState.velZ = 0;
 			}
 			refreshDebug();
+		}
+		// Debug: spawn a pickaxe projectile from camera. Temporary —
+		// LMB takes over in task #7 and this keybind goes away.
+		if (e.code === 'KeyP') {
+			spawnOrigin[0] =
+				cameraPos[0] +
+				cameraFront[0] * (BLOCK_SIZE * 0.5) -
+				cameraUp[0] * (BLOCK_SIZE * 0.5);
+			spawnOrigin[1] =
+				cameraPos[1] +
+				cameraFront[1] * (BLOCK_SIZE * 0.5) -
+				cameraUp[1] * (BLOCK_SIZE * 0.5);
+			spawnOrigin[2] =
+				cameraPos[2] +
+				cameraFront[2] * (BLOCK_SIZE * 0.5) -
+				cameraUp[2] * (BLOCK_SIZE * 0.5);
+			spawnDirection[0] = cameraFront[0];
+			spawnDirection[1] = cameraFront[1];
+			spawnDirection[2] = cameraFront[2];
+			projectileManager.spawn(
+				debugPickaxeProfile,
+				spawnOrigin,
+				spawnDirection,
+			);
 		}
 	});
 

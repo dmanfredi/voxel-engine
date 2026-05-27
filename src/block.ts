@@ -14,6 +14,13 @@ export interface BlockProperties {
 	shininess: number;
 	/** Specular highlight intensity multiplier. */
 	specularStrength: number;
+	/**
+	 * Mining resistance. Projectiles subtract this from their strength on
+	 * each break; the first block a projectile hits always breaks (even if
+	 * strength < hardness), but subsequent blocks require strength > hardness.
+	 * AIR is 0 — projectiles skip air entirely, no break attempt.
+	 */
+	hardness: number;
 }
 
 export class BlockRegistry {
@@ -62,6 +69,7 @@ blockRegistry.register(AIR, {
 	restitution: 0,
 	shininess: 0,
 	specularStrength: 0,
+	hardness: 0,
 });
 blockRegistry.register(MARBLE, {
 	name: 'marble',
@@ -70,6 +78,7 @@ blockRegistry.register(MARBLE, {
 	restitution: 0.4,
 	shininess: 8,
 	specularStrength: 0.17,
+	hardness: 1,
 });
 blockRegistry.register(BRICK, {
 	name: 'brick',
@@ -78,6 +87,7 @@ blockRegistry.register(BRICK, {
 	restitution: 0.2,
 	shininess: 20,
 	specularStrength: 0.105,
+	hardness: 4,
 });
 blockRegistry.register(DARK_MARBLE, {
 	name: 'darkMarble',
@@ -86,4 +96,5 @@ blockRegistry.register(DARK_MARBLE, {
 	restitution: 0.4,
 	shininess: 5,
 	specularStrength: 0.5,
+	hardness: 10,
 });

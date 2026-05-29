@@ -21,72 +21,6 @@ import { createBeveledCube } from './cube';
 
 const PROJECTILE_UNIFORM_SIZE = 64; // mat4x4f only
 
-// ── Debug wireframe ──────────────────────────────────────────────────
-//
-// Line-list pipeline for visualizing OBB hitboxes and the cells they
-// overlap. Instance data (model + color) lives in a storage buffer so
-// many wireframes draw in a single instanced call.
-//
-// Vertex data: 12 edges of a unit cube in [-1, 1] (matching the entity
-// mesh convention — same half-extent semantics as the projectile cube).
-// Depth test is `always` so wireframes show through walls during debug.
-
-const WIREFRAME_INSTANCE_SIZE = 80; // mat4(64) + vec4 color(16)
-const WIREFRAME_INSTANCE_CAPACITY = 1024;
-
-// 24 vertices: 12 line-list edges of a [-1, 1] cube.
-const unitCubeWireframeVertices: Float32Array<ArrayBuffer> = new Float32Array([
-	// -Z face (4 edges)
-	-1, -1, -1, 1, -1, -1, 1, -1, -1, 1, 1, -1, 1, 1, -1, -1, 1, -1, -1, 1, -1,
-	-1, -1, -1,
-	// +Z face (4 edges)
-	-1, -1, 1, 1, -1, 1, 1, -1, 1, 1, 1, 1, 1, 1, 1, -1, 1, 1, -1, 1, 1, -1, -1,
-	1,
-	// connecting (4 edges)
-	-1, -1, -1, -1, -1, 1, 1, -1, -1, 1, -1, 1, 1, 1, -1, 1, 1, 1, -1, 1, -1,
-	-1, 1, 1,
-]);
-const WIREFRAME_VERTEX_COUNT = 24;
-
-const wireframeShader = /*wgsl*/ `
-	struct Uniforms {
-		matrix: mat4x4f,
-		eyePosition: vec3f,
-		shininess: f32,
-		specularStrength: f32,
-		fogStart: f32,
-		fogEnd: f32,
-	}
-
-	struct Instance {
-		model: mat4x4f,
-		color: vec4f,
-	}
-
-	@group(0) @binding(0) var<uniform> uni: Uniforms;
-	@group(1) @binding(0) var<storage, read> instances: array<Instance>;
-
-	struct VSOutput {
-		@builtin(position) position: vec4f,
-		@location(0) color: vec4f,
-	}
-
-	@vertex fn vs(
-		@location(0) pos: vec3f,
-		@builtin(instance_index) inst: u32,
-	) -> VSOutput {
-		var out: VSOutput;
-		let worldPos = (instances[inst].model * vec4f(pos, 1.0)).xyz;
-		out.position = uni.matrix * vec4f(worldPos, 1.0);
-		out.color = instances[inst].color;
-		return out;
-	}
-
-	@fragment fn fs(inp: VSOutput) -> @location(0) vec4f {
-		return inp.color;
-	}
-`;
-
 const projectileShader = /*wgsl*/ `
 	struct Uniforms {
 		matrix: mat4x4f,
@@ -149,15 +83,6 @@ export interface ProjectileRenderer {
 	 */
 	cubeVertices: Float32Array<ArrayBuffer>;
 	cubeVertexCount: number;
-
-	// ── Debug wireframe resources ────────────────────────────────────
-	wireframePipeline: GPURenderPipeline;
-	wireframeVertexBuffer: GPUBuffer;
-	wireframeInstanceBuffer: GPUBuffer;
-	wireframeBindGroup: GPUBindGroup;
-	wireframeInstanceCapacity: number;
-	/** Scratch CPU staging buffer: one struct per instance × all slots. */
-	wireframeStaging: Float32Array<ArrayBuffer>;
 }
 
 export interface ProjectileRenderData {
@@ -236,132 +161,13 @@ export function initProjectileRenderer(
 
 	const mesh = createBeveledCube();
 
-	// ── Wireframe pipeline (debug) ───────────────────────────────────
-	const wireframeModule = device.createShaderModule({
-		code: wireframeShader,
-	});
-
-	const wireframeGroup1Layout = device.createBindGroupLayout({
-		label: 'projectile wireframe group 1',
-		entries: [
-			{
-				binding: 0,
-				visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
-				buffer: { type: 'read-only-storage' },
-			},
-		],
-	});
-
-	const wireframePipelineLayout = device.createPipelineLayout({
-		bindGroupLayouts: [mainGroup0BGL, wireframeGroup1Layout],
-	});
-
-	const wireframePipeline = device.createRenderPipeline({
-		label: 'projectile wireframe pipeline',
-		layout: wireframePipelineLayout,
-		vertex: {
-			module: wireframeModule,
-			entryPoint: 'vs',
-			buffers: [
-				{
-					arrayStride: 12, // vec3 position only
-					attributes: [
-						{
-							shaderLocation: 0,
-							offset: 0,
-							format: 'float32x3',
-						},
-					],
-				},
-			],
-		},
-		fragment: {
-			module: wireframeModule,
-			entryPoint: 'fs',
-			targets: [{ format: presentationFormat }],
-		},
-		primitive: { topology: 'line-list' },
-		// depthCompare: 'always' + no depth write → wireframes visible
-		// through walls. We want to *see* the OBB even if occluded.
-		depthStencil: {
-			depthWriteEnabled: false,
-			depthCompare: 'always',
-			format: 'depth24plus',
-		},
-	});
-
-	const wireframeVertexBuffer = device.createBuffer({
-		label: 'projectile wireframe vertex buffer',
-		size: unitCubeWireframeVertices.byteLength,
-		usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-	});
-	device.queue.writeBuffer(
-		wireframeVertexBuffer,
-		0,
-		unitCubeWireframeVertices,
-	);
-
-	const wireframeInstanceBuffer = device.createBuffer({
-		label: 'projectile wireframe instance buffer',
-		size: WIREFRAME_INSTANCE_SIZE * WIREFRAME_INSTANCE_CAPACITY,
-		usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-	});
-
-	const wireframeBindGroup = device.createBindGroup({
-		label: 'projectile wireframe bind group',
-		layout: wireframeGroup1Layout,
-		entries: [
-			{ binding: 0, resource: { buffer: wireframeInstanceBuffer } },
-		],
-	});
-
-	const wireframeStaging = new Float32Array(
-		(WIREFRAME_INSTANCE_SIZE / 4) * WIREFRAME_INSTANCE_CAPACITY,
-	);
-
 	return {
 		pipeline,
 		sharedBindGroup0,
 		group1Layout,
 		cubeVertices: mesh.vertices,
 		cubeVertexCount: mesh.vertexCount,
-		wireframePipeline,
-		wireframeVertexBuffer,
-		wireframeInstanceBuffer,
-		wireframeBindGroup,
-		wireframeInstanceCapacity: WIREFRAME_INSTANCE_CAPACITY,
-		wireframeStaging,
 	};
-}
-
-/**
- * Draw wireframe cubes. Each entry in `renderer.wireframeStaging` is a
- * (model, color) pair; the unit cube ([-1, 1] convention, matching the
- * solid projectile mesh) is transformed by `model` and outlined in `color`.
- *
- * Used for debug visualization of OBBs and the cells they overlap.
- * Caller is responsible for capacity (≤ wireframeInstanceCapacity).
- */
-export function drawProjectileWireframes(
-	pass: GPURenderPassEncoder,
-	device: GPUDevice,
-	renderer: ProjectileRenderer,
-	instanceCount: number,
-): void {
-	if (instanceCount === 0) return;
-	const bytesUsed = instanceCount * WIREFRAME_INSTANCE_SIZE;
-	device.queue.writeBuffer(
-		renderer.wireframeInstanceBuffer,
-		0,
-		renderer.wireframeStaging.buffer,
-		0,
-		bytesUsed,
-	);
-	pass.setPipeline(renderer.wireframePipeline);
-	pass.setBindGroup(0, renderer.sharedBindGroup0);
-	pass.setBindGroup(1, renderer.wireframeBindGroup);
-	pass.setVertexBuffer(0, renderer.wireframeVertexBuffer);
-	pass.draw(WIREFRAME_VERTEX_COUNT, instanceCount);
 }
 
 export function createProjectileRenderData(

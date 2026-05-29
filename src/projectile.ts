@@ -14,6 +14,8 @@
  *   (b) it hits a block it can't break, (c) age exceeds maxLifetime.
  */
 
+import type { Tool } from './tool';
+
 export type VoxelCoord = readonly [number, number, number];
 
 /**
@@ -616,4 +618,10 @@ export interface Projectile {
 	 * the "first block always breaks" freebie. Cleared on the first break.
 	 */
 	firstHit: boolean;
+	/**
+	 * The tool that spawned this projectile. Carried so the break callback
+	 * can dispatch per-tool effects (BP payout, FX, sounds). The manager
+	 * never reads tool fields itself — opaque pass-through.
+	 */
+	sourceTool: Tool;
 }

@@ -1,10 +1,23 @@
 const SLOT_COUNT = 4;
 
-export interface ToolbarState {
-	getSelected(): number;
+export interface ToolbarOptions {
+	/** Initial highlighted slot. Defaults to 0. */
+	initialIndex?: number;
+	/**
+	 * Called whenever the user changes the selected slot. The receiver
+	 * (main.ts) writes through to `gameState.selectedToolIndex` so the
+	 * toolbar isn't a second source of truth.
+	 */
+	onSelect?: (index: number) => void;
 }
 
-export function initToolbar(): ToolbarState {
+/**
+ * Initialize the hotbar UI. Binds 1-4 + scroll wheel to slot selection
+ * and toggles the `.selected` class on `.toolbar-item` elements. State
+ * lives wherever `onSelect` writes — the toolbar holds only the current
+ * index locally for diffing purposes (avoid pointless DOM toggles).
+ */
+export function initToolbar(opts: ToolbarOptions = {}): void {
 	const items = Array.from(
 		document.querySelectorAll<HTMLElement>('.toolbar-item'),
 	);
@@ -14,7 +27,7 @@ export function initToolbar(): ToolbarState {
 		);
 	}
 
-	let selected = 0;
+	let selected = opts.initialIndex ?? 0;
 
 	function apply(): void {
 		for (let i = 0; i < items.length; i++) {
@@ -29,6 +42,7 @@ export function initToolbar(): ToolbarState {
 		if (next === selected) return;
 		selected = next;
 		apply();
+		opts.onSelect?.(selected);
 	}
 
 	window.addEventListener('keydown', (e) => {
@@ -47,8 +61,4 @@ export function initToolbar(): ToolbarState {
 		},
 		{ passive: false },
 	);
-
-	return {
-		getSelected: () => selected,
-	};
 }

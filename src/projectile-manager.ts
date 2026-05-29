@@ -24,13 +24,13 @@ import {
 	createProjectileRenderData,
 	updateProjectileTransform,
 	drawProjectiles,
-	drawProjectileWireframes,
 	destroyProjectileRenderData,
 } from './projectile-renderer';
 import type {
 	ProjectileRenderer,
 	ProjectileRenderData,
 } from './projectile-renderer';
+import type { Tool } from './tool';
 import type { World } from './world';
 import {
 	orientationFromDirection,
@@ -43,9 +43,11 @@ export interface ProjectileManagerCallbacks {
 	 * Fired after the manager has set the voxel to AIR. The caller is
 	 * responsible for all downstream effects: schedule chunk remesh,
 	 * invalidate any AI caches (flow field), award BP, update HUD.
-	 * Keeps the manager decoupled from game-state and rendering concerns.
+	 * `sourceTool` is the tool that fired the projectile — callbacks
+	 * dispatch per-tool payouts/FX off it. Keeps the manager decoupled
+	 * from game-state and rendering concerns.
 	 */
-	onBlockBroken(bx: number, by: number, bz: number): void;
+	onBlockBroken(bx: number, by: number, bz: number, sourceTool: Tool): void;
 }
 
 export class ProjectileManager {
@@ -82,12 +84,15 @@ export class ProjectileManager {
 	 * Spawn a projectile. `origin` and `direction` are copied into fresh
 	 * buffers — the caller may mutate or reuse the inputs after the call.
 	 * `direction` must be a unit vector; velocity is computed as
-	 * direction × profile.speed.
+	 * direction × profile.speed. `sourceTool` is stamped on the projectile
+	 * and threaded to the break callback so the callback can dispatch
+	 * per-tool effects (BP payout, FX, sounds).
 	 */
 	spawn(
 		profile: ProjectileProfile,
 		origin: Float32Array,
 		direction: Float32Array,
+		sourceTool: Tool,
 	): void {
 		const position = new Float32Array([origin[0], origin[1], origin[2]]);
 		const velocity = new Float32Array([
@@ -107,6 +112,7 @@ export class ProjectileManager {
 			strength: profile.strength,
 			age: 0,
 			firstHit: true,
+			sourceTool,
 		};
 		const renderData = createProjectileRenderData(
 			this.device,
@@ -187,7 +193,12 @@ export class ProjectileManager {
 						// First-contact freebie OR strength-affords-it.
 						// Strength decrements regardless — freebie still costs.
 						this.world.setBlock(hitBX, hitBY, hitBZ, AIR);
-						this.callbacks.onBlockBroken(hitBX, hitBY, hitBZ);
+						this.callbacks.onBlockBroken(
+							hitBX,
+							hitBY,
+							hitBZ,
+							p.sourceTool,
+						);
 						p.strength -= hardness;
 						p.firstHit = false;
 						if (p.strength <= 0) {
@@ -242,88 +253,5 @@ export class ProjectileManager {
 		}
 		this.projectiles.pop();
 		this.renderDatas.pop();
-	}
-
-	/**
-	 * Debug visualization. Draws each projectile's OBB outline in cyan
-	 * and the wireframe of every voxel cell its hitbox reports as
-	 * overlapping in magenta. Both layers use `depthCompare: 'always'`
-	 * so they remain visible through terrain.
-	 *
-	 * If a cell visually clipped by the cube does NOT show up as a
-	 * magenta wireframe → hitbox enumeration is missing it. If it DOES
-	 * show up but no break happens → the collision logic / leading-edge
-	 * sort isn't picking it.
-	 *
-	 * Wireframe mesh lives in [-1, 1] (matching the solid cube mesh), so
-	 * scales here mirror writeTransform: `visualSize * 0.5` for OBB,
-	 * `blockSize * 0.5` for cells. Match the conventions exactly or the
-	 * wireframes drift from what the manager actually thinks.
-	 */
-	drawDebugWireframes(pass: GPURenderPassEncoder): void {
-		const bs = this.world.blockSize;
-		const stride = 80 / 4; // 20 floats per instance (mat4 + vec4 color)
-		const staging = this.renderer.wireframeStaging;
-		const cap = this.renderer.wireframeInstanceCapacity;
-		let count = 0;
-
-		const writeInstance = (
-			model: Float32Array<ArrayBuffer>,
-			r: number,
-			g: number,
-			b: number,
-		): void => {
-			if (count >= cap) return;
-			const base = count * stride;
-			staging.set(model, base);
-			staging[base + 16] = r;
-			staging[base + 17] = g;
-			staging[base + 18] = b;
-			staging[base + 19] = 1;
-			count++;
-		};
-
-		// OBB outlines — cyan. Same T * R * S as writeTransform so the
-		// wireframe is the exact outline of the rendered cube.
-		for (const p of this.projectiles) {
-			const s = p.profile.visualSize * 0.5;
-			mat4.translation(
-				[p.position[0], p.position[1], p.position[2]],
-				this.modelScratch,
-			);
-			mat4.multiply(this.modelScratch, p.orientation, this.modelScratch);
-			mat4.scale(this.modelScratch, [s, s, s], this.modelScratch);
-			writeInstance(this.modelScratch, 0, 1, 1);
-		}
-
-		// Cell outlines — magenta. Re-runs cellsAt to get the same set the
-		// manager would. Each cell renders as a unit cube ([-1, 1]) scaled
-		// by blockSize/2 → edge length blockSize, positioned at cell center.
-		const cellScale = bs * 0.5;
-		for (const p of this.projectiles) {
-			const cells = p.profile.hitbox.cellsAt(
-				p.position,
-				p.orientation,
-				bs,
-			);
-			for (const cell of cells) {
-				mat4.translation(
-					[
-						(cell[0] + 0.5) * bs,
-						(cell[1] + 0.5) * bs,
-						(cell[2] + 0.5) * bs,
-					],
-					this.modelScratch,
-				);
-				mat4.scale(
-					this.modelScratch,
-					[cellScale, cellScale, cellScale],
-					this.modelScratch,
-				);
-				writeInstance(this.modelScratch, 1, 0, 1);
-			}
-		}
-
-		drawProjectileWireframes(pass, this.device, this.renderer, count);
 	}
 }

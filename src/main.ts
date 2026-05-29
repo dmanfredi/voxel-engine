@@ -8,7 +8,7 @@ import { greedyMesh } from './greedy-mesh';
 import { FREECAM, physicsTick, createPlayerState } from './movement';
 import { World } from './world';
 import { CHUNK_SIZE, chunkKey } from './chunk';
-import { AIR, MARBLE, extractBlockProps } from './block';
+import { extractBlockProps } from './block';
 import { raycast, type RaycastHit } from './raycast';
 // import { initHighlight, drawHighlight } from './highlight';
 import { createGameState } from './game-state';
@@ -22,6 +22,7 @@ import { generateMips, numMipLevels } from './mipmap';
 import { initToolbar } from './toolbar';
 import { ProjectileManager } from './projectile-manager';
 import { initProjectileRenderer } from './projectile-renderer';
+import { canFire, tickToolCooldowns, type Tool } from './tool';
 import marbleTextureUrl from '../assets/MarbleBase1024.png';
 import bricksTextureUrl from '../assets/Bricks060_1K-PNG_Color.png';
 import darkMarbleTextureUrl from '../assets/DarkMarble.png';
@@ -616,6 +617,11 @@ async function main(): Promise<void> {
 	let renderRequestId: number;
 	let lastT = 0;
 	const keysDown = new Set<string>();
+	// Mouse-button hold state. Autofire-on-hold is driven from the
+	// per-frame tick reading these, not from mousedown — that way the
+	// tool cooldown is the rate-limit and the player just keeps holding.
+	let lmbDown = false;
+	let rmbDown = false;
 	const playerState = createPlayerState();
 	const playerHeight = BLOCK_SIZE * 2 * 0.9;
 	const playerHalfWidth = BLOCK_SIZE / 4;
@@ -630,6 +636,137 @@ async function main(): Promise<void> {
 	}
 	updateBPDisplay();
 
+	// Toolbar — 1-4 keys and scroll wheel write through to gameState so
+	// LMB/RMB handlers read from a single source of truth.
+	initToolbar({
+		initialIndex: gameState.selectedToolIndex,
+		onSelect: (i) => {
+			gameState.selectedToolIndex = i;
+		},
+	});
+
+	// Spawn scratch — reused every fire, avoid per-shot allocation. We
+	// only need spawnOrigin (position is copied inside spawn()); the
+	// projectile's direction is cameraFront, which spawn() also copies.
+	const spawnOrigin = new Float32Array(3);
+	const cameraRight = new Float32Array(3);
+
+	/**
+	 * Fire the given tool's LMB action — spawn one projectile from a
+	 * camera-local offset, reset its cooldown, debit its cost. Caller is
+	 * responsible for the canFire gate (so the per-frame loop doesn't
+	 * pay the offset math when the shot would be rejected anyway).
+	 */
+	function fireLMB(tool: Tool): void {
+		// camera-local right = normalize(cross(front, up)). cameraUp is
+		// world-Y by construction, so this is well-defined unless the
+		// player is looking straight up/down — pitch is clamped to ±88°
+		// in the mousemove handler so we never reach that singularity.
+		cameraRight[0] =
+			cameraFront[1] * cameraUp[2] - cameraFront[2] * cameraUp[1];
+		cameraRight[1] =
+			cameraFront[2] * cameraUp[0] - cameraFront[0] * cameraUp[2];
+		cameraRight[2] =
+			cameraFront[0] * cameraUp[1] - cameraFront[1] * cameraUp[0];
+		const rLen = Math.hypot(cameraRight[0], cameraRight[1], cameraRight[2]);
+		cameraRight[0] /= rLen;
+		cameraRight[1] /= rLen;
+		cameraRight[2] /= rLen;
+
+		const off = tool.spawnOffset;
+		for (let i = 0; i < 3; i++) {
+			spawnOrigin[i] =
+				cameraPos[i] +
+				cameraRight[i] * off[0] +
+				cameraUp[i] * off[1] +
+				cameraFront[i] * off[2];
+		}
+
+		projectileManager.spawn(
+			tool.projectile,
+			spawnOrigin,
+			cameraFront,
+			tool,
+		);
+
+		tool.lmbCooldownRemaining = tool.lmbCooldown;
+		if (tool.lmbCost > 0) {
+			gameState.bp -= tool.lmbCost;
+			updateBPDisplay();
+		}
+	}
+
+	/**
+	 * Fire the given tool's RMB action — resolve the build profile against
+	 * the raycast hit, place each cell the player can afford, and reset
+	 * the RMB cooldown iff something was actually placed. No-op on
+	 * targets that yield zero cells; no rate penalty when nothing lands
+	 * (Minecraft-style — holding RMB into open air doesn't cool down).
+	 *
+	 * onRegionChanged handles the meshing fan-out for any cell count; for
+	 * a single cell it does the same surgical neighbor scheduling
+	 * onBlockChanged would.
+	 */
+	function fireRMB(tool: Tool, hit: RaycastHit): void {
+		const cells = tool.buildProfile.targetSelector(hit, cameraFront);
+		if (cells.length === 0) return;
+
+		// Player AABB in block coords. Computed once; each candidate cell
+		// is tested against this so we don't trap the player in their own
+		// build (carried over from the pre-tools RMB direct-place check).
+		const camX = cameraPos[0] / BLOCK_SIZE;
+		const camY = cameraPos[1] / BLOCK_SIZE;
+		const camZ = cameraPos[2] / BLOCK_SIZE;
+		const feetY = camY - playerHeight / BLOCK_SIZE;
+		const hw = playerHalfWidth / BLOCK_SIZE;
+		const pMinX = Math.floor(camX - hw);
+		const pMaxX = Math.floor(camX + hw - 1e-6);
+		const pMinY = Math.floor(feetY);
+		const pMaxY = Math.floor(camY - 1e-6);
+		const pMinZ = Math.floor(camZ - hw);
+		const pMaxZ = Math.floor(camZ + hw - 1e-6);
+
+		const { blockId, costPerBlock } = tool.buildProfile;
+
+		let placedAny = false;
+		let minBX = Infinity;
+		let minBY = Infinity;
+		let minBZ = Infinity;
+		let maxBX = -Infinity;
+		let maxBY = -Infinity;
+		let maxBZ = -Infinity;
+
+		for (const [px, py, pz] of cells) {
+			if (gameState.bp < costPerBlock) break;
+			if (
+				px >= pMinX &&
+				px <= pMaxX &&
+				py >= pMinY &&
+				py <= pMaxY &&
+				pz >= pMinZ &&
+				pz <= pMaxZ
+			) {
+				continue; // would trap the player
+			}
+			if (!tryPlaceBlock(world, entityManager, px, py, pz, blockId)) {
+				continue; // entity overlap, or cell already non-air
+			}
+			gameState.bp -= costPerBlock;
+			placedAny = true;
+			if (px < minBX) minBX = px;
+			if (py < minBY) minBY = py;
+			if (pz < minBZ) minBZ = pz;
+			if (px > maxBX) maxBX = px;
+			if (py > maxBY) maxBY = py;
+			if (pz > maxBZ) maxBZ = pz;
+		}
+
+		if (!placedAny) return;
+		onRegionChanged(minBX, minBY, minBZ, maxBX, maxBY, maxBZ);
+		updateBPDisplay();
+		tool.rmbCooldownRemaining = tool.rmbCooldown;
+	}
+
 	// Projectile system. Constructed here (rather than next to entityManager)
 	// so its onBlockBroken callback can close over gameState + updateBPDisplay.
 	// onBlockChanged is a hoisted function declaration so referencing it from
@@ -637,10 +774,10 @@ async function main(): Promise<void> {
 	const projectileManager = new ProjectileManager(
 		world,
 		{
-			onBlockBroken: (bx, by, bz) => {
+			onBlockBroken: (bx, by, bz, sourceTool) => {
 				onBlockChanged(bx, by, bz);
 				entityManager.invalidateFlowField();
-				gameState.bp++;
+				gameState.bp += sourceTool.bpPerBreak;
 				updateBPDisplay();
 			},
 		},
@@ -834,6 +971,30 @@ async function main(): Promise<void> {
 		debuggerParams.targetBlock = currentHit
 			? currentHit.blockPos.join(', ')
 			: 'none';
+
+		// Tool cooldowns + autofire-on-hold. Runs after raycast so RMB
+		// fires against the current frame's hit. Cooldown is the
+		// rate-limiter: holding LMB/RMB simply queues the next fire as
+		// soon as it expires. Non-null chargeTime (charge-up tools) isn't
+		// supported yet — when it lands the LMB branch grows that case.
+		tickToolCooldowns(gameState.tools, dt);
+		const selectedTool = gameState.tools[gameState.selectedToolIndex];
+		if (selectedTool) {
+			if (
+				lmbDown &&
+				selectedTool.chargeTime === null &&
+				canFire(selectedTool, 'lmb', gameState)
+			) {
+				fireLMB(selectedTool);
+			}
+			if (
+				rmbDown &&
+				currentHit &&
+				canFire(selectedTool, 'rmb', gameState)
+			) {
+				fireRMB(selectedTool, currentHit);
+			}
+		}
 		// eslint-disable-next-line @typescript-eslint/restrict-template-expressions
 		debuggerParams.playerPos = `${Math.round(cameraPos[0] / BLOCK_SIZE)}, ${Math.round(cameraPos[1] / BLOCK_SIZE)}, ${Math.round(cameraPos[2] / BLOCK_SIZE)}`;
 
@@ -966,10 +1127,6 @@ async function main(): Promise<void> {
 		// less-equal cubemap pass is the final color contributor.
 		projectileManager.draw(pass);
 
-		// Debug: cyan OBB outline + magenta cells the hitbox overlaps.
-		// Always-on while diagnosing — remove or gate when settled.
-		projectileManager.drawDebugWireframes(pass);
-
 		// Draw skybox (after geometry, uses less-equal depth test)
 		drawSkybox(pass, device, skybox, viewMatrix, projection);
 
@@ -998,54 +1155,24 @@ async function main(): Promise<void> {
 
 	canvas.addEventListener('mousedown', (e) => {
 		if (document.pointerLockElement !== canvas) return;
-		if (!currentHit) return;
+		// Both LMB and RMB just flip their autofire flag — the actual
+		// fire happens in the per-frame tick, gated by canFire.
+		if (e.button === 0) lmbDown = true;
+		else if (e.button === 2) rmbDown = true;
+	});
 
-		if (e.button === 0) {
-			// Left click = break block (gains 1 BP)
-			const [bx, by, bz] = currentHit.blockPos;
-			world.setBlock(bx, by, bz, AIR);
-			onBlockChanged(bx, by, bz);
-			entityManager.invalidateFlowField();
-			gameState.bp++;
-			updateBPDisplay();
-		} else if (e.button === 2) {
-			// Right click = place block (costs 1 BP)
-			if (gameState.bp <= 0) return;
-			const px = currentHit.blockPos[0] + currentHit.faceNormal[0];
-			const py = currentHit.blockPos[1] + currentHit.faceNormal[1];
-			const pz = currentHit.blockPos[2] + currentHit.faceNormal[2];
+	canvas.addEventListener('mouseup', (e) => {
+		if (e.button === 0) lmbDown = false;
+		else if (e.button === 2) rmbDown = false;
+	});
 
-			// Don't place a block where the player is standing
-			const camX = cameraPos[0] / BLOCK_SIZE;
-			const camY = cameraPos[1] / BLOCK_SIZE;
-			const camZ = cameraPos[2] / BLOCK_SIZE;
-			const feetY = camY - playerHeight / BLOCK_SIZE;
-			const hw = playerHalfWidth / BLOCK_SIZE;
-
-			const playerMinBX = Math.floor(camX - hw);
-			const playerMaxBX = Math.floor(camX + hw - 1e-6);
-			const playerMinBY = Math.floor(feetY);
-			const playerMaxBY = Math.floor(camY - 1e-6);
-			const playerMinBZ = Math.floor(camZ - hw);
-			const playerMaxBZ = Math.floor(camZ + hw - 1e-6);
-
-			if (
-				px >= playerMinBX &&
-				px <= playerMaxBX &&
-				py >= playerMinBY &&
-				py <= playerMaxBY &&
-				pz >= playerMinBZ &&
-				pz <= playerMaxBZ
-			) {
-				return; // would trap the player
-			}
-
-			if (!tryPlaceBlock(world, entityManager, px, py, pz, MARBLE)) {
-				return; // would overlap an entity
-			}
-			onBlockChanged(px, py, pz);
-			gameState.bp--;
-			updateBPDisplay();
+	// Pointer-lock loss (user hits Esc, alt-tabs, etc.) skips the mouseup
+	// event for whatever was held — flush button state to avoid a "stuck"
+	// button that keeps autofiring when the window regains focus.
+	document.addEventListener('pointerlockchange', () => {
+		if (document.pointerLockElement !== canvas) {
+			lmbDown = false;
+			rmbDown = false;
 		}
 	});
 
@@ -1106,6 +1233,8 @@ async function main(): Promise<void> {
 	// Prevent "stuck key" if the tab loses focus mid-press
 	window.addEventListener('blur', () => {
 		keysDown.clear();
+		lmbDown = false;
+		rmbDown = false;
 	});
 
 	// ============================================
@@ -1142,8 +1271,5 @@ async function main(): Promise<void> {
 		tick(t);
 	});
 }
-
-// Toolbar UI
-initToolbar();
 
 await main();

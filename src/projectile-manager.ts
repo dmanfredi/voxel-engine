@@ -120,18 +120,26 @@ export class ProjectileManager {
 		this.projectiles.push(projectile);
 		this.renderDatas.push(renderData);
 		// Initial transform — without this the projectile renders at the
-		// origin for one frame before its first update tick lands.
-		this.writeTransform(projectile, renderData);
+		// origin for one frame before its first update tick lands. Offsets
+		// are 0: spawn position is at the camera (within a hip-fire nudge),
+		// so the player-relative dx/dz are inside the [-hw, hw] no-wrap
+		// band by construction.
+		this.writeTransform(projectile, renderData, 0, 0);
 	}
 
 	/**
 	 * Per-tick update. Iterates backward so swap-pop dispose doesn't skip
 	 * elements. Order within a tick: age check → move → wrap → scan
-	 * hitbox cells for the first solid → break-or-stop.
+	 * hitbox cells for the first solid → break-or-stop → render-time
+	 * wrap-offset upload. `playerPos` drives the render-side wrap so
+	 * projectiles on the far side of the seam draw at their nearer copy.
 	 */
-	update(dt: number): void {
+	update(dt: number, playerPos: Float32Array): void {
 		const bs = this.world.blockSize;
 		const ww = this.worldWidthUnits;
+		const hw = ww / 2;
+		const px = playerPos[0];
+		const pz = playerPos[2];
 
 		for (let i = this.projectiles.length - 1; i >= 0; i--) {
 			const p = this.projectiles[i];
@@ -214,20 +222,32 @@ export class ProjectileManager {
 			}
 
 			// Survived this tick — push the new transform to the GPU.
+			// Render-time wrap: if the projectile sits on the far side of
+			// the wrapping world relative to the player, offset it to its
+			// nearer copy. Same trick chunks and entities use.
 			if (!disposed) {
-				this.writeTransform(p, this.renderDatas[i]);
+				const dx = p.position[0] - px;
+				const dz = p.position[2] - pz;
+				const offsetX = dx > hw ? -ww : dx < -hw ? ww : 0;
+				const offsetZ = dz > hw ? -ww : dz < -hw ? ww : 0;
+				this.writeTransform(p, this.renderDatas[i], offsetX, offsetZ);
 			}
 		}
 	}
 
-	private writeTransform(p: Projectile, rd: ProjectileRenderData): void {
+	private writeTransform(
+		p: Projectile,
+		rd: ProjectileRenderData,
+		offsetX: number,
+		offsetZ: number,
+	): void {
 		// Cube mesh vertices live in [-1, 1] (half-extent convention,
 		// matching entity meshes), so scale by visualSize/2 to produce a
 		// cube of `visualSize` edge length. The hitbox uses the same
 		// half-extent (visualSize * 0.5) so collision and visual align.
 		const s = p.profile.visualSize * 0.5;
 		mat4.translation(
-			[p.position[0], p.position[1], p.position[2]],
+			[p.position[0] + offsetX, p.position[1], p.position[2] + offsetZ],
 			this.modelScratch,
 		);
 		mat4.multiply(this.modelScratch, p.orientation, this.modelScratch);

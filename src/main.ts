@@ -964,7 +964,7 @@ async function main(): Promise<void> {
 			onRegionChanged,
 		);
 
-		projectileManager.update(dt);
+		projectileManager.update(dt, cameraPos);
 
 		// Raycast from camera to find targeted block
 		currentHit = raycast(cameraPos, cameraFront, world, MAX_REACH);

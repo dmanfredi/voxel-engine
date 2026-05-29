@@ -164,6 +164,22 @@ After (load-bearing only — the *why* of cooldown ticking when ungrounded):
  */
 ```
 
+**Keep comments timeless.** Prose ages faster than code; favor framings that survive tuning changes and content churn.
+
+Don't write:
+
+- **Version refs** (`v1`, `for v1`) — say `currently` or drop the hedge.
+- **Specific tuning numbers in prose** (`speed=30`, `0.15s cooldown`, `up to four BRICK`) — the code states them, and they'll change. Describe the principle, not the value.
+- **Specific block/tool/material names in cross-cutting docs** (`MARBLE`, `BRICK`, `DARK_MARBLE`) — content churns; reference the concept (`soft blocks`) or omit.
+- **Historical anchors** (`the old behavior`, `pre-tools`, `carried over from`, `formerly`) — once the predecessor is gone, the comparison is dead weight.
+- **Tuning justifications for stubs** (`no tool fires fast enough to matter` on a stubbed cap) — the *reason* for the stub is itself a tuning artifact. Just say it's stubbed.
+
+Do write:
+
+- **Prospective flags** — `(TODO when art lands)`, `(future)`, "field-shaped hole". These mark incompleteness explicitly instead of pretending the present is the end state.
+- **Designed seams** — "when per-profile meshes land, this becomes a richer `{ mesh, color, ... }` visual struct". Describes architecture, not the present version.
+- **Concrete external references** — `Minecraft-style`, `Amanatides & Woo`. Points to durable artifacts.
+
 Dead code kept as a "we tried this, here's why we didn't keep it" record (e.g. the commented-out friction block in `sphere-physics.ts`) is fine — that's a load-bearing warning, not noise.
 
 ## Key Dependencies

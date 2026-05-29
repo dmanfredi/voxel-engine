@@ -713,7 +713,7 @@ async function main(): Promise<void> {
 
 		// Player AABB in block coords. Computed once; each candidate cell
 		// is tested against this so we don't trap the player in their own
-		// build (carried over from the pre-tools RMB direct-place check).
+		// build.
 		const camX = cameraPos[0] / BLOCK_SIZE;
 		const camY = cameraPos[1] / BLOCK_SIZE;
 		const camZ = cameraPos[2] / BLOCK_SIZE;
@@ -975,8 +975,8 @@ async function main(): Promise<void> {
 		// Tool cooldowns + autofire-on-hold. Runs after raycast so RMB
 		// fires against the current frame's hit. Cooldown is the
 		// rate-limiter: holding LMB/RMB simply queues the next fire as
-		// soon as it expires. Non-null chargeTime (charge-up tools) isn't
-		// supported yet — when it lands the LMB branch grows that case.
+		// soon as it expires. The chargeTime === null check guards the
+		// autofire branch — charge-up tools will grow their own branch.
 		tickToolCooldowns(gameState.tools, dt);
 		const selectedTool = gameState.tools[gameState.selectedToolIndex];
 		if (selectedTool) {

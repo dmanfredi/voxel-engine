@@ -7,10 +7,9 @@
  * cooldown state lives mutably on the tool itself so it survives slot
  * switches (you can't skip a cooldown by tabbing away and back).
  *
- * Deliberately stubbed for now: icon/model fields (no art yet),
- * non-null chargeTime (no charge-up tools yet), in-flight projectile
- * cap (no tool fires fast enough to matter), tool-vs-entity collision
- * (projectiles still phase through enemies — deferred design call).
+ * Stubbed for now: icon/model fields, non-null chargeTime, in-flight
+ * projectile cap, tool-vs-entity collision (projectiles currently
+ * phase through enemies — deferred design call).
  */
 
 import { type BlockId, MARBLE } from './block';
@@ -35,7 +34,7 @@ export interface BuildProfile {
 	targetSelector: (hit: RaycastHit, cameraDir: Float32Array) => VoxelCoord[];
 }
 
-/** Place one block on the face the raycast hit — the old RMB behavior. */
+/** Place one block on the face the raycast hit. */
 export function singleBlockBuild(
 	blockId: BlockId,
 	costPerBlock: number,
@@ -97,8 +96,8 @@ export interface Tool {
 	// --- Fire mode ---
 	/**
 	 * null = autofire while LMB held (gated by cooldown). number = hold
-	 * for this many seconds to charge, release to fire. v1 supports only
-	 * null; non-null is a field-shaped hole for the charge-up case.
+	 * for this many seconds to charge, release to fire. Only the null
+	 * branch is wired into the tick; non-null is a field-shaped hole.
 	 */
 	chargeTime: number | null;
 
@@ -203,9 +202,9 @@ export function tickToolCooldowns(
 /**
  * Starter pickaxe.
  */
-const PICKAXE_VISUAL = 10;
+const PICKAXE_VISUAL = 5;
 const pickaxeProjectile: ProjectileProfile = {
-	strength: 1,
+	strength: 50,
 	speed: 200,
 	hitbox: obbHitbox(PICKAXE_VISUAL * 0.5),
 	maxLifetime: 5,

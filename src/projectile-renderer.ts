@@ -3,8 +3,8 @@
  * for projectile visuals. Parallel to entity-renderer.ts but independent.
  *
  * Why standalone (not folded into entity renderer):
- * - No texture sampling. Projectile color is hardcoded in the shader for
- *   v1; a uniform-color future is one extra field in InstanceUniforms.
+ * - No texture sampling. Projectile color is hardcoded in the shader;
+ *   a uniform-color future is one extra field in InstanceUniforms.
  * - No material LUT lookup, no specular, no fog. Projectiles are small
  *   short-lived markers — simpler shading reads cleaner and renders faster.
  * - No coupling to the block texture array (which exists to serve voxels,
@@ -48,7 +48,7 @@ const projectileShader = /*wgsl*/ `
 	@group(0) @binding(0) var<uniform> uni: Uniforms;
 	@group(1) @binding(0) var<uniform> inst: InstanceUniforms;
 
-	// CSS "skyblue" (135, 206, 235). Hardcoded for v1; promote to an
+	// CSS "skyblue" (135, 206, 235). Hardcoded; promote to an
 	// instance uniform when projectiles need per-tool colors.
 	const COLOR = vec3f(0.529, 0.808, 0.922);
 	const LIGHT_DIR = vec3f(-0.387, 0.730, 0.563);
@@ -77,9 +77,9 @@ export interface ProjectileRenderer {
 	sharedBindGroup0: GPUBindGroup;
 	group1Layout: GPUBindGroupLayout;
 	/**
-	 * v1 ships with a single hardcoded cube mesh that all projectiles draw.
-	 * When per-profile meshes land, this gets keyed by profile/shape and
-	 * the renderer picks the mesh at spawn time.
+	 * Single hardcoded cube mesh shared by all projectiles. When
+	 * per-profile meshes land, this gets keyed by profile/shape and the
+	 * renderer picks the mesh at spawn time.
 	 */
 	cubeVertices: Float32Array<ArrayBuffer>;
 	cubeVertexCount: number;

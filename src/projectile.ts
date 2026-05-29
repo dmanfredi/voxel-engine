@@ -587,10 +587,10 @@ export interface ProjectileProfile {
 	maxLifetime: number;
 	/**
 	 * Edge length applied as a uniform scale to the renderer's unit-cube
-	 * mesh. For v1 every projectile renders as a cube of this size; when
-	 * per-profile meshes land, this becomes a richer `{ mesh, color, ... }`
-	 * visual struct. Should usually match the hitbox size so what you see
-	 * is what hits.
+	 * mesh. Every projectile currently renders as a cube of this size;
+	 * when per-profile meshes land, this becomes a richer
+	 * `{ mesh, color, ... }` visual struct. Should usually match the
+	 * hitbox size so what you see is what hits.
 	 */
 	visualSize: number;
 }
@@ -605,8 +605,9 @@ export interface Projectile {
 	velocity: Float32Array;
 	/**
 	 * 4×4 column-major rotation matrix. Local axes (right, up, forward)
-	 * are the first three columns. Computed at spawn from velocity; constant
-	 * for the projectile's lifetime (v1 has no spin or trajectory bending).
+	 * are the first three columns. Computed at spawn from velocity;
+	 * constant for the projectile's lifetime — no spin or trajectory
+	 * bending.
 	 */
 	orientation: Float32Array;
 	/** Current strength; consumed by hardness on each break. */

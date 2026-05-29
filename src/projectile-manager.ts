@@ -9,12 +9,11 @@
  * projectiles have a different per-tick shape (no AI, no pair resolution),
  * a different voxel-collision response (consume the voxel rather than
  * bouncing), different material semantics (strength + hitbox vs.
- * density + restitution), and a higher spawn rate. See the design
- * conversation for the full split.
+ * density + restitution), and a higher spawn rate.
  *
- * v1 deliberately omits sub-stepping. Pickaxe speed is 2 blocks/sec ≈
- * 0.033 blocks/tick @ 60fps — far below the 0.5-block tunneling threshold.
- * Add sub-stepping when a faster projectile profile actually tunnels.
+ * Sub-stepping deliberately omitted — current speeds stay well below
+ * the per-tick tunneling threshold (~½ block). Add it when a faster
+ * profile actually tunnels.
  */
 
 import { mat4 } from 'wgpu-matrix';
@@ -101,7 +100,7 @@ export class ProjectileManager {
 			direction[2] * profile.speed,
 		]);
 		// Orientation derived from velocity at spawn. Constant for the
-		// projectile's lifetime — v1 has no spin or trajectory bending.
+		// projectile's lifetime — no spin or trajectory bending.
 		const orientation = new Float32Array(16);
 		orientationFromDirection(velocity, orientation);
 		const projectile: Projectile = {

@@ -645,10 +645,10 @@ async function main(): Promise<void> {
 		},
 	});
 
-	// Spawn scratch — reused every fire, avoid per-shot allocation. We
-	// only need spawnOrigin (position is copied inside spawn()); the
-	// projectile's direction is cameraFront, which spawn() also copies.
+	// Spawn scratch — reused every fire, avoid per-shot allocation. Both
+	// are copied inside spawn(), so it's safe to overwrite them next call.
 	const spawnOrigin = new Float32Array(3);
+	const spawnDirection = new Float32Array(3);
 	const cameraRight = new Float32Array(3);
 
 	/**
@@ -682,10 +682,23 @@ async function main(): Promise<void> {
 				cameraFront[i] * off[2];
 		}
 
+		// Aim at the crosshair target and
+		// cast a dedicated aim ray here.
+		const aimReach = tool.projectile.speed * tool.projectile.maxLifetime;
+		const aimHit = raycast(cameraPos, cameraFront, world, aimReach);
+		const aimDistance = aimHit ? aimHit.distance : aimReach;
+		const tx = cameraPos[0] + cameraFront[0] * aimDistance - spawnOrigin[0];
+		const ty = cameraPos[1] + cameraFront[1] * aimDistance - spawnOrigin[1];
+		const tz = cameraPos[2] + cameraFront[2] * aimDistance - spawnOrigin[2];
+		const tLen = Math.hypot(tx, ty, tz);
+		spawnDirection[0] = tx / tLen;
+		spawnDirection[1] = ty / tLen;
+		spawnDirection[2] = tz / tLen;
+
 		projectileManager.spawn(
 			tool.projectile,
 			spawnOrigin,
-			cameraFront,
+			spawnDirection,
 			tool,
 		);
 

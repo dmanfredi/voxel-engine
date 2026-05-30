@@ -92,6 +92,16 @@ Per-frame flow runs in **three passes** over the entity list: (1) `entityAITick`
 
 See `notes/entity-system.md` and `notes/entity-physics-and-ai.md` for deeper design rationale and deferred decisions.
 
+### Projectile & Tool System (src/tool.ts, src/projectile.ts, src/projectile-manager.ts, src/projectile-renderer.ts)
+
+The player's interface to the world. **Tools** are singletons held in `gameState.tools` (a hotbar slot array); `gameState.selectedToolIndex` is the index of the currently held tool. Each Tool bundles an LMB action (fire a projectile) and an RMB action (resolve a `BuildProfile` against the raycast target to place cells). Cooldowns are independent and mutable on the Tool object, so they survive slot switches. Both LMB and RMB autofire while their button is held — the cooldown is the rate-limiter. `canFire(tool, side, gameState)` is the one-place gate consulted before each fire.
+
+**Projectiles** spawn at a camera-local offset, travel in a straight line, and break the first solid block their OBB hitbox overlaps each tick. First contact is a freebie (always breaks); subsequent breaks require `strength > hardness` and consume `strength` either way. Each Projectile carries a `sourceTool` back-reference so the break callback dispatches per-tool effects (BP payout, future FX) off the tool, not via attached closures. Render-time wrap mirrors the entity manager — canonical `position` stays in `[0, ww)`, only the rendered model matrix sees the offset.
+
+The renderer is its own pipeline (no texture sampling, no fog, hardcoded shader color) — much simpler than the entity pipeline because projectiles are short-lived markers, not lit geometry.
+
+See `notes/projectile-and-tool-system.md` for the full design rationale, deferred work, and tuning surface.
+
 ### Block Placement (src/placement.ts)
 
 `world.setBlock` is the low-level mutation primitive (for terrain gen, chunk streaming, block breaking — anything without gameplay rules). **Gameplay-driven placement** (right-click, auto-scaffold, future enemy AI) goes through `tryPlaceBlock(world, entityManager, bx, by, bz, blockId)`, which currently rejects placements that would overlap an entity. When adding new block-placing code paths, use `tryPlaceBlock` unless you specifically need to bypass the rules.
@@ -114,7 +124,8 @@ All WGSL shaders are defined as TypeScript string constants:
 - **mesh-scheduler.ts / mesh-worker.ts** — Worker-based meshing with priority queue, key-based dedup, revision-checked stale-result rejection.
 - **auto-climb.ts** — Places a BRICK block at player's feet when there's a gap (scaffolding mechanic). Uses `tryPlaceBlock`.
 - **raycast.ts** — DDA raycasting into the voxel grid for block targeting.
-- **game-state.ts** — BP counter and other persistent gameplay state.
+- **game-state.ts** — BP counter, hotbar slot array (`tools`), and the selected tool index. Persistent gameplay state.
+- **toolbar.ts** — Hotbar UI. Binds `1`-`4` and the scroll wheel to slot selection; writes through to `gameState.selectedToolIndex` via an `onSelect` callback so the toolbar holds no state of its own.
 - **debug.ts** — stats.js FPS counter + Tweakpane panel (wireframe toggle, freecam toggle, vertex count, hitch detector, fog/lighting tuning)
 
 ### Camera & Input
@@ -196,6 +207,7 @@ Deeper design rationale and "what's deferred and why" notes live in `notes/`:
 
 - `notes/entity-system.md` — entity taxonomy, mesh generation, render pipeline, lifecycle
 - `notes/entity-physics-and-ai.md` — physics model, AI dispatch, cross-cutting patterns (wrap handling, material table), explicitly deferred work
+- `notes/projectile-and-tool-system.md` — Tool + BuildProfile types, projectile runtime, OBB hitbox + SAT, render pipeline, input flow, deferred work
 - `notes/physics-and-collision.md` — player physics and AABB-vs-voxel collision (predates entity work)
 - `notes/skybox-integration.md` — skybox setup
 - `notes/TECHNICAL-ROADMAP.md` — phased plan + current progress

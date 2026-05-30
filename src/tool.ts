@@ -204,7 +204,7 @@ export function tickToolCooldowns(
  */
 const PICKAXE_VISUAL = 5;
 const pickaxeProjectile: ProjectileProfile = {
-	strength: 50,
+	strength: 10,
 	speed: 200,
 	hitbox: obbHitbox(PICKAXE_VISUAL * 0.5),
 	maxLifetime: 5,

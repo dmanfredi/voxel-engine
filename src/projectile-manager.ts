@@ -110,7 +110,6 @@ export class ProjectileManager {
 			orientation,
 			strength: profile.strength,
 			age: 0,
-			firstHit: true,
 			sourceTool,
 		};
 		const renderData = createProjectileRenderData(
@@ -195,26 +194,21 @@ export class ProjectileManager {
 			if (hitBlockId !== AIR) {
 				const props = blockRegistry.get(hitBlockId);
 				if (props) {
-					const hardness = props.hardness;
-					if (p.firstHit || p.strength > hardness) {
-						// First-contact freebie OR strength-affords-it.
-						// Strength decrements regardless — freebie still costs.
-						this.world.setBlock(hitBX, hitBY, hitBZ, AIR);
-						this.callbacks.onBlockBroken(
-							hitBX,
-							hitBY,
-							hitBZ,
-							p.sourceTool,
-						);
-						p.strength -= hardness;
-						p.firstHit = false;
-						if (p.strength <= 0) {
-							this.disposeAt(i);
-							disposed = true;
-						}
-					} else {
-						// Hit a block we can't afford and freebie spent.
-						// Projectile stops here, block remains intact.
+					// Every contact breaks its block — the projectile never
+					// stops without destroying something. Strength gates
+					// penetration, not the break: it decrements by hardness
+					// and the projectile dies once it hits zero, so the
+					// killing blow still lands a break (the leftover strength
+					// is spent on it rather than evaporating against a wall).
+					this.world.setBlock(hitBX, hitBY, hitBZ, AIR);
+					this.callbacks.onBlockBroken(
+						hitBX,
+						hitBY,
+						hitBZ,
+						p.sourceTool,
+					);
+					p.strength -= props.hardness;
+					if (p.strength <= 0) {
 						this.disposeAt(i);
 						disposed = true;
 					}

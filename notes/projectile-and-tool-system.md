@@ -84,7 +84,7 @@ Camera-local axes `[right, up, forward]` in world units. The fire function compu
 ### Profile vs instance
 
 - **`ProjectileProfile`** is design data, frozen and shared across spawns: `strength`, `speed`, `hitbox`, `maxLifetime`, `visualSize`.
-- **`Projectile`** is the live instance: `position`, `velocity`, `orientation`, mutable `strength`, `age`, `firstHit`, `sourceTool`, plus a reference back to the profile.
+- **`Projectile`** is the live instance: `position`, `velocity`, `orientation`, mutable `strength`, `age`, `sourceTool`, plus a reference back to the profile.
 
 ### Hitbox abstraction
 
@@ -102,14 +102,14 @@ The shipped implementation is `obbHitbox(halfSize)` — oriented bounding box vs
 
 Consumers walk the returned list and process the **first solid cell**, skipping over air. Wide hitboxes can have many cells with tied forward projection; taking only `cells[0]` and giving up if it's air would lose contact when (e.g.) the leading-edge cell is the just-broken air pocket and the side cells are clipping into a wall. The leading-edge order only ranks meaningfully along the travel direction.
 
-### First-hit freebie + hardness rule
+### Hardness rule: every contact breaks
 
-- First block a projectile hits **always** breaks regardless of `strength` vs `hardness`.
-- Subsequent blocks break iff `strength > hardness`.
-- `strength` decrements by `hardness` on every break — the freebie still costs.
-- Projectile disposes on: `strength ≤ 0` after a break, hit a block it can't afford, or `age ≥ maxLifetime`.
+- Every block a projectile contacts **breaks** — it never stops without destroying something.
+- `strength` decrements by the block's `hardness` on every break.
+- The projectile disposes once `strength ≤ 0`, so the killing blow still lands a break: the leftover strength is spent on it rather than evaporating against a wall it can't afford.
+- Disposes on: `strength ≤ 0` after a break, or `age ≥ maxLifetime`.
 
-This gives weak projectiles a guaranteed first impact (the player sees *something* happen) while ramping up risk on chained breaks.
+Strength gates **penetration depth**, not whether a given block breaks. A weak projectile still clears one block per shot against an arbitrarily hard wall (the killing blow breaks regardless of hardness) — so there's no such thing as an indestructible block. Add a `hardness === Infinity` guard if one is ever wanted.
 
 ### One-impact-one-block per tick
 
@@ -220,7 +220,7 @@ The interesting tuning surface is the Tool itself — each field is a knob with 
 
 | Field | What it tunes |
 |---|---|
-| `projectile.strength` | Mining budget. Determines how many blocks a single shot clears beyond the freebie. |
+| `projectile.strength` | Mining budget. Determines penetration depth — how many blocks a single shot clears before the killing blow. |
 | `projectile.speed` | World units / sec the projectile travels. |
 | `projectile.maxLifetime` | Despawn fallback. Should comfortably exceed `speed × max-engagement-range`. |
 | `projectile.visualSize` | Edge length of the rendered cube. **Must** match the OBB hitbox half-extent (`visualSize × 0.5`). |

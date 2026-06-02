@@ -202,7 +202,7 @@ export function tickToolCooldowns(
 /**
  * Starter pickaxe.
  */
-const PICKAXE_VISUAL = 5;
+const PICKAXE_VISUAL = 8;
 const pickaxeProjectile: ProjectileProfile = {
 	strength: 10,
 	speed: 200,

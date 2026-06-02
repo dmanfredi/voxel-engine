@@ -6,12 +6,14 @@
  * Tools, ProjectileProfiles, and Hitboxes share.
  *
  * Hardness/strength rule (encoded in ProjectileManager, surfaced here
- * only by `strength` + `firstHit`):
- * - First block hit ALWAYS breaks regardless of strength vs. hardness.
- *   Strength decrements by hardness anyway (the freebie still costs).
- * - Subsequent blocks break iff `strength > hardness`. Same decrement.
- * - Projectile disposes when: (a) strength ≤ 0 after a break,
- *   (b) it hits a block it can't break, (c) age exceeds maxLifetime.
+ * only by `strength`):
+ * - Every block hit breaks — a projectile never stops without destroying
+ *   something. Strength gates penetration, not the break itself.
+ * - Strength decrements by the block's hardness on each break. The
+ *   projectile disposes once strength ≤ 0, so its killing blow still lands
+ *   a break rather than evaporating against a wall it can't afford.
+ * - Disposes when: (a) strength ≤ 0 after a break, (b) age exceeds
+ *   maxLifetime.
  */
 
 import type { Tool } from './tool';
@@ -614,11 +616,6 @@ export interface Projectile {
 	strength: number;
 	/** Seconds since spawn. Compared against `profile.maxLifetime`. */
 	age: number;
-	/**
-	 * True until the projectile has successfully broken a block. Implements
-	 * the "first block always breaks" freebie. Cleared on the first break.
-	 */
-	firstHit: boolean;
 	/**
 	 * The tool that spawned this projectile. Carried so the break callback
 	 * can dispatch per-tool effects (BP payout, FX, sounds). The manager

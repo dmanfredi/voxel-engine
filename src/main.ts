@@ -60,6 +60,9 @@ let cameraYaw = -90;
 let cameraPitch = 0;
 let currentHit: RaycastHit | null = null;
 const MAX_REACH = 100; // 10 blocks
+// Distance under which LMB fires parallel to cameraFront instead of
+// aiming at the crosshair-hit point. See fireLMB for the rationale.
+const PARALLEL_FIRE_RANGE = 50;
 
 interface ChunkRenderData {
 	cx: number;
@@ -526,7 +529,7 @@ async function main(): Promise<void> {
 		x: worldCenter + 30,
 		y: worldCenter + 100,
 		z: worldCenter + 30,
-		size: 10,
+		size: 12,
 	});
 
 	// entityManager.spawn({
@@ -682,18 +685,32 @@ async function main(): Promise<void> {
 				cameraFront[i] * off[2];
 		}
 
-		// Aim at the crosshair target and
-		// cast a dedicated aim ray here.
+		// Aim correction has two regimes split at PARALLEL_FIRE_RANGE.
+		// Beyond it, aim at the hit point on the crosshair ray so the
+		// projectile converges on the target. Inside it, fire parallel to
+		// cameraFront — the spawn offset is a large fraction of close-range
+		// distances, so a convergence-aimed direction over-rotates and the
+		// projectile veers heavily off the crosshair. Parallel-at-close
+		// keeps the visible offset small and constant (just the spawn nudge).
 		const aimReach = tool.projectile.speed * tool.projectile.maxLifetime;
 		const aimHit = raycast(cameraPos, cameraFront, world, aimReach);
-		const aimDistance = aimHit ? aimHit.distance : aimReach;
-		const tx = cameraPos[0] + cameraFront[0] * aimDistance - spawnOrigin[0];
-		const ty = cameraPos[1] + cameraFront[1] * aimDistance - spawnOrigin[1];
-		const tz = cameraPos[2] + cameraFront[2] * aimDistance - spawnOrigin[2];
-		const tLen = Math.hypot(tx, ty, tz);
-		spawnDirection[0] = tx / tLen;
-		spawnDirection[1] = ty / tLen;
-		spawnDirection[2] = tz / tLen;
+		if (aimHit && aimHit.distance < PARALLEL_FIRE_RANGE) {
+			spawnDirection[0] = cameraFront[0];
+			spawnDirection[1] = cameraFront[1];
+			spawnDirection[2] = cameraFront[2];
+		} else {
+			const aimDistance = aimHit ? aimHit.distance : aimReach;
+			const tx =
+				cameraPos[0] + cameraFront[0] * aimDistance - spawnOrigin[0];
+			const ty =
+				cameraPos[1] + cameraFront[1] * aimDistance - spawnOrigin[1];
+			const tz =
+				cameraPos[2] + cameraFront[2] * aimDistance - spawnOrigin[2];
+			const tLen = Math.hypot(tx, ty, tz);
+			spawnDirection[0] = tx / tLen;
+			spawnDirection[1] = ty / tLen;
+			spawnDirection[2] = tz / tLen;
+		}
 
 		projectileManager.spawn(
 			tool.projectile,

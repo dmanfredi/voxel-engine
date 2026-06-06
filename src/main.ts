@@ -1229,9 +1229,9 @@ async function main(): Promise<void> {
 			[
 				{
 					y: voidLethalY(voidFloorState, BLOCK_SIZE),
-					color: [0.5, 0.0, 0.0, 0.3],
+					color: [0.0, 0.0, 0.0, 0.5],
 				},
-				{ y: voidFloorState.surfaceY, color: [1.0, 0.35, 0.05, 0.16] },
+				{ y: voidFloorState.surfaceY, color: [0.15, 0.15, 0.25, 0.3] },
 			],
 		);
 

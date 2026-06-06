@@ -23,6 +23,14 @@ import { initToolbar } from './toolbar';
 import { ProjectileManager } from './projectile-manager';
 import { initProjectileRenderer } from './projectile-renderer';
 import { canFire, tickToolCooldowns, type Tool } from './tool';
+import {
+	createVoidFloorState,
+	updateVoidFloor,
+	voidDeleteFloorCY,
+	voidLethalY,
+	VOID_MAX_GAP_BLOCKS,
+} from './void-floor';
+import { initVoidFloorRenderer, drawVoidFloor } from './void-floor-renderer';
 import marbleTextureUrl from '../assets/MarbleBase1024.png';
 import bricksTextureUrl from '../assets/Bricks060_1K-PNG_Color.png';
 import darkMarbleTextureUrl from '../assets/DarkMarble.png';
@@ -63,6 +71,9 @@ const MAX_REACH = 100; // 10 blocks
 // Distance under which LMB fires parallel to cameraFront instead of
 // aiming at the crosshair-hit point. See fireLMB for the rationale.
 const PARALLEL_FIRE_RANGE = 50;
+// Half-extent of the void floor's debug planes. Large enough to fill the view
+// past terrain edges out to the fog/far plane.
+const VOID_PLANE_HALF_EXTENT = 6000;
 
 interface ChunkRenderData {
 	cx: number;
@@ -520,6 +531,14 @@ async function main(): Promise<void> {
 		bindGroup,
 	);
 
+	// Void floor renderer — own pipeline, shares group-0 binding-0 (VP matrix).
+	const voidFloorRenderer = initVoidFloorRenderer(
+		device,
+		presentationFormat,
+		mainGroup0BGL,
+		bindGroup,
+	);
+
 	// Test sphere — all spheres now cling to walls/ceilings by default and
 	// chase in 3D when attached.
 	entityManager.spawn({
@@ -629,6 +648,23 @@ async function main(): Promise<void> {
 	const playerHeight = BLOCK_SIZE * 2 * 0.9;
 	const playerHalfWidth = BLOCK_SIZE / 4;
 	const gameState = createGameState();
+
+	// Void floor — starts at max gap below the player's feet and rises. Effects
+	// are stubbed (logged) for now; orb crack/shake + death overlay come later.
+	const voidFloorState = createVoidFloorState(
+		cameraPos[1] - playerHeight - VOID_MAX_GAP_BLOCKS * BLOCK_SIZE,
+	);
+	const voidFloorCallbacks = {
+		onCrack: (hits: number) => {
+			console.log(`[void] crack ${String(hits)}`);
+		},
+		onHeal: (hits: number) => {
+			console.log(`[void] heal ${String(hits)}`);
+		},
+		onDeath: (cause: 'shatter' | 'lethal') => {
+			console.log(`[void] death: ${cause}`);
+		},
+	};
 
 	const bpOrb = document.querySelector<HTMLElement>('.bp-orb-value');
 	if (!bpOrb) throw new Error('BP orb element not found');
@@ -964,9 +1000,29 @@ async function main(): Promise<void> {
 		cameraPos[0] = ((cameraPos[0] % worldWidth) + worldWidth) % worldWidth;
 		cameraPos[2] = ((cameraPos[2] % worldWidth) + worldWidth) % worldWidth;
 
+		// Advance the void floor (rise + clamp + damage) before streaming, so
+		// the chunk loader sees this frame's consumed-chunk floor.
+		const playerFeetY = cameraPos[1] - playerHeight;
+		updateVoidFloor(
+			voidFloorState,
+			dt,
+			playerFeetY,
+			BLOCK_SIZE,
+			voidFloorCallbacks,
+		);
+		debuggerParams.voidBand = voidFloorState.band;
+		debuggerParams.voidHits = voidFloorState.hits;
+		debuggerParams.voidGap = (
+			(playerFeetY - voidFloorState.surfaceY) /
+			BLOCK_SIZE
+		).toFixed(1);
+
 		// Stream chunks vertically around the player
 		const playerCY = Math.floor(cameraPos[1] / (CHUNK_SIZE * BLOCK_SIZE));
-		chunkLoader.update(playerCY);
+		chunkLoader.update(
+			playerCY,
+			voidDeleteFloorCY(voidFloorState, BLOCK_SIZE),
+		);
 
 		// Auto-climb: place a block beneath feet whenever there's air there.
 		// Suppressed when holding Shift or in freecam.
@@ -1159,6 +1215,25 @@ async function main(): Promise<void> {
 
 		// Draw skybox (after geometry, uses less-equal depth test)
 		drawSkybox(pass, device, skybox, viewMatrix, projection);
+
+		// Draw void floor planes last — over the sky, occluded by terrain.
+		// Ascending Y so the surface composites over the lethal line. Colors
+		// are placeholder debug fills; the real void shader swaps in later.
+		drawVoidFloor(
+			pass,
+			device,
+			voidFloorRenderer,
+			cameraPos[0],
+			cameraPos[2],
+			VOID_PLANE_HALF_EXTENT,
+			[
+				{
+					y: voidLethalY(voidFloorState, BLOCK_SIZE),
+					color: [0.5, 0.0, 0.0, 0.3],
+				},
+				{ y: voidFloorState.surfaceY, color: [1.0, 0.35, 0.05, 0.16] },
+			],
+		);
 
 		pass.end();
 

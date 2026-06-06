@@ -24,6 +24,7 @@ export class ChunkLoader {
 	private unmeshChunk: (cx: number, cy: number, cz: number) => void;
 
 	private lastPlayerCY: number | null = null;
+	private lastVoidFloorCY: number | null = null;
 	private loadQueue: QueueEntry[] = [];
 
 	constructor(opts: ChunkLoaderOptions) {
@@ -54,13 +55,21 @@ export class ChunkLoader {
 		this.lastPlayerCY = playerCY;
 	}
 
-	/** Call every tick. Streams chunks vertically around the player. */
-	update(playerCY: number): void {
-		// If player chunk Y changed, rebuild the queue and schedule unloads
-		if (playerCY !== this.lastPlayerCY) {
+	/**
+	 * Call every tick. Streams chunks vertically around the player.
+	 *
+	 * `voidFloorCY` is the chunk-Y below which the void has consumed the world
+	 * — those chunks are never loaded and any still resident are deleted.
+	 */
+	update(playerCY: number, voidFloorCY: number): void {
+		if (
+			playerCY !== this.lastPlayerCY ||
+			voidFloorCY !== this.lastVoidFloorCY
+		) {
 			this.lastPlayerCY = playerCY;
+			this.lastVoidFloorCY = voidFloorCY;
 
-			const minCY = playerCY - this.verticalRadius;
+			const minCY = Math.max(playerCY - this.verticalRadius, voidFloorCY);
 			const maxCY = playerCY + this.verticalRadius;
 			const w = this.world.widthChunks;
 
@@ -81,12 +90,17 @@ export class ChunkLoader {
 				(a, b) => Math.abs(a.cy - playerCY) - Math.abs(b.cy - playerCY),
 			);
 
-			// Unload chunks outside the range (with hysteresis buffer of 1)
+			// Unload chunks outside the range (hysteresis of 1 on the radius
+			// side; none below the void floor — consumed is consumed).
 			const unloadMinCY = minCY - 1;
 			const unloadMaxCY = maxCY + 1;
 			const toRemove: QueueEntry[] = [];
 			this.world.forEachChunk((chunk) => {
-				if (chunk.cy < unloadMinCY || chunk.cy > unloadMaxCY) {
+				if (
+					chunk.cy < unloadMinCY ||
+					chunk.cy > unloadMaxCY ||
+					chunk.cy < voidFloorCY
+				) {
 					toRemove.push({
 						cx: chunk.cx,
 						cy: chunk.cy,
@@ -107,8 +121,9 @@ export class ChunkLoader {
 			if (!entry) break;
 			const { cx, cy, cz } = entry;
 
-			// Skip if already loaded (could happen if queue is stale)
+			// Skip if already loaded, or now consumed by the void.
 			if (this.world.hasChunk(cx, cy, cz)) continue;
+			if (cy < voidFloorCY) continue;
 
 			const blocks = buildChunkBlocks(cx, cy, cz);
 			this.world.addChunk(new Chunk(cx, cy, cz, blocks));

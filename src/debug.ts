@@ -16,6 +16,10 @@ export const debuggerParams = {
 	specularStrength: 0,
 	fogStart: 1300,
 	fogEnd: 1400,
+	// Void floor readouts
+	voidBand: 'safe',
+	voidHits: 0,
+	voidGap: '0', // blocks from player feet to the void surface (+ = above)
 };
 
 let pane: Pane | null = null;
@@ -93,6 +97,21 @@ export function BuildDebug(render: () => void): void {
 		min: 0,
 		max: 2000,
 		step: 10,
+	});
+
+	const voidFolder = pane.addFolder({ title: 'Void' });
+	voidFolder.addBinding(debuggerParams, 'voidBand', {
+		readonly: true,
+		label: 'Band',
+	});
+	voidFolder.addBinding(debuggerParams, 'voidGap', {
+		readonly: true,
+		label: 'Gap (blocks)',
+	});
+	voidFolder.addBinding(debuggerParams, 'voidHits', {
+		readonly: true,
+		label: 'Cracks',
+		format: (v) => v.toFixed(0),
 	});
 }
 

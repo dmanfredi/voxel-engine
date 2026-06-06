@@ -208,6 +208,7 @@ Deeper design rationale and "what's deferred and why" notes live in `notes/`:
 - `notes/entity-system.md` — entity taxonomy, mesh generation, render pipeline, lifecycle
 - `notes/entity-physics-and-ai.md` — physics model, AI dispatch, cross-cutting patterns (wrap handling, material table), explicitly deferred work
 - `notes/projectile-and-tool-system.md` — Tool + BuildProfile types, projectile runtime, OBB hitbox + SAT, render pipeline, input flow, deferred work
+- `notes/void-floor.md` — rising void hazard (the "fire floor"): bands, chunk-delete floor, design intent, stubbed seams
 - `notes/physics-and-collision.md` — player physics and AABB-vs-voxel collision (predates entity work)
 - `notes/skybox-integration.md` — skybox setup
 - `notes/TECHNICAL-ROADMAP.md` — phased plan + current progress

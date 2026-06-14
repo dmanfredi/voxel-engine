@@ -10,8 +10,8 @@ const TERMINAL_VELOCITY = -39.2;
 const GROUND_ACCEL = 2;
 const AIR_ACCEL = 0.5;
 const GROUND_DRAG = 0.546;
-const AIR_DRAG = 0.91;
-const SPRINT_JUMP_BOOST = 1.0;
+const AIR_DRAG = 0.895;
+const SPRINT_JUMP_BOOST = 0;
 const NEGLIGIBLE_THRESHOLD = 0.05;
 const JUMP_COOLDOWN = 0.4;
 

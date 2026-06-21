@@ -16,7 +16,7 @@ import { autoClimb } from './auto-climb';
 import { ChunkLoader } from './chunk-loader';
 import { MeshScheduler } from './mesh-scheduler';
 import { initEntityRenderer } from './entity-renderer';
-import { EntityManager } from './entity';
+import { EntityManager, Shape, Role } from './entity';
 import { Spawner } from './spawner';
 import { tryPlaceBlock } from './placement';
 import { generateMips, numMipLevels } from './mipmap';
@@ -69,6 +69,7 @@ let cameraYaw = -90;
 let cameraPitch = 0;
 let currentHit: RaycastHit | null = null;
 const MAX_REACH = 100; // 10 blocks
+const DEBUG_SPAWN_REACH = 2000; // raycast reach for the debug enemy spawner
 // Distance under which LMB fires parallel to cameraFront instead of
 // aiming at the crosshair-hit point. See fireLMB for the rationale.
 const PARALLEL_FIRE_RANGE = 50;
@@ -991,7 +992,8 @@ async function main(): Promise<void> {
 
 		// Attempt enemy spawns before the entity update so a fresh spawn's
 		// flow-field invalidation and first physics tick land this same frame.
-		spawner.update(dt, cameraPos);
+		// Toggleable via the Enemies debug pane; manual spawns still work.
+		if (debuggerParams.spawnerEnabled) spawner.update(dt, cameraPos);
 
 		entityManager.update(
 			dt,
@@ -1001,6 +1003,7 @@ async function main(): Promise<void> {
 			playerHeight,
 			onRegionChanged,
 		);
+		debuggerParams.enemyCount = entityManager.activeCount;
 
 		projectileManager.update(dt, cameraPos);
 
@@ -1041,7 +1044,41 @@ async function main(): Promise<void> {
 		requestAnimationFrame(tick);
 	}
 
-	BuildDebug(render);
+	BuildDebug(render, {
+		onSpawnEnemy: (shape, material, size) => {
+			const hit = raycast(
+				cameraPos,
+				cameraFront,
+				world,
+				DEBUG_SPAWN_REACH,
+			);
+			if (!hit) return; // nothing in front of the camera within reach
+
+			// Surface point along the ray, pushed out by the enemy's radius so
+			// it rests on the hit face rather than embedded in it.
+			const [nx, ny, nz] = hit.faceNormal;
+			const y = cameraPos[1] + cameraFront[1] * hit.distance + ny * size;
+			let x = cameraPos[0] + cameraFront[0] * hit.distance + nx * size;
+			let z = cameraPos[2] + cameraFront[2] * hit.distance + nz * size;
+
+			// Cubes must stay grid-aligned for tipping — snap the footprint to
+			// the block grid in X/Z (Y already rests on the surface).
+			if (shape === Shape.Cube) {
+				x = Math.round((x - size) / BLOCK_SIZE) * BLOCK_SIZE + size;
+				z = Math.round((z - size) / BLOCK_SIZE) * BLOCK_SIZE + size;
+			}
+
+			entityManager.spawn({
+				shape,
+				material,
+				role: shape === Shape.Cube ? Role.Crush : Role.Rush,
+				size,
+				x,
+				y,
+				z,
+			});
+		},
+	});
 	function render(): void {
 		stats.begin();
 		renderRequestId = 0;
@@ -1159,7 +1196,7 @@ async function main(): Promise<void> {
 		}
 
 		// Draw entities (after terrain, before skybox)
-		entityManager.draw(pass);
+		entityManager.draw(pass, debuggerParams.enemyXray);
 
 		// Draw projectiles — own pipeline, slot before skybox so the
 		// less-equal cubemap pass is the final color contributor.

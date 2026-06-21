@@ -101,6 +101,7 @@ const entityShader = /*wgsl*/ `
 
 export interface EntityRenderer {
 	pipeline: GPURenderPipeline;
+	xrayPipeline: GPURenderPipeline;
 	sharedBindGroup0: GPUBindGroup;
 	group1Layout: GPUBindGroupLayout;
 }
@@ -137,7 +138,7 @@ export function initEntityRenderer(
 		bindGroupLayouts: [mainGroup0BGL, group1Layout],
 	});
 
-	const pipeline = device.createRenderPipeline({
+	const pipelineBase: GPURenderPipelineDescriptor = {
 		label: 'entity pipeline',
 		layout: pipelineLayout,
 		vertex: {
@@ -177,9 +178,23 @@ export function initEntityRenderer(
 			depthCompare: 'less',
 			format: 'depth24plus',
 		},
+	};
+	const pipeline = device.createRenderPipeline(pipelineBase);
+
+	// Same pipeline, but depth always passes and isn't written — entities draw
+	// over terrain regardless of occlusion. Among overlapping entities the
+	// order is painter's (no z-sort), which is fine for a debug view.
+	const xrayPipeline = device.createRenderPipeline({
+		...pipelineBase,
+		label: 'entity xray pipeline',
+		depthStencil: {
+			depthWriteEnabled: false,
+			depthCompare: 'always',
+			format: 'depth24plus',
+		},
 	});
 
-	return { pipeline, sharedBindGroup0, group1Layout };
+	return { pipeline, xrayPipeline, sharedBindGroup0, group1Layout };
 }
 
 export function createEntityRenderData(
@@ -237,9 +252,10 @@ export function drawEntities(
 	pass: GPURenderPassEncoder,
 	renderer: EntityRenderer,
 	entities: EntityRenderData[],
+	xray: boolean,
 ): void {
 	if (entities.length === 0) return;
-	pass.setPipeline(renderer.pipeline);
+	pass.setPipeline(xray ? renderer.xrayPipeline : renderer.pipeline);
 	pass.setBindGroup(0, renderer.sharedBindGroup0);
 	for (const e of entities) {
 		pass.setBindGroup(1, e.bindGroup);

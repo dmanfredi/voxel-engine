@@ -1,5 +1,6 @@
 import Stats from 'stats.js';
 import { Pane } from 'tweakpane';
+import { Shape, Material } from './entity';
 
 export const stats = new Stats();
 stats.showPanel(0); // 0: fps, 1: ms, 2: mb, 3+: custom
@@ -20,21 +21,40 @@ export const debuggerParams = {
 	voidBand: 'safe',
 	voidHits: 0,
 	voidGap: '0', // blocks from player feet to the void surface (+ = above)
+	// Enemy readouts / toggles (the Enemies pane)
+	enemyCount: 0,
+	enemyXray: false, // paint enemies over terrain (see-through debug view)
+	spawnerEnabled: true, // automatic terrain-born spawner (manual spawn still works)
 };
 
+/** Hooks the enemy pane calls back into — implemented in main.ts. */
+export interface DebugHooks {
+	/** Spawn an enemy on the first surface under the camera crosshair. */
+	onSpawnEnemy: (shape: Shape, material: Material, size: number) => void;
+}
+
 let pane: Pane | null = null;
+let enemyPane: Pane | null = null;
 
 export function refreshDebug(): void {
 	pane?.refresh();
+	enemyPane?.refresh();
 }
 
-export function BuildDebug(render: () => void): void {
-	pane = new Pane({ title: 'Debug' });
+export function BuildDebug(render: () => void, hooks: DebugHooks): void {
+	// Shared container so the Debug and Enemies panes stack vertically. Without
+	// it, each Pane floats at the same top-right anchor and they overlap.
+	const paneContainer = document.createElement('div');
+	paneContainer.style.cssText =
+		'position: fixed; top: 8px; right: 8px; width: 256px; display: flex; flex-direction: column; gap: 8px; z-index: 100;';
+	document.body.appendChild(paneContainer);
+
+	pane = new Pane({ title: 'General', container: paneContainer });
 	const wireframeBinding = pane.addBinding(debuggerParams, 'wireframe', {
 		label: 'Wireframe',
 	});
 	pane.addBinding(debuggerParams, 'freecam', {
-		label: 'Freecam',
+		label: 'Freecam (f)',
 	});
 	pane.addBinding(debuggerParams, 'vertices', {
 		readonly: true,
@@ -112,6 +132,53 @@ export function BuildDebug(render: () => void): void {
 		readonly: true,
 		label: 'Cracks',
 		format: (v) => v.toFixed(0),
+	});
+
+	// Standalone pane for enemy debugging — count, x-ray, and a raycast spawner.
+	enemyPane = new Pane({ title: 'Enemies', container: paneContainer });
+	enemyPane.addBinding(debuggerParams, 'enemyCount', {
+		readonly: true,
+		label: 'Count',
+		format: (v) => v.toFixed(0),
+	});
+	enemyPane.addBinding(debuggerParams, 'spawnerEnabled', {
+		label: 'Enemy Spawning',
+	});
+	enemyPane.addBinding(debuggerParams, 'enemyXray', { label: 'X-Ray' });
+
+	// Spawn controls — selections live here; the button raycasts + spawns.
+	const spawnParams: { shape: Shape; material: Material; size: number } = {
+		shape: Shape.Sphere,
+		material: Material.Marble,
+		size: 10,
+	};
+	const spawnFolder = enemyPane.addFolder({ title: 'Spawn' });
+	spawnFolder.addBinding(spawnParams, 'shape', {
+		label: 'Type',
+		options: { Sphere: Shape.Sphere, Cube: Shape.Cube },
+	});
+	spawnFolder.addBinding(spawnParams, 'material', {
+		label: 'Material',
+		options: {
+			Marble: Material.Marble,
+			Brick: Material.Brick,
+			'Dark Marble': Material.DarkMarble,
+		},
+	});
+	// Step 5 keeps cube edges whole-voxel (2·size a multiple of blockSize=10),
+	// so cube spawns never trip EntityManager.spawn's alignment check.
+	spawnFolder.addBinding(spawnParams, 'size', {
+		label: 'Size',
+		min: 5,
+		max: 30,
+		step: 5,
+	});
+	spawnFolder.addButton({ title: 'Spawn at crosshair' }).on('click', () => {
+		hooks.onSpawnEnemy(
+			spawnParams.shape,
+			spawnParams.material,
+			spawnParams.size,
+		);
 	});
 }
 

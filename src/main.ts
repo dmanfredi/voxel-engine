@@ -522,19 +522,7 @@ async function main(): Promise<void> {
 		mainGroup0BGL,
 		bindGroup,
 	);
-	const entityManager = new EntityManager(
-		entityRenderer,
-		device,
-		world,
-		(entity) => {
-			// BP bounty for a dramatic kill (a sphere explosion). Scales with
-			// the enemy's size. gameState/updateBPDisplay are defined below but
-			// only read when this fires during the loop. Silent fades and cube
-			// petrification don't reach here.
-			gameState.bp += Math.round(entity.scale);
-			updateBPDisplay();
-		},
-	);
+	const entityManager = new EntityManager(entityRenderer, device, world);
 
 	// Projectile renderer — own pipeline + shader, reads only binding 0 of
 	// the shared group 0 (the VP-matrix uniform). No texture sampling.

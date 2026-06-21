@@ -291,21 +291,19 @@ export interface Entity {
 	death: DeathState | null;
 }
 
-/** Why an entity was removed — routes consequence (BP, future FX). */
-export type DespawnReason = 'noPath' | 'expired';
+/** Why an entity was removed — marks the despawn cause (for future death FX). */
+export type DespawnReason = 'noPath' | 'expired' | 'proximity';
 
 /**
  * Sphere self-destruct sequence. Non-null = mid-death: the sphere keeps
  * running AI + physics (still chasing, glowing red) while `elapsed` climbs to
  * `duration`, then `killEntity` detonates it. Mirrors the `tip` "in-progress"
- * pattern — the update loop branches on it. `reason` is carried so the
- * eventual detonation reports the right despawn cause. Sphere-only for now;
- * cubes die instantly.
+ * pattern — the update loop branches on it. Sphere-only for now; cubes die
+ * instantly.
  */
 export interface DeathState {
 	elapsed: number;
 	duration: number;
-	reason: DespawnReason;
 }
 
 /** Block-coord bbox remesh notify (inclusive). Matches main.ts onRegionChanged. */
@@ -357,6 +355,12 @@ const SPHERE_DEATH_REF_SIZE = 5;
 const SPHERE_DEATH_BASE_SECONDS = 1;
 const SPHERE_DEATH_TINT_MAX = 0.8;
 
+// Blast-bubble radius (blocks) around the player: an enemy sphere arms its
+// self-destruct when it overlaps this bubble. The enemy's own radius counts
+// (sphere-vs-bubble), so large spheres arm sooner. Inside
+// SPHERE_EXPLODE_RANGE_BLOCKS, so a proximity death always detonates.
+const SPHERE_DEATH_PROXIMITY_BLOCKS = 5;
+
 function sphereDeathDuration(size: number): number {
 	return (SPHERE_DEATH_BASE_SECONDS * size) / SPHERE_DEATH_REF_SIZE;
 }
@@ -396,23 +400,11 @@ export class EntityManager {
 	// boundary or terrain inside the field changes (callers invoke
 	// invalidateFlowField after world mutations; see notes/sticky-spheres.md).
 	private flowField = new FlowField();
-	// Fired when an entity dies a "dramatic" death (sphere explosion). Silent
-	// fades and cube petrification don't call it — no reward for a kill the
-	// player didn't drive. Wired in main.ts to pay BP.
-	private onEnemyKilled:
-		| ((entity: Entity, reason: DespawnReason) => void)
-		| undefined;
 
-	constructor(
-		renderer: EntityRenderer,
-		device: GPUDevice,
-		world: World,
-		onEnemyKilled?: (entity: Entity, reason: DespawnReason) => void,
-	) {
+	constructor(renderer: EntityRenderer, device: GPUDevice, world: World) {
 		this.renderer = renderer;
 		this.device = device;
 		this.world = world;
-		this.onEnemyKilled = onEnemyKilled;
 	}
 
 	/**
@@ -733,15 +725,7 @@ export class EntityManager {
 			if (entity.death !== null) {
 				entity.death.elapsed += dt;
 				if (entity.death.elapsed >= entity.death.duration) {
-					this.killEntity(
-						entity,
-						entity.death.reason,
-						px,
-						py,
-						pz,
-						ww,
-						onRegionChanged,
-					);
+					this.killEntity(entity, px, py, pz, ww, onRegionChanged);
 					destroyEntityRenderData(entity.renderData);
 					this.entities.splice(i, 1);
 				}
@@ -751,8 +735,16 @@ export class EntityManager {
 			if (entity.tip !== null) continue;
 
 			let reason: DespawnReason | null = null;
-			if (entity.noPathTimer > DESPAWN_NOPATH_SECONDS) reason = 'noPath';
-			else if (entity.age > DESPAWN_LIFESPAN_SECONDS) reason = 'expired';
+			if (
+				entity.shape === Shape.Sphere &&
+				this.withinBlastBubble(entity, px, py, pz, ww, hw, blockSize)
+			) {
+				reason = 'proximity';
+			} else if (entity.noPathTimer > DESPAWN_NOPATH_SECONDS) {
+				reason = 'noPath';
+			} else if (entity.age > DESPAWN_LIFESPAN_SECONDS) {
+				reason = 'expired';
+			}
 			if (reason === null) continue;
 
 			// Spheres begin a telegraphed death (red ramp, then detonate);
@@ -762,12 +754,11 @@ export class EntityManager {
 				entity.death = {
 					elapsed: 0,
 					duration: sphereDeathDuration(entity.scale),
-					reason,
 				};
 				continue;
 			}
 
-			this.killEntity(entity, reason, px, py, pz, ww, onRegionChanged);
+			this.killEntity(entity, px, py, pz, ww, onRegionChanged);
 			destroyEntityRenderData(entity.renderData);
 			this.entities.splice(i, 1);
 		}
@@ -943,6 +934,31 @@ export class EntityManager {
 	}
 
 	/**
+	 * True if the enemy sphere overlaps the player's blast bubble — a sphere of
+	 * SPHERE_DEATH_PROXIMITY_BLOCKS around the player.
+	 * Wrap-aware horizontal delta; squared compare avoids a sqrt.
+	 */
+	private withinBlastBubble(
+		entity: Entity,
+		px: number,
+		py: number,
+		pz: number,
+		ww: number,
+		hw: number,
+		blockSize: number,
+	): boolean {
+		let dx = entity.x - px;
+		const dy = entity.y - py;
+		let dz = entity.z - pz;
+		if (dx > hw) dx -= ww;
+		else if (dx < -hw) dx += ww;
+		if (dz > hw) dz -= ww;
+		else if (dz < -hw) dz += ww;
+		const r = SPHERE_DEATH_PROXIMITY_BLOCKS * blockSize + entity.scale;
+		return dx * dx + dy * dy + dz * dz < r * r;
+	}
+
+	/**
 	 * Returns true if the block at `(bx, by, bz)` would overlap any entity.
 	 * Wrap-aware: shifts the block to the nearest wrapped copy relative to
 	 * each entity before testing, so placement near the world boundary works.
@@ -996,39 +1012,27 @@ export class EntityManager {
 	/**
 	 * Shape-dispatched death consequence. Spheres explode + carve (only when
 	 * near enough the player to be worth the FX — else a silent fade); cubes
-	 * petrify back into terrain. Only a dramatic death (the sphere explosion)
-	 * fires `onEnemyKilled` — silent fades and petrification pay nothing.
-	 * Caller removes the entity afterward.
+	 * petrify back into terrain. Caller removes the entity afterward.
 	 */
 	private killEntity(
 		entity: Entity,
-		reason: DespawnReason,
 		px: number,
 		py: number,
 		pz: number,
 		ww: number,
 		onRegionChanged: RegionChangedFn,
 	): void {
-		let dramatic = false;
 		if (entity.shape === Shape.Sphere) {
-			dramatic = this.explodeSphere(
-				entity,
-				px,
-				py,
-				pz,
-				ww,
-				onRegionChanged,
-			);
+			this.explodeSphere(entity, px, py, pz, ww, onRegionChanged);
 		} else if (entity.shape === Shape.Cube) {
 			this.petrifyCube(entity, onRegionChanged);
 		}
-		if (dramatic) this.onEnemyKilled?.(entity, reason);
 	}
 
 	/**
 	 * Sphere death. If within explode range of the player, carve a spherical
-	 * pocket of air around the death point and report a dramatic death; beyond
-	 * range, fade silently (no carve, no payout). Returns whether it detonated.
+	 * pocket of air around the death point; beyond range, fade silently (no
+	 * carve).
 	 */
 	private explodeSphere(
 		entity: Entity,
@@ -1037,7 +1041,7 @@ export class EntityManager {
 		pz: number,
 		ww: number,
 		onRegionChanged: RegionChangedFn,
-	): boolean {
+	): void {
 		const blockSize = this.world.blockSize;
 		const hw = ww / 2;
 		let dx = entity.x - px;
@@ -1048,7 +1052,7 @@ export class EntityManager {
 		if (dz > hw) dz -= ww;
 		else if (dz < -hw) dz += ww;
 		if (Math.hypot(dx, dy, dz) > SPHERE_EXPLODE_RANGE_BLOCKS * blockSize) {
-			return false;
+			return;
 		}
 
 		const carveRBlocks =
@@ -1082,7 +1086,6 @@ export class EntityManager {
 			);
 			this.flowField.invalidate();
 		}
-		return true;
 	}
 
 	/**

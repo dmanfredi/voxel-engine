@@ -9,7 +9,7 @@
  */
 
 import { mat4 } from 'wgpu-matrix';
-import { MARBLE, BRICK, DARK_MARBLE } from './block';
+import { AIR, MARBLE, BRICK, DARK_MARBLE, type BlockId } from './block';
 import { CHUNK_SIZE } from './chunk';
 import { createIcosphere } from './icosphere';
 import { createBeveledCube } from './cube';
@@ -186,6 +186,34 @@ function getCubeMaterial(matId: Material): CubeMaterial {
 	return cfg;
 }
 
+/**
+ * Non-throwing check: does this material declare a config for `shape`? The
+ * spawner inherits material from terrain, so a cluster's block might map to a
+ * material that doesn't host the spawned shape — skip such clusters rather
+ * than crash inside `spawn()`. Sibling to getSphere/getCubeMaterial, which
+ * throw because their callers have already committed to spawning.
+ */
+export function materialSupportsShape(matId: Material, shape: Shape): boolean {
+	const mat = materials[matId];
+	if (shape === Shape.Sphere) return mat.sphere !== undefined;
+	if (shape === Shape.Cube) return mat.cube !== undefined;
+	return false;
+}
+
+// Inverse of the materials table's `base.texLayer` (which doubles as the
+// BlockId a material paints with). Drives spawn material inheritance — an
+// enemy born from a cluster of block `id` adopts the matching Material. Built
+// once at module load; returns null for blocks no enemy material maps to (AIR,
+// or any block without a material entry).
+const blockIdToMaterial = new Map<BlockId, Material>();
+for (const matId of Object.values(Material)) {
+	blockIdToMaterial.set(materials[matId].base.texLayer, matId);
+}
+
+export function materialFromBlockId(id: BlockId): Material | null {
+	return blockIdToMaterial.get(id) ?? null;
+}
+
 // ── Entity ──────────────────────────────────────────────────────────
 
 export interface Entity {
@@ -246,7 +274,32 @@ export interface Entity {
 	tipInterval: number;
 	// Skip gravity (debug-only — pin entities in air to watch collisions).
 	noGravity: boolean;
+	// ── Despawn bookkeeping ──
+	// Seconds alive. Drives the lifespan turnover cap.
+	age: number;
+	// Seconds spent with no path to the player. Resets to 0 any frame the
+	// entity can path (sphere: in the flow field; cube: mid-tip). Accumulates
+	// otherwise; crossing the threshold despawns the entity. High threshold
+	// for now — it absorbs the dumb-pursuit transit of enemies born outside
+	// the flow field (see notes/spawning-and-despawning.md).
+	noPathTimer: number;
+	// Set each frame by the AI: true if the entity has a path to the player.
+	// Reset to false at the top of the per-entity tick; the AI raises it.
+	hasPath: boolean;
 }
+
+/** Why an entity was removed — routes consequence (BP, future FX). */
+export type DespawnReason = 'noPath' | 'expired';
+
+/** Block-coord bbox remesh notify (inclusive). Matches main.ts onRegionChanged. */
+type RegionChangedFn = (
+	minBX: number,
+	minBY: number,
+	minBZ: number,
+	maxBX: number,
+	maxBY: number,
+	maxBZ: number,
+) => void;
 
 export interface SpawnConfig {
 	shape: Shape;
@@ -269,6 +322,21 @@ interface CachedMesh {
 	vertexCount: number;
 }
 
+// ── Despawn tuning ──────────────────────────────────────────────────
+//
+// Thresholds the despawn pass reads. NoPath is deliberately high: it must
+// exceed the worst-case transit of an enemy born in the outer spawn ring
+// (past the flow field) dumb-walking inward, or arrivals die en route. Drop
+// it once pathing range improves. See notes/spawning-and-despawning.md.
+const DESPAWN_NOPATH_SECONDS = 20;
+const DESPAWN_LIFESPAN_SECONDS = 120;
+
+// Sphere death only detonates (carves + pays out) when this close to the
+// player — an explosion nobody sees is wasted, so a far sphere fades silently.
+const SPHERE_EXPLODE_RANGE_BLOCKS = 30;
+// Crater radius as a multiple of the sphere's own radius (world units).
+const SPHERE_CARVE_RADIUS_FACTOR = 2.5;
+
 // ── EntityManager ───────────────────────────────────────────────────
 
 export class EntityManager {
@@ -283,11 +351,23 @@ export class EntityManager {
 	// boundary or terrain inside the field changes (callers invoke
 	// invalidateFlowField after world mutations; see notes/sticky-spheres.md).
 	private flowField = new FlowField();
+	// Fired when an entity dies a "dramatic" death (sphere explosion). Silent
+	// fades and cube petrification don't call it — no reward for a kill the
+	// player didn't drive. Wired in main.ts to pay BP.
+	private onEnemyKilled:
+		| ((entity: Entity, reason: DespawnReason) => void)
+		| undefined;
 
-	constructor(renderer: EntityRenderer, device: GPUDevice, world: World) {
+	constructor(
+		renderer: EntityRenderer,
+		device: GPUDevice,
+		world: World,
+		onEnemyKilled?: (entity: Entity, reason: DespawnReason) => void,
+	) {
 		this.renderer = renderer;
 		this.device = device;
 		this.world = world;
+		this.onEnemyKilled = onEnemyKilled;
 	}
 
 	/**
@@ -297,6 +377,11 @@ export class EntityManager {
 	 */
 	invalidateFlowField(): void {
 		this.flowField.invalidate();
+	}
+
+	/** Number of live entities — the spawner's population gauge against its cap. */
+	get activeCount(): number {
+		return this.entities.length;
 	}
 
 	spawn(config: SpawnConfig): number {
@@ -426,6 +511,9 @@ export class EntityManager {
 			tipDuration,
 			tipInterval,
 			noGravity: config.noGravity ?? false,
+			age: 0,
+			noPathTimer: 0,
+			hasPath: false,
 		});
 
 		// Initial upload with zero offset — next update() will apply proper wrap
@@ -495,6 +583,10 @@ export class EntityManager {
 		// are intentionally inert — no AI, no gravity, no voxel collision —
 		// the tip finishes and normal physics resumes next frame.
 		for (const entity of this.entities) {
+			// Despawn signal: the AI raises this when it confirms a path to the
+			// player. Default false so an entity with no path accrues no-path
+			// time toward despawn.
+			entity.hasPath = false;
 			if (entity.shape === Shape.Sphere) {
 				const sphereMat = getSphereMaterial(entity.material);
 				entityAITick(
@@ -524,6 +616,11 @@ export class EntityManager {
 					this.tryTipCube(e, dir, onRegionChanged),
 				);
 				if (entity.tip !== null) {
+					// Mid-tip = actively translating toward the player, so it
+					// has a path (covers both a freshly-started and an ongoing
+					// tip). A grounded cube whose tip attempts keep failing
+					// stays false and accrues no-path time.
+					entity.hasPath = true;
 					advanceCubeTip(entity, dt);
 				} else {
 					entityCubePhysicsTick(entity, this.world, dt);
@@ -572,6 +669,27 @@ export class EntityManager {
 				entity,
 				ww,
 			);
+		}
+
+		// Pass 2.75 — despawn. Age + no-path bookkeeping for every entity,
+		// then the ordered condition list (first match wins). Mid-tip cubes
+		// update their timers but are never killed mid-arc (not grid-aligned —
+		// petrify would misplace them); they regain eligibility once idle.
+		// Iterate backwards so in-place removal is safe.
+		for (let i = this.entities.length - 1; i >= 0; i--) {
+			const entity = this.entities[i];
+			entity.age += dt;
+			entity.noPathTimer = entity.hasPath ? 0 : entity.noPathTimer + dt;
+			if (entity.tip !== null) continue;
+
+			let reason: DespawnReason | null = null;
+			if (entity.noPathTimer > DESPAWN_NOPATH_SECONDS) reason = 'noPath';
+			else if (entity.age > DESPAWN_LIFESPAN_SECONDS) reason = 'expired';
+			if (reason === null) continue;
+
+			this.killEntity(entity, reason, px, py, pz, ww, onRegionChanged);
+			destroyEntityRenderData(entity.renderData);
+			this.entities.splice(i, 1);
 		}
 
 		// Pass 3 — render-time wrap offset + transform upload.
@@ -790,6 +908,140 @@ export class EntityManager {
 		if (idx === -1) return;
 		destroyEntityRenderData(this.entities[idx].renderData);
 		this.entities.splice(idx, 1);
+	}
+
+	/**
+	 * Shape-dispatched death consequence. Spheres explode + carve (only when
+	 * near enough the player to be worth the FX — else a silent fade); cubes
+	 * petrify back into terrain. Only a dramatic death (the sphere explosion)
+	 * fires `onEnemyKilled` — silent fades and petrification pay nothing.
+	 * Caller removes the entity afterward.
+	 */
+	private killEntity(
+		entity: Entity,
+		reason: DespawnReason,
+		px: number,
+		py: number,
+		pz: number,
+		ww: number,
+		onRegionChanged: RegionChangedFn,
+	): void {
+		let dramatic = false;
+		if (entity.shape === Shape.Sphere) {
+			dramatic = this.explodeSphere(
+				entity,
+				px,
+				py,
+				pz,
+				ww,
+				onRegionChanged,
+			);
+		} else if (entity.shape === Shape.Cube) {
+			this.petrifyCube(entity, onRegionChanged);
+		}
+		if (dramatic) this.onEnemyKilled?.(entity, reason);
+	}
+
+	/**
+	 * Sphere death. If within explode range of the player, carve a spherical
+	 * pocket of air around the death point and report a dramatic death; beyond
+	 * range, fade silently (no carve, no payout). Returns whether it detonated.
+	 */
+	private explodeSphere(
+		entity: Entity,
+		px: number,
+		py: number,
+		pz: number,
+		ww: number,
+		onRegionChanged: RegionChangedFn,
+	): boolean {
+		const blockSize = this.world.blockSize;
+		const hw = ww / 2;
+		let dx = entity.x - px;
+		const dy = entity.y - py;
+		let dz = entity.z - pz;
+		if (dx > hw) dx -= ww;
+		else if (dx < -hw) dx += ww;
+		if (dz > hw) dz -= ww;
+		else if (dz < -hw) dz += ww;
+		if (Math.hypot(dx, dy, dz) > SPHERE_EXPLODE_RANGE_BLOCKS * blockSize) {
+			return false;
+		}
+
+		const carveRBlocks =
+			(entity.scale * SPHERE_CARVE_RADIUS_FACTOR) / blockSize;
+		const reach = Math.ceil(carveRBlocks);
+		const r2 = carveRBlocks * carveRBlocks;
+		const cbx = Math.floor(entity.x / blockSize);
+		const cby = Math.floor(entity.y / blockSize);
+		const cbz = Math.floor(entity.z / blockSize);
+		let carved = false;
+		for (let ix = -reach; ix <= reach; ix++) {
+			for (let iy = -reach; iy <= reach; iy++) {
+				for (let iz = -reach; iz <= reach; iz++) {
+					if (ix * ix + iy * iy + iz * iz > r2) continue;
+					if (
+						this.world.setBlock(cbx + ix, cby + iy, cbz + iz, AIR)
+					) {
+						carved = true;
+					}
+				}
+			}
+		}
+		if (carved) {
+			onRegionChanged(
+				cbx - reach,
+				cby - reach,
+				cbz - reach,
+				cbx + reach,
+				cby + reach,
+				cbz + reach,
+			);
+			this.flowField.invalidate();
+		}
+		return true;
+	}
+
+	/**
+	 * Cube death — collapse back into static terrain of its own material over
+	 * its grid-aligned footprint, filling only air cells (never overwriting
+	 * existing terrain). `setBlock` failing on unloaded chunks makes the
+	 * "too far to petrify" case a silent fade for free — no explicit range gate.
+	 */
+	private petrifyCube(
+		entity: Entity,
+		onRegionChanged: RegionChangedFn,
+	): void {
+		const blockSize = this.world.blockSize;
+		const n = Math.round((2 * entity.scale) / blockSize);
+		const blockId = materials[entity.material].base.texLayer;
+		const bx0 = Math.round((entity.x - entity.scale) / blockSize);
+		const by0 = Math.round((entity.y - entity.scale) / blockSize);
+		const bz0 = Math.round((entity.z - entity.scale) / blockSize);
+		let deposited = false;
+		for (let ix = 0; ix < n; ix++) {
+			for (let iy = 0; iy < n; iy++) {
+				for (let iz = 0; iz < n; iz++) {
+					const bx = bx0 + ix;
+					const by = by0 + iy;
+					const bz = bz0 + iz;
+					if (this.world.isSolid(bx, by, bz)) continue;
+					if (this.world.setBlock(bx, by, bz, blockId))
+						deposited = true;
+				}
+			}
+		}
+		if (deposited) {
+			onRegionChanged(
+				bx0,
+				by0,
+				bz0,
+				bx0 + n - 1,
+				by0 + n - 1,
+				bz0 + n - 1,
+			);
+			this.flowField.invalidate();
+		}
 	}
 
 	private uploadTransform(

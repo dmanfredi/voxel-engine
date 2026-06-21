@@ -28,7 +28,7 @@
  */
 
 import { CHUNK_SIZE } from '../chunk';
-import { MARBLE } from '../block';
+import { DARK_MARBLE, MARBLE } from '../block';
 
 // Must match `WORLD_WIDTH * CHUNK_SIZE` from main.ts. Hardcoded because
 // generators don't get a World reference; if world width changes there,
@@ -192,7 +192,7 @@ export default function pillars(
 			const rowBase = ly * CHUNK_SIZE * CHUNK_SIZE + lz * CHUNK_SIZE;
 			if (yz) {
 				for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-					blocks[rowBase + lx] = MARBLE;
+					blocks[rowBase + lx] = DARK_MARBLE;
 				}
 				continue;
 			}

@@ -16,7 +16,8 @@ import { autoClimb } from './auto-climb';
 import { ChunkLoader } from './chunk-loader';
 import { MeshScheduler } from './mesh-scheduler';
 import { initEntityRenderer } from './entity-renderer';
-import { EntityManager, Shape, Material, Role } from './entity';
+import { EntityManager } from './entity';
+import { Spawner } from './spawner';
 import { tryPlaceBlock } from './placement';
 import { generateMips, numMipLevels } from './mipmap';
 import { initToolbar } from './toolbar';
@@ -520,7 +521,19 @@ async function main(): Promise<void> {
 		mainGroup0BGL,
 		bindGroup,
 	);
-	const entityManager = new EntityManager(entityRenderer, device, world);
+	const entityManager = new EntityManager(
+		entityRenderer,
+		device,
+		world,
+		(entity) => {
+			// BP bounty for a dramatic kill (a sphere explosion). Scales with
+			// the enemy's size. gameState/updateBPDisplay are defined below but
+			// only read when this fires during the loop. Silent fades and cube
+			// petrification don't reach here.
+			gameState.bp += Math.round(entity.scale);
+			updateBPDisplay();
+		},
+	);
 
 	// Projectile renderer — own pipeline + shader, reads only binding 0 of
 	// the shared group 0 (the VP-matrix uniform). No texture sampling.
@@ -539,76 +552,11 @@ async function main(): Promise<void> {
 		bindGroup,
 	);
 
-	// Test sphere — all spheres now cling to walls/ceilings by default and
-	// chase in 3D when attached.
-	entityManager.spawn({
-		shape: Shape.Sphere,
-		material: Material.DarkMarble,
-		role: Role.Rush,
-		x: worldCenter + 30,
-		y: worldCenter + 100,
-		z: worldCenter + 30,
-		size: 12,
-	});
-
-	// entityManager.spawn({
-	// 	shape: Shape.Sphere,
-	// 	material: Material.DarkMarble,
-	// 	role: Role.Rush,
-	// 	x: worldCenter,
-	// 	y: worldCenter + 100,
-	// 	z: worldCenter - 100,
-	// 	size: 20,
-	// 	vx: 2,
-	// 	vz: 2,
-	// });
-
-	// entityManager.spawn({
-	// 	shape: Shape.Sphere,
-	// 	material: Material.Marble,
-	// 	role: Role.Rush,
-	// 	x: worldCenter,
-	// 	y: worldCenter + 100,
-	// 	z: worldCenter - 100,
-	// 	size: 10,
-	// 	vx: 3,
-	// 	vz: -2,
-	// });
-
-	// entityManager.spawn({
-	// 	shape: Shape.Sphere,
-	// 	material: Material.Brick,
-	// 	role: Role.Rush,
-	// 	x: worldCenter,
-	// 	y: worldCenter + 100,
-	// 	z: worldCenter - 100,
-	// 	size: 15,
-	// 	vx: 3,
-	// 	vz: -2,
-	// });
-
-	// Phase 2 cube: spawned above terrain, falls under gravity and settles
-	// on the first solid voxel beneath it. Spheres that roll into it will
-	// bounce off (cube treated as infinite mass).
-	// entityManager.spawn({
-	// 	shape: Shape.Cube,
-	// 	material: Material.Marble,
-	// 	role: Role.Zone,
-	// 	x: worldCenter + 60,
-	// 	y: worldCenter + 100,
-	// 	z: worldCenter - 100,
-	// 	size: 10,
-	// });
-
-	// entityManager.spawn({
-	// 	shape: Shape.Cube,
-	// 	material: Material.DarkMarble,
-	// 	role: Role.Zone,
-	// 	x: worldCenter - 60,
-	// 	y: worldCenter + 100,
-	// 	z: worldCenter + 100,
-	// 	size: 20,
-	// });
+	// Enemy spawning — enemies are born from terrain near the player. The spawn
+	// table + tuning live in spawner.ts; this just drives it each tick.
+	// onRegionChanged is a hoisted declaration (defined below), same as the
+	// projectile manager's onBlockChanged reference.
+	const spawner = new Spawner(world, entityManager, onRegionChanged);
 
 	// Initialize block highlight outline
 	// const highlight = initHighlight(device, presentationFormat);
@@ -1040,6 +988,10 @@ async function main(): Promise<void> {
 				updateBPDisplay();
 			}
 		}
+
+		// Attempt enemy spawns before the entity update so a fresh spawn's
+		// flow-field invalidation and first physics tick land this same frame.
+		spawner.update(dt, cameraPos);
 
 		entityManager.update(
 			dt,

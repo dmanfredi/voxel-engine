@@ -5,8 +5,8 @@ import { CHUNK_SIZE } from './chunk';
 // import perlinTerrain from './generators/perlin';
 // import cubeFieldPlain from './generators/planar';
 // import cubePlaza from './generators/cube-plaza';
-import pillars from './generators/pillars';
-// import jungleGym from './generators/jungle-gym';
+// import pillars from './generators/pillars';
+import jungleGym from './generators/jungle-gym';
 
 export default function buildChunkBlocks(
 	cx: number,
@@ -27,9 +27,9 @@ export default function buildChunkBlocks(
 
 	// mengerSky(cx, cy, cz, blocks);
 
-	pillars(cx, cy, cz, blocks);
+	// pillars(cx, cy, cz, blocks);
 
-	// jungleGym(cx, cy, cz, blocks);
+	jungleGym(cx, cy, cz, blocks);
 
 	return blocks;
 }

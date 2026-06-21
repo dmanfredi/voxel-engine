@@ -31,19 +31,19 @@ import type { World } from './world';
 // ── Tuning ──────────────────────────────────────────────────────────
 
 // Spawn shell around the player, in blocks. The inner wall keeps enemies from
-// popping in your lap; the outer wall extends past the 24-block flow field on
+// popping in your lap; the outer wall extends past the flow field's reach on
 // purpose (enemies born in the outer ring dumb-pursue until they cross in —
 // the high despawn no-path timer absorbs that transit). See the design doc.
-const SPAWN_RADIUS_MIN_BLOCKS = 24;
-const SPAWN_RADIUS_MAX_BLOCKS = 64;
+const SPAWN_RADIUS_MIN_BLOCKS = 16;
+const SPAWN_RADIUS_MAX_BLOCKS = 48;
 
 // Vertical spread of candidate sites, in blocks. Biased by shape: rushers
 // emerge below/level (threat rises at you), crushers above (drop onto you).
 const SPAWN_VERTICAL_SPAN_BLOCKS = 24;
 
 // Constant-pace knobs (the Director's whole tuning surface for now).
-const SPAWN_CADENCE_SECONDS = 2.5; // min seconds between spawn attempts
-const SPAWN_MAX_ACTIVE = 8; // population cap
+const SPAWN_CADENCE_SECONDS = 0.5; // min seconds between spawn attempts
+const SPAWN_MAX_ACTIVE = 32; // population cap
 
 // Candidate sites sampled per attempt before giving up for this cadence.
 // Barren terrain yielding nothing is a feature — sparse worlds stay calm.
@@ -53,8 +53,7 @@ const SPAWN_ATTEMPTS_PER_TICK = 16;
 //
 // What can spawn. Material is intentionally absent — it's inherited from the
 // consumed terrain. Cube sizes must yield a whole-voxel edge (2·size a
-// multiple of blockSize) or EntityManager.spawn throws; size 10 → edge 20 =
-// 2 voxels at blockSize 10.
+// multiple of blockSize) or EntityManager.spawn throws.
 
 interface SpawnEntry {
 	shape: Shape;
@@ -63,9 +62,13 @@ interface SpawnEntry {
 }
 
 const SPAWN_TABLE: SpawnEntry[] = [
-	{ shape: Shape.Sphere, role: Role.Rush, size: 10 },
-	{ shape: Shape.Sphere, role: Role.Rush, size: 14 },
+	{ shape: Shape.Sphere, role: Role.Rush, size: 5 },
+	{ shape: Shape.Sphere, role: Role.Rush, size: 5 },
+	{ shape: Shape.Sphere, role: Role.Rush, size: 9 },
+	{ shape: Shape.Sphere, role: Role.Rush, size: 19 },
 	{ shape: Shape.Cube, role: Role.Crush, size: 10 },
+	{ shape: Shape.Cube, role: Role.Crush, size: 5 },
+	{ shape: Shape.Cube, role: Role.Crush, size: 5 },
 ];
 
 // ── Types ───────────────────────────────────────────────────────────
@@ -241,8 +244,9 @@ export class Spawner {
 	 * One region-remesh + one flow-field invalidation cover the whole cluster.
 	 *
 	 * Telegraph (claim-at-start / consume-at-hatch + glow visual) is deferred —
-	 * v0 consumes and emerges in the same frame. Seam: insert a claimed-site
-	 * timer here, hatching on expiry. No gameplay depends on it (no counterplay).
+	 * it currently consumes and emerges in the same frame. Seam: insert a
+	 * claimed-site timer here, hatching on expiry. No gameplay depends on it
+	 * (no counterplay).
 	 */
 	private emerge(site: Site, entry: SpawnEntry): void {
 		const { bx0, by0, bz0, n, material } = site;
@@ -283,6 +287,6 @@ function verticalOffset(shape: Shape): number {
 	if (shape === Shape.Cube) {
 		return Math.round(Math.random() * SPAWN_VERTICAL_SPAN_BLOCKS);
 	}
-	// Spheres: mostly below, a little above level. [-0.8, +0.2] × span.
+	// Spheres: mostly below, a little above level.
 	return Math.round((Math.random() - 0.8) * SPAWN_VERTICAL_SPAN_BLOCKS);
 }

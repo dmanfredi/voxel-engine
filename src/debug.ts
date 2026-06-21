@@ -24,7 +24,7 @@ export const debuggerParams = {
 	// Enemy readouts / toggles (the Enemies pane)
 	enemyCount: 0,
 	enemyXray: false, // paint enemies over terrain (see-through debug view)
-	spawnerEnabled: true, // automatic terrain-born spawner (manual spawn still works)
+	spawnerEnabled: false, // automatic terrain-born spawner (manual spawn still works)
 };
 
 /** Hooks the enemy pane calls back into — implemented in main.ts. */
@@ -42,8 +42,8 @@ export function refreshDebug(): void {
 }
 
 export function BuildDebug(render: () => void, hooks: DebugHooks): void {
-	// Shared container so the Debug and Enemies panes stack vertically. Without
-	// it, each Pane floats at the same top-right anchor and they overlap.
+	// Shared container so the two debug panes stack vertically. Without it,
+	// each Pane floats at the same top-right anchor and they overlap.
 	const paneContainer = document.createElement('div');
 	paneContainer.style.cssText =
 		'position: fixed; top: 8px; right: 8px; width: 256px; display: flex; flex-direction: column; gap: 8px; z-index: 100;';
@@ -165,8 +165,9 @@ export function BuildDebug(render: () => void, hooks: DebugHooks): void {
 			'Dark Marble': Material.DarkMarble,
 		},
 	});
-	// Step 5 keeps cube edges whole-voxel (2·size a multiple of blockSize=10),
-	// so cube spawns never trip EntityManager.spawn's alignment check.
+	// Stepping size by blockSize/2 keeps cube edges whole-voxel (2·size a
+	// multiple of blockSize), so cube spawns never trip EntityManager.spawn's
+	// alignment check.
 	spawnFolder.addBinding(spawnParams, 'size', {
 		label: 'Size',
 		min: 5,

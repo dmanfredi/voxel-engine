@@ -380,7 +380,7 @@ function sphereDeathTint(death: DeathState): number {
 }
 
 // Crater radius as a multiple of the sphere's own radius (world units).
-const SPHERE_CARVE_RADIUS_FACTOR = 2.5;
+const SPHERE_CARVE_RADIUS_FACTOR = 3.5;
 
 // ── EntityManager ───────────────────────────────────────────────────
 

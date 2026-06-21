@@ -357,8 +357,7 @@ const SPHERE_DEATH_TINT_MAX = 0.8;
 
 // Blast-bubble radius (blocks) around the player: an enemy sphere arms its
 // self-destruct when it overlaps this bubble. The enemy's own radius counts
-// (sphere-vs-bubble), so large spheres arm sooner. Inside
-// SPHERE_EXPLODE_RANGE_BLOCKS, so a proximity death always detonates.
+// (sphere-vs-bubble), so large spheres arm sooner.
 const SPHERE_DEATH_PROXIMITY_BLOCKS = 5;
 
 function sphereDeathDuration(size: number): number {
@@ -380,9 +379,6 @@ function sphereDeathTint(death: DeathState): number {
 	);
 }
 
-// Sphere death only detonates (carves + pays out) when this close to the
-// player — an explosion nobody sees is wasted, so a far sphere fades silently.
-const SPHERE_EXPLODE_RANGE_BLOCKS = 30;
 // Crater radius as a multiple of the sphere's own radius (world units).
 const SPHERE_CARVE_RADIUS_FACTOR = 2.5;
 
@@ -725,7 +721,7 @@ export class EntityManager {
 			if (entity.death !== null) {
 				entity.death.elapsed += dt;
 				if (entity.death.elapsed >= entity.death.duration) {
-					this.killEntity(entity, px, py, pz, ww, onRegionChanged);
+					this.killEntity(entity, onRegionChanged);
 					destroyEntityRenderData(entity.renderData);
 					this.entities.splice(i, 1);
 				}
@@ -748,8 +744,8 @@ export class EntityManager {
 			if (reason === null) continue;
 
 			// Spheres begin a telegraphed death (red ramp, then detonate);
-			// the carve + payout fires when the sequence completes. Other
-			// shapes die instantly — telegraphed death is sphere-only for now.
+			// the carve fires when the sequence completes. Other shapes die
+			// instantly — telegraphed death is sphere-only for now.
 			if (entity.shape === Shape.Sphere) {
 				entity.death = {
 					elapsed: 0,
@@ -758,7 +754,7 @@ export class EntityManager {
 				continue;
 			}
 
-			this.killEntity(entity, px, py, pz, ww, onRegionChanged);
+			this.killEntity(entity, onRegionChanged);
 			destroyEntityRenderData(entity.renderData);
 			this.entities.splice(i, 1);
 		}
@@ -1010,50 +1006,23 @@ export class EntityManager {
 	}
 
 	/**
-	 * Shape-dispatched death consequence. Spheres explode + carve (only when
-	 * near enough the player to be worth the FX — else a silent fade); cubes
-	 * petrify back into terrain. Caller removes the entity afterward.
+	 * Shape-dispatched death consequence. Spheres explode + carve a crater;
+	 * cubes petrify back into terrain. Caller removes the entity afterward.
 	 */
-	private killEntity(
-		entity: Entity,
-		px: number,
-		py: number,
-		pz: number,
-		ww: number,
-		onRegionChanged: RegionChangedFn,
-	): void {
+	private killEntity(entity: Entity, onRegionChanged: RegionChangedFn): void {
 		if (entity.shape === Shape.Sphere) {
-			this.explodeSphere(entity, px, py, pz, ww, onRegionChanged);
+			this.explodeSphere(entity, onRegionChanged);
 		} else if (entity.shape === Shape.Cube) {
 			this.petrifyCube(entity, onRegionChanged);
 		}
 	}
 
-	/**
-	 * Sphere death. If within explode range of the player, carve a spherical
-	 * pocket of air around the death point; beyond range, fade silently (no
-	 * carve).
-	 */
+	/** Sphere death — carve a spherical pocket of air around the death point. */
 	private explodeSphere(
 		entity: Entity,
-		px: number,
-		py: number,
-		pz: number,
-		ww: number,
 		onRegionChanged: RegionChangedFn,
 	): void {
 		const blockSize = this.world.blockSize;
-		const hw = ww / 2;
-		let dx = entity.x - px;
-		const dy = entity.y - py;
-		let dz = entity.z - pz;
-		if (dx > hw) dx -= ww;
-		else if (dx < -hw) dx += ww;
-		if (dz > hw) dz -= ww;
-		else if (dz < -hw) dz += ww;
-		if (Math.hypot(dx, dy, dz) > SPHERE_EXPLODE_RANGE_BLOCKS * blockSize) {
-			return;
-		}
 
 		const carveRBlocks =
 			(entity.scale * SPHERE_CARVE_RADIUS_FACTOR) / blockSize;

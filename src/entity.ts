@@ -286,10 +286,27 @@ export interface Entity {
 	// Set each frame by the AI: true if the entity has a path to the player.
 	// Reset to false at the top of the per-entity tick; the AI raises it.
 	hasPath: boolean;
+	// Non-null while a sphere runs its self-destruct sequence (see DeathState).
+	// Drives the red death overlay and suppresses re-despawn while it plays.
+	death: DeathState | null;
 }
 
 /** Why an entity was removed — routes consequence (BP, future FX). */
 export type DespawnReason = 'noPath' | 'expired';
+
+/**
+ * Sphere self-destruct sequence. Non-null = mid-death: the sphere keeps
+ * running AI + physics (still chasing, glowing red) while `elapsed` climbs to
+ * `duration`, then `killEntity` detonates it. Mirrors the `tip` "in-progress"
+ * pattern — the update loop branches on it. `reason` is carried so the
+ * eventual detonation reports the right despawn cause. Sphere-only for now;
+ * cubes die instantly.
+ */
+export interface DeathState {
+	elapsed: number;
+	duration: number;
+	reason: DespawnReason;
+}
 
 /** Block-coord bbox remesh notify (inclusive). Matches main.ts onRegionChanged. */
 type RegionChangedFn = (
@@ -328,8 +345,36 @@ interface CachedMesh {
 // exceed the worst-case transit of an enemy born in the outer spawn ring
 // (past the flow field) dumb-walking inward, or arrivals die en route. Drop
 // it once pathing range improves. See notes/spawning-and-despawning.md.
-const DESPAWN_NOPATH_SECONDS = 20;
+const DESPAWN_NOPATH_SECONDS = 2;
 const DESPAWN_LIFESPAN_SECONDS = 120;
+
+// Sphere self-destruct animation. Duration scales linearly with size: a
+// reference-size sphere takes the base time, a double-size sphere takes
+// double. SPHERE_DEATH_BASE_SECONDS is the knob to fiddle. During the
+// sequence the sphere keeps chasing while a red overlay ramps 0 → TINT_MAX;
+// at the end it detonates (killEntity).
+const SPHERE_DEATH_REF_SIZE = 5;
+const SPHERE_DEATH_BASE_SECONDS = 1;
+const SPHERE_DEATH_TINT_MAX = 0.8;
+
+function sphereDeathDuration(size: number): number {
+	return (SPHERE_DEATH_BASE_SECONDS * size) / SPHERE_DEATH_REF_SIZE;
+}
+
+function sphereDeathTint(death: DeathState): number {
+	const progress = Math.min(1, death.elapsed / death.duration);
+	const t = Math.min(death.elapsed, death.duration);
+	const hzSpan = 3.0 - 1.5;
+	const cycles = 1.5 * t + (hzSpan * t * t) / (2 * death.duration);
+	const wobble = 0.25 * Math.sin(2 * Math.PI * cycles);
+	return Math.max(
+		0,
+		Math.min(
+			SPHERE_DEATH_TINT_MAX,
+			SPHERE_DEATH_TINT_MAX * progress + wobble,
+		),
+	);
+}
 
 // Sphere death only detonates (carves + pays out) when this close to the
 // player — an explosion nobody sees is wasted, so a far sphere fades silently.
@@ -514,10 +559,11 @@ export class EntityManager {
 			age: 0,
 			noPathTimer: 0,
 			hasPath: false,
+			death: null,
 		});
 
 		// Initial upload with zero offset — next update() will apply proper wrap
-		this.uploadTransform(this.entities[this.entities.length - 1], 0, 0);
+		this.uploadTransform(this.entities[this.entities.length - 1], 0, 0, 0);
 		return id;
 	}
 
@@ -680,12 +726,46 @@ export class EntityManager {
 			const entity = this.entities[i];
 			entity.age += dt;
 			entity.noPathTimer = entity.hasPath ? 0 : entity.noPathTimer + dt;
+
+			// Already self-destructing (spheres only): advance the clock and
+			// detonate + remove on completion. AI/physics keep running in their
+			// passes — only the despawn re-check is suppressed here.
+			if (entity.death !== null) {
+				entity.death.elapsed += dt;
+				if (entity.death.elapsed >= entity.death.duration) {
+					this.killEntity(
+						entity,
+						entity.death.reason,
+						px,
+						py,
+						pz,
+						ww,
+						onRegionChanged,
+					);
+					destroyEntityRenderData(entity.renderData);
+					this.entities.splice(i, 1);
+				}
+				continue;
+			}
+
 			if (entity.tip !== null) continue;
 
 			let reason: DespawnReason | null = null;
 			if (entity.noPathTimer > DESPAWN_NOPATH_SECONDS) reason = 'noPath';
 			else if (entity.age > DESPAWN_LIFESPAN_SECONDS) reason = 'expired';
 			if (reason === null) continue;
+
+			// Spheres begin a telegraphed death (red ramp, then detonate);
+			// the carve + payout fires when the sequence completes. Other
+			// shapes die instantly — telegraphed death is sphere-only for now.
+			if (entity.shape === Shape.Sphere) {
+				entity.death = {
+					elapsed: 0,
+					duration: sphereDeathDuration(entity.scale),
+					reason,
+				};
+				continue;
+			}
 
 			this.killEntity(entity, reason, px, py, pz, ww, onRegionChanged);
 			destroyEntityRenderData(entity.renderData);
@@ -701,7 +781,9 @@ export class EntityManager {
 			const dz = entity.z - pz;
 			const offsetX = dx > hw ? -ww : dx < -hw ? ww : 0;
 			const offsetZ = dz > hw ? -ww : dz < -hw ? ww : 0;
-			this.uploadTransform(entity, offsetX, offsetZ);
+			const deathTint =
+				entity.death !== null ? sphereDeathTint(entity.death) : 0;
+			this.uploadTransform(entity, offsetX, offsetZ, deathTint);
 		}
 	}
 
@@ -1049,6 +1131,7 @@ export class EntityManager {
 		entity: Entity,
 		offsetX: number,
 		offsetZ: number,
+		deathTint: number,
 	): void {
 		let model: Float32Array<ArrayBuffer>;
 		if (entity.tip !== null) {
@@ -1088,7 +1171,12 @@ export class EntityManager {
 				model,
 			);
 		}
-		updateEntityTransform(this.device.queue, entity.renderData, model);
+		updateEntityTransform(
+			this.device.queue,
+			entity.renderData,
+			model,
+			deathTint,
+		);
 	}
 
 	private generateMesh(shape: Shape): CachedMesh {

@@ -8,7 +8,7 @@
 
 import { buildMaterialLUT } from './shader/shared';
 
-const ENTITY_UNIFORM_SIZE = 80; // mat4x4f(64) + u32 texLayer(4) + f32 texScale(4) + padding(8) = 80
+const ENTITY_UNIFORM_SIZE = 80; // mat4x4f(64) + u32 texLayer(4) + f32 texScale(4) + f32 deathTint(4) + padding(4) = 80
 
 const entityShader = /*wgsl*/ `
 	${buildMaterialLUT()}
@@ -26,6 +26,7 @@ const entityShader = /*wgsl*/ `
 		model: mat4x4f,
 		texLayer: u32,
 		texScale: f32,
+		deathTint: f32,
 	}
 
 	struct Vertex {
@@ -95,7 +96,13 @@ const entityShader = /*wgsl*/ `
 		let fogColor = textureSample(skyTexture, skySampler, eyeToSurface * vec3f(1, 1, -1)).rgb;
 		let fogged = mix(fogColor, final_color, fogFactor);
 
-		return vec4f(fogged, texColor.a);
+		// Death overlay: off-red wash blended by deathTint (0 for living
+		// entities). The ramp + pulse shaping lives CPU-side in entity.ts
+		// (sphereDeathTint); the shader just blends by the value it's handed.
+		let DEATH_COLOR = vec3f(0.7, 0.08, 0.08);
+		let withDeath = mix(fogged, DEATH_COLOR, entity.deathTint);
+
+		return vec4f(withDeath, texColor.a);
 	}
 `;
 
@@ -243,8 +250,12 @@ export function updateEntityTransform(
 	queue: GPUQueue,
 	data: EntityRenderData,
 	modelMatrix: Float32Array<ArrayBuffer>,
+	deathTint: number,
 ): void {
 	data.uniformF32.set(modelMatrix, 0);
+	// Index 18 = offset 72: the deathTint slot (texLayer/texScale at 16/17 are
+	// written once at spawn and left alone — this write preserves them).
+	data.uniformF32[18] = deathTint;
 	queue.writeBuffer(data.uniformBuffer, 0, data.uniformF32);
 }
 

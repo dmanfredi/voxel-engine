@@ -238,6 +238,11 @@ export interface Entity {
 	contactNx: number;
 	contactNy: number;
 	contactNz: number;
+	// Sphere-only: real overlap with the player AABB this tick (distinct from
+	// `attached`, which lumps in voxel/cube and shell-only contacts). Set in
+	// sphere physics, reset each tick; the despawn pass reads it to cut the
+	// self-destruct fuse short when a sphere actually reaches the player.
+	touchedPlayer: boolean;
 	scale: number;
 	mass: number;
 	restitution: number;
@@ -356,9 +361,11 @@ const SPHERE_DEATH_BASE_SECONDS = 1;
 const SPHERE_DEATH_TINT_MAX = 0.8;
 
 // Blast-bubble radius (blocks) around the player: an enemy sphere arms its
-// self-destruct when it overlaps this bubble. The enemy's own radius counts
-// (sphere-vs-bubble), so large spheres arm sooner.
+// self-destruct when it overlaps this bubble.
 const SPHERE_DEATH_PROXIMITY_BLOCKS = 5;
+
+// Fuse a sphere detonates within once it physically touches the player
+const SPHERE_CONTACT_FUSE_SECONDS = 0.1;
 
 function sphereDeathDuration(size: number): number {
 	return (SPHERE_DEATH_BASE_SECONDS * size) / SPHERE_DEATH_REF_SIZE;
@@ -530,6 +537,7 @@ export class EntityManager {
 			contactNx: 0,
 			contactNy: 0,
 			contactNz: 0,
+			touchedPlayer: false,
 			scale: config.size,
 			mass,
 			restitution: matBase.restitution,
@@ -717,8 +725,16 @@ export class EntityManager {
 
 			// Already self-destructing (spheres only): advance the clock and
 			// detonate + remove on completion. AI/physics keep running in their
-			// passes — only the despawn re-check is suppressed here.
+			// passes — only the despawn re-check is suppressed here. Touching
+			// the player mid-countdown cuts the fuse to the contact window
+			// (monotonic — never lengthens).
 			if (entity.death !== null) {
+				if (entity.touchedPlayer) {
+					const cut =
+						entity.death.elapsed + SPHERE_CONTACT_FUSE_SECONDS;
+					if (cut < entity.death.duration)
+						entity.death.duration = cut;
+				}
 				entity.death.elapsed += dt;
 				if (entity.death.elapsed >= entity.death.duration) {
 					this.killEntity(entity, onRegionChanged);
@@ -745,11 +761,14 @@ export class EntityManager {
 
 			// Spheres begin a telegraphed death (red ramp, then detonate);
 			// the carve fires when the sequence completes. Other shapes die
-			// instantly — telegraphed death is sphere-only for now.
+			// instantly — telegraphed death is sphere-only for now. A sphere
+			// already touching the player on arm gets the short contact fuse.
 			if (entity.shape === Shape.Sphere) {
 				entity.death = {
 					elapsed: 0,
-					duration: sphereDeathDuration(entity.scale),
+					duration: entity.touchedPlayer
+						? SPHERE_CONTACT_FUSE_SECONDS
+						: sphereDeathDuration(entity.scale),
 				};
 				continue;
 			}

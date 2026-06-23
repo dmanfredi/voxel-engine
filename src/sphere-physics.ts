@@ -102,6 +102,7 @@ export function entityPhysicsTick(
 	entity.contactNx = 0;
 	entity.contactNy = 0;
 	entity.contactNz = 0;
+	entity.touchedPlayer = false;
 
 	const ww = world.widthChunks * CHUNK_SIZE * world.blockSize;
 
@@ -200,14 +201,34 @@ function resolveSphereVsPlayer(
 	if (dzRaw > hw) pz += ww;
 	else if (dzRaw < -hw) pz -= ww;
 
+	const minX = px - playerHalfWidth;
+	const maxX = px + playerHalfWidth;
+	const minY = py - playerHeight;
+	const maxY = py;
+	const minZ = pz - playerHalfWidth;
+	const maxZ = pz + playerHalfWidth;
+
+	// Contact flag for the self-destruct fuse — sampled before resolution
+	// depenetrates the sphere back to the surface. Real overlap only (true
+	// radius, not the shell), so it means "actually reached the player."
+	const cpX = Math.max(minX, Math.min(entity.x, maxX));
+	const cpY = Math.max(minY, Math.min(entity.y, maxY));
+	const cpZ = Math.max(minZ, Math.min(entity.z, maxZ));
+	const ddx = entity.x - cpX;
+	const ddy = entity.y - cpY;
+	const ddz = entity.z - cpZ;
+	if (ddx * ddx + ddy * ddy + ddz * ddz < entity.scale * entity.scale) {
+		entity.touchedPlayer = true;
+	}
+
 	resolveSphereVsAABB(
 		entity,
-		px - playerHalfWidth,
-		px + playerHalfWidth,
-		py - playerHeight,
-		py,
-		pz - playerHalfWidth,
-		pz + playerHalfWidth,
+		minX,
+		maxX,
+		minY,
+		maxY,
+		minZ,
+		maxZ,
 		entity.restitution,
 		PLAYER_RESTITUTION,
 	);

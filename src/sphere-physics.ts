@@ -46,9 +46,41 @@ const SHELL = 0.5;
 // SNAP=4 gives ~30x headroom.
 const SNAP = 4;
 
+// Drop-zone radius (blocks): the horizontal reach of the vertical cylinder
+// above the player inside which spheres shed stickiness
+const DROP_ZONE_RADIUS_BLOCKS = 6;
+
 // Scratch matrices for rolling — shared across entities/frames.
 const scratchRotation = mat4.identity();
 const scratchOrientation = mat4.identity();
+
+/**
+ * True when the sphere sits in the drop-zone: a vertical cylinder above the
+ * player (unbounded in height, radius DROP_ZONE_RADIUS_BLOCKS). Callers use it
+ * to suppress snap-back so an overhead sphere rolls off a ledge onto the player
+ * instead of clinging around the lip. "Above" is relative to the player's eye,
+ * so a sphere merely level with the player isn't pulled off its surface.
+ * Wrap-aware horizontal delta.
+ */
+function inDropZone(
+	entity: Entity,
+	playerPos: Float32Array,
+	ww: number,
+	blockSize: number,
+): boolean {
+	if (entity.y <= (playerPos[1] ?? 0)) return false;
+
+	let dx = entity.x - (playerPos[0] ?? 0);
+	let dz = entity.z - (playerPos[2] ?? 0);
+	const hw = ww / 2;
+	if (dx > hw) dx -= ww;
+	else if (dx < -hw) dx += ww;
+	if (dz > hw) dz -= ww;
+	else if (dz < -hw) dz += ww;
+
+	const r = DROP_ZONE_RADIUS_BLOCKS * blockSize;
+	return dx * dx + dz * dz < r * r;
+}
 
 /**
  * Sphere physics tick: gravity + integration + voxel/player resolution +
@@ -64,11 +96,22 @@ export function entityPhysicsTick(
 ): void {
 	const t = dt / MC_TICK;
 
-	// Sticky-by-default: skip gravity while attached. `attached` reflects
-	// last frame's contacts, so the first tick after spawn falls until the
-	// sphere meets a surface; from then on AI thrust + resolver re-assertion
-	// sustain it.
-	if (!entity.noGravity && !entity.attached) {
+	const ww = world.widthChunks * CHUNK_SIZE * world.blockSize;
+
+	// Drop-zone (overhead + within the cylinder). Computed up-front because both
+	// the gravity gate and the snap-back gate below key off it. Position here is
+	// last-frame-resolved (pre-integration) — fine for the cylinder test, a
+	// single tick of drift can't cross the boundary.
+	const dropping = inDropZone(entity, playerPos, ww, world.blockSize);
+
+	// Sticky-by-default: skip gravity while attached. The drop-zone overrides
+	// that — forcing gravity there detaches a sphere clinging directly overhead.
+	// On a ceiling/lip the pull is *away* from the surface, so the resolver
+	// records the shell contact but doesn't cancel the velocity (no
+	// penetration), and the sphere falls off. On a floor the pull is *into* the
+	// surface and gets eaten, so resting spheres in the zone are unaffected.
+	// See notes/sticky-spheres.md.
+	if (!entity.noGravity && (!entity.attached || dropping)) {
 		entity.vy -= GRAVITY * t;
 		if (entity.vy < TERMINAL_VELOCITY) entity.vy = TERMINAL_VELOCITY;
 	}
@@ -104,8 +147,6 @@ export function entityPhysicsTick(
 	entity.contactNz = 0;
 	entity.touchedPlayer = false;
 
-	const ww = world.widthChunks * CHUNK_SIZE * world.blockSize;
-
 	resolveSphereVsVoxels(entity, world);
 	resolveSphereVsPlayer(entity, playerPos, playerHalfWidth, playerHeight, ww);
 
@@ -125,7 +166,11 @@ export function entityPhysicsTick(
 	// Snap-back: extend attachment across convex edges by projecting the
 	// center to exactly r from the closest solid in the snap band. See
 	// applySnap for the contact-state preservation rule.
-	if (wasAttached) {
+	//
+	// Suppressed inside the drop-zone: that's the lever that lets a sphere clear
+	// a ledge lip and fall onto the player rather than curling back under the
+	// edge (the overhead/ceiling case is handled by the gravity override above).
+	if (wasAttached && !dropping) {
 		applySnap(entity, world, entity.attached);
 	}
 

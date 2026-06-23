@@ -348,7 +348,7 @@ interface CachedMesh {
 // exceed the worst-case transit of an enemy born in the outer spawn ring
 // (past the flow field) dumb-walking inward, or arrivals die en route. Drop
 // it once pathing range improves. See notes/spawning-and-despawning.md.
-const DESPAWN_NOPATH_SECONDS = 2;
+const DESPAWN_NOPATH_SECONDS = 2000;
 const DESPAWN_LIFESPAN_SECONDS = 120;
 
 // Sphere self-destruct animation. Duration scales linearly with size: a

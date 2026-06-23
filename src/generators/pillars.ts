@@ -43,7 +43,7 @@ const N_MAX = 8;
 // per query is 64 cells, so per-axis solid coverage ≈ SEED_PROB × N² × ~30.
 // 0.005 lands around 15-20% per axis → ~45% combined density (1 - 0.83³).
 // Bump for denser swarming terrain, drop for airier.
-const SEED_PROB = 0.00433;
+const SEED_PROB = 0.00133;
 
 // Axis tags — distinguish identical (a, b) coords across the three seed
 // planes so e.g. position (5, 7) on XZ generates a different roll than

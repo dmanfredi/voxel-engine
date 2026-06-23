@@ -40,12 +40,26 @@ Without the gate, snap's single-closest-point would arbitrarily collapse the mul
 
 Single-closest-point is still right at convex edges (only one block is "the corner"), so snap still writes contact state in that case — `preAttached` is correctly false because the resolver's `r + SHELL` band has been left.
 
+## Drop-zone (overhead un-stick)
+
+Sticky-by-default has a failure mode: a sphere that climbs up and over the player clings to whatever surface it's on instead of dropping. The player can exploit it by air-gapping — stay below an overhang and the sphere hangs above.
+
+The fix is a **drop-zone**: a vertical cylinder above the player (radius `DROP_ZONE_RADIUS_BLOCKS`, unbounded in height). Inside it, `entityPhysicsTick` makes two changes, because two different mechanisms pin a sphere depending on the surface it's stuck to:
+
+1. **Skip `applySnap`** — the **ledge-top** case. Snap-back is the only thing arcing a sphere back under a convex edge; without it the sphere carries off the lip, loses contact, and falls.
+2. **Force gravity even while `attached`** — the **directly-overhead / ceiling** case, where the sphere is held by the real per-voxel resolver (not snap-back), so skipping snap does nothing. This rides an asymmetry: on a ceiling/lip the pull is *away* from the surface, so the resolver records the shell contact but doesn't cancel the velocity (`penetration <= 0` → early return) and the sphere accelerates off; on a floor the pull is *into* the surface, the resolver zeroes it, and a resting sphere in the zone is unaffected (modulo a sub-pixel dip-and-correct jitter).
+
+Why overhead needs gravity rather than snap suppression: with the player directly below, the pursuit direction is parallel to the contact normal, so `rushAttached`'s tangent projection collapses to ~zero. The sphere can't slide along the surface to escape and the shell keeps gravity gated off — a stable hover that only a downward force breaks.
+
+"Above" is measured against the player's eye, so a sphere merely level with the player keeps full stickiness (it's about to reach them anyway). The trigger is a cylinder, not a cone, on purpose: a cone's radius grows with height, committing off-axis spheres to long plunges from overhead; the cylinder keeps the trigger tight and predictable.
+
 ## Constants
 
-| Constant | Value | Rationale                                                                     |
-| -------- | ----- | ----------------------------------------------------------------------------- |
-| `SHELL`  | 0.5   | Stable resting band; per-frame integration error is ~0.5 at terminal velocity |
-| `SNAP`   | 4     | Convex-edge wrap radius; ~30× the per-frame drift at v=8                      |
+| Constant                 | Value | Rationale                                                                     |
+| ------------------------ | ----- | ----------------------------------------------------------------------------- |
+| `SHELL`                  | 0.5   | Stable resting band; per-frame integration error is ~0.5 at terminal velocity |
+| `SNAP`                   | 4     | Convex-edge wrap radius; ~30× the per-frame drift at v=8                      |
+| `DROP_ZONE_RADIUS_BLOCKS`| 3     | Overhead un-stick cylinder; small so only spheres genuinely above you drop    |
 
 ## Deferred
 

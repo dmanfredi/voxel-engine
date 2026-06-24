@@ -130,10 +130,21 @@ What the corpse *does* keys off Shape — the same dispatch `EntityManager.updat
 already uses for physics, because a sphere physically can't petrify into clean
 blocks and a cube collapsing into blocks is its whole identity:
 
-- **Sphere → explode + carve.** Detonates and removes nearby blocks (interacts
-  with terrain — the core verb). Only bothers when **near-ish** the player; the
-  range is generous (a detonation tens of blocks away never hurts you but looks
-  cool). Beyond that range it just fades — an explosion nobody sees is wasted.
+- **Sphere → explode + carve + knockback.** Detonates and removes nearby blocks
+  (interacts with terrain — the core verb), and shoves the player radially out
+  from the blast. Only bothers carving when **near-ish** the player; the range is
+  generous (a detonation tens of blocks away never hurts you but looks cool).
+  Beyond that range it just fades — an explosion nobody sees is wasted. The
+  knockback is its own, tighter reach that **scales with sphere size**: distance
+  is normalized by that reach so one linear falloff lands a full kick at the
+  surface and nothing at the rim, for any explosion size — "how far you could
+  have been" is just the radius. Distance is measured from the sphere's
+  **surface**, not its center: a large sphere's body holds the player a radius
+  away from the epicenter, so a center-based falloff would quietly dock big
+  blasts for their size alone. The kick is additive (stacked blasts compound) and
+  carries an upward bias so it pops the player rather than sliding them flat. The
+  player isn't an entity, so this reaches in via `playerVel` threaded through the
+  death dispatch, mirroring the cube-tip fling in `entity-interactions.ts`.
 - **Cube → petrify.** Collapses back into static terrain blocks of its material.
   It came from terrain and returns to it; a dead cube leaving a climbable platform
   is good gameplay, not litter. Petrify is cheap and unseen-safe, so cubes do it
@@ -193,6 +204,9 @@ the no-path threshold can shrink toward something that actually means "stuck."
 | `DESPAWN_NOPATH_SECONDS` | No-path timer threshold — **high** until pathing improves. |
 | `DESPAWN_LIFESPAN_SECONDS` | Absolute age cap (candidate). |
 | `SPHERE_EXPLODE_RANGE_BLOCKS` | Within this of the player, a dying sphere detonates+carves; beyond, fades. |
+| `SPHERE_BLAST_RADIUS_FACTOR` | Knockback reach as a multiple of sphere radius; distance is normalized by it. |
+| `SPHERE_BLAST_IMPULSE` | Peak (dead-center) velocity kick; same units as jump / cube-fling speeds. |
+| `SPHERE_BLAST_UP_BIAS` | Upward lean folded into the radial direction — pop vs. flat slide. |
 | (cube petrify range) | Tracks the streaming radius (loaded terrain), not a constant. |
 
 ## Further reading

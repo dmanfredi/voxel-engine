@@ -348,8 +348,8 @@ interface CachedMesh {
 // exceed the worst-case transit of an enemy born in the outer spawn ring
 // (past the flow field) dumb-walking inward, or arrivals die en route. Drop
 // it once pathing range improves. See notes/spawning-and-despawning.md.
-const DESPAWN_NOPATH_SECONDS = 2000;
-const DESPAWN_LIFESPAN_SECONDS = 120;
+const DESPAWN_NOPATH_SECONDS = 10;
+const DESPAWN_LIFESPAN_SECONDS = 60;
 
 // Sphere self-destruct animation. Duration scales linearly with size: a
 // reference-size sphere takes the base time, a double-size sphere takes
@@ -388,6 +388,13 @@ function sphereDeathTint(death: DeathState): number {
 
 // Crater radius as a multiple of the sphere's own radius (world units).
 const SPHERE_CARVE_RADIUS_FACTOR = 3.5;
+
+// Blast knockback (mechanism in knockbackPlayer). Reach scales with sphere size.
+// Impulse is the peak kick, in the same units as the player's jump / cube-fling speeds.
+// Up-bias leans the kick skyward.
+const SPHERE_BLAST_RADIUS_FACTOR = 4.5;
+const SPHERE_BLAST_IMPULSE = 35;
+const SPHERE_BLAST_UP_BIAS = 0.5;
 
 // ── EntityManager ───────────────────────────────────────────────────
 
@@ -737,7 +744,13 @@ export class EntityManager {
 				}
 				entity.death.elapsed += dt;
 				if (entity.death.elapsed >= entity.death.duration) {
-					this.killEntity(entity, onRegionChanged);
+					this.killEntity(
+						entity,
+						playerPos,
+						playerVel,
+						ww,
+						onRegionChanged,
+					);
 					destroyEntityRenderData(entity.renderData);
 					this.entities.splice(i, 1);
 				}
@@ -773,7 +786,7 @@ export class EntityManager {
 				continue;
 			}
 
-			this.killEntity(entity, onRegionChanged);
+			this.killEntity(entity, playerPos, playerVel, ww, onRegionChanged);
 			destroyEntityRenderData(entity.renderData);
 			this.entities.splice(i, 1);
 		}
@@ -1028,17 +1041,35 @@ export class EntityManager {
 	 * Shape-dispatched death consequence. Spheres explode + carve a crater;
 	 * cubes petrify back into terrain. Caller removes the entity afterward.
 	 */
-	private killEntity(entity: Entity, onRegionChanged: RegionChangedFn): void {
+	private killEntity(
+		entity: Entity,
+		playerPos: Float32Array,
+		playerVel: PlayerVelLike,
+		ww: number,
+		onRegionChanged: RegionChangedFn,
+	): void {
 		if (entity.shape === Shape.Sphere) {
-			this.explodeSphere(entity, onRegionChanged);
+			this.explodeSphere(
+				entity,
+				playerPos,
+				playerVel,
+				ww,
+				onRegionChanged,
+			);
 		} else if (entity.shape === Shape.Cube) {
 			this.petrifyCube(entity, onRegionChanged);
 		}
 	}
 
-	/** Sphere death — carve a spherical pocket of air around the death point. */
+	/**
+	 * Sphere death — carve a spherical pocket of air around the death point,
+	 * then shove the player radially outward from the blast.
+	 */
 	private explodeSphere(
 		entity: Entity,
+		playerPos: Float32Array,
+		playerVel: PlayerVelLike,
+		ww: number,
 		onRegionChanged: RegionChangedFn,
 	): void {
 		const blockSize = this.world.blockSize;
@@ -1074,6 +1105,53 @@ export class EntityManager {
 			);
 			this.flowField.invalidate();
 		}
+
+		// Knockback fires regardless of whether anything was carved — an
+		// explosion in open air still shoves the player.
+		this.knockbackPlayer(entity, playerPos, playerVel, ww);
+	}
+
+	/** Radial blast impulse on the player — additive, so stacked blasts compound. */
+	private knockbackPlayer(
+		entity: Entity,
+		playerPos: Float32Array,
+		playerVel: PlayerVelLike,
+		ww: number,
+	): void {
+		const blastR = entity.scale * SPHERE_BLAST_RADIUS_FACTOR;
+		const hw = ww / 2;
+		let dx = (playerPos[0] ?? 0) - entity.x;
+		const dy = (playerPos[1] ?? 0) - entity.y;
+		let dz = (playerPos[2] ?? 0) - entity.z;
+		if (dx > hw) dx -= ww;
+		else if (dx < -hw) dx += ww;
+		if (dz > hw) dz -= ww;
+		else if (dz < -hw) dz += ww;
+
+		const d = Math.hypot(dx, dy, dz);
+		if (d >= blastR) return;
+
+		// Measure from the sphere's surface, not its center: a big sphere's body
+		// holds the player a radius from the epicenter, so a center-based falloff
+		// would dock the kick for size alone. (Radius factor > 1 keeps the
+		// surface→rim band non-empty.)
+		const surfaceDist = Math.max(0, d - entity.scale);
+		const reach = blastR - entity.scale;
+		const impulse = SPHERE_BLAST_IMPULSE * (1 - surfaceDist / reach);
+
+		// Up-bias keeps the direction defined when d≈0, resolving to straight up.
+		let dirX = 0;
+		let dirY = SPHERE_BLAST_UP_BIAS;
+		let dirZ = 0;
+		if (d > 1e-3) {
+			dirX = dx / d;
+			dirY = dy / d + SPHERE_BLAST_UP_BIAS;
+			dirZ = dz / d;
+		}
+		const dl = Math.hypot(dirX, dirY, dirZ);
+		playerVel.velX += (dirX / dl) * impulse;
+		playerVel.velY += (dirY / dl) * impulse;
+		playerVel.velZ += (dirZ / dl) * impulse;
 	}
 
 	/**

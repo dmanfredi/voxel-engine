@@ -337,6 +337,20 @@ export interface PlayerHitLike {
 	lockoutRemaining: number;
 }
 
+/**
+ * The player facets the entity system reads and mutates each tick, bundled so
+ * the many entity↔player call sites thread one object instead of loose args.
+ * The player isn't an entity (deliberate — see notes/entity-physics-and-ai.md);
+ * this is the seam where entity code reaches it.
+ */
+export interface PlayerContext {
+	pos: Float32Array;
+	vel: PlayerVelLike;
+	halfWidth: number;
+	height: number;
+	hitState: PlayerHitLike;
+}
+
 // BP lost on a dead-on hit from a modal-size sphere. The source scales this
 // by sphere size, so a bigger blast exceeds it — it's the anchor, not a cap.
 const BASE_BP_PENALTY = 200;

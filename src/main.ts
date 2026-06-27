@@ -12,7 +12,7 @@ import { extractBlockProps } from './block';
 import { raycast, type RaycastHit } from './raycast';
 // import { initHighlight, drawHighlight } from './highlight';
 import { createGameState } from './game-state';
-import { LOCKOUT_DURATION } from './entity-interactions';
+import { LOCKOUT_DURATION, type PlayerContext } from './entity-interactions';
 import { autoClimb } from './auto-climb';
 import { ChunkLoader } from './chunk-loader';
 import { MeshScheduler } from './mesh-scheduler';
@@ -587,6 +587,15 @@ async function main(): Promise<void> {
 	const playerHalfWidth = BLOCK_SIZE / 4;
 	const gameState = createGameState();
 
+	// One stable PlayerContext for the entity system
+	const playerContext: PlayerContext = {
+		pos: cameraPos,
+		vel: playerState,
+		halfWidth: playerHalfWidth,
+		height: playerHeight,
+		hitState: gameState,
+	};
+
 	// Void floor — starts at max gap below the player's feet and rises. Effects
 	// are stubbed (logged) for now; orb crack/shake + death overlay come later.
 	const voidFloorState = createVoidFloorState(
@@ -1023,15 +1032,7 @@ async function main(): Promise<void> {
 		// Toggleable via the Enemies debug pane; manual spawns still work.
 		if (debuggerParams.spawnerEnabled) spawner.update(dt, cameraPos);
 
-		entityManager.update(
-			dt,
-			cameraPos,
-			playerState,
-			playerHalfWidth,
-			playerHeight,
-			gameState,
-			onRegionChanged,
-		);
+		entityManager.update(dt, playerContext, onRegionChanged);
 		debuggerParams.enemyCount = entityManager.activeCount;
 		// A blast this frame may have docked BP and set the lockout; reflect both.
 		updateBPDisplay();

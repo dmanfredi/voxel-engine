@@ -33,7 +33,7 @@ import {
 	resolvePlayerVsCube,
 	applyPlayerHit,
 } from './entity-interactions';
-import type { PlayerVelLike, PlayerHitLike } from './entity-interactions';
+import type { PlayerContext } from './entity-interactions';
 import { entityAITick } from './entity-ai';
 import { cubeAITick } from './cube-ai';
 import { FlowField } from './flow-field';
@@ -576,11 +576,7 @@ export class EntityManager {
 	/** Per-frame update: step physics for each entity, then upload transforms. */
 	update(
 		dt: number,
-		playerPos: Float32Array,
-		playerVel: PlayerVelLike,
-		playerHalfWidth: number,
-		playerHeight: number,
-		hitState: PlayerHitLike,
+		player: PlayerContext,
 		onRegionChanged: (
 			minBX: number,
 			minBY: number,
@@ -590,6 +586,12 @@ export class EntityManager {
 			maxBZ: number,
 		) => void,
 	): void {
+		const {
+			pos: playerPos,
+			vel: playerVel,
+			halfWidth: playerHalfWidth,
+			height: playerHeight,
+		} = player;
 		const ww = this.world.widthChunks * CHUNK_SIZE * this.world.blockSize;
 		const hw = ww / 2;
 		const blockSize = this.world.blockSize;
@@ -748,14 +750,7 @@ export class EntityManager {
 				}
 				entity.death.elapsed += dt;
 				if (entity.death.elapsed >= entity.death.duration) {
-					this.killEntity(
-						entity,
-						playerPos,
-						playerVel,
-						hitState,
-						ww,
-						onRegionChanged,
-					);
+					this.killEntity(entity, player, ww, onRegionChanged);
 					destroyEntityRenderData(entity.renderData);
 					this.entities.splice(i, 1);
 				}
@@ -791,14 +786,7 @@ export class EntityManager {
 				continue;
 			}
 
-			this.killEntity(
-				entity,
-				playerPos,
-				playerVel,
-				hitState,
-				ww,
-				onRegionChanged,
-			);
+			this.killEntity(entity, player, ww, onRegionChanged);
 			destroyEntityRenderData(entity.renderData);
 			this.entities.splice(i, 1);
 		}
@@ -1055,21 +1043,12 @@ export class EntityManager {
 	 */
 	private killEntity(
 		entity: Entity,
-		playerPos: Float32Array,
-		playerVel: PlayerVelLike,
-		hitState: PlayerHitLike,
+		player: PlayerContext,
 		ww: number,
 		onRegionChanged: RegionChangedFn,
 	): void {
 		if (entity.shape === Shape.Sphere) {
-			this.explodeSphere(
-				entity,
-				playerPos,
-				playerVel,
-				hitState,
-				ww,
-				onRegionChanged,
-			);
+			this.explodeSphere(entity, player, ww, onRegionChanged);
 		} else if (entity.shape === Shape.Cube) {
 			// Cubes petrify into terrain — no blast, so no player hit.
 			this.petrifyCube(entity, onRegionChanged);
@@ -1082,9 +1061,7 @@ export class EntityManager {
 	 */
 	private explodeSphere(
 		entity: Entity,
-		playerPos: Float32Array,
-		playerVel: PlayerVelLike,
-		hitState: PlayerHitLike,
+		player: PlayerContext,
 		ww: number,
 		onRegionChanged: RegionChangedFn,
 	): void {
@@ -1124,7 +1101,7 @@ export class EntityManager {
 
 		// Fires regardless of whether anything was carved — a blast in open
 		// air still shoves the player and docks their BP.
-		this.knockbackPlayer(entity, playerPos, playerVel, hitState, ww);
+		this.knockbackPlayer(entity, player, ww);
 	}
 
 	/**
@@ -1133,11 +1110,10 @@ export class EntityManager {
 	 */
 	private knockbackPlayer(
 		entity: Entity,
-		playerPos: Float32Array,
-		playerVel: PlayerVelLike,
-		hitState: PlayerHitLike,
+		player: PlayerContext,
 		ww: number,
 	): void {
+		const { pos: playerPos, vel: playerVel, hitState } = player;
 		const blastR = entity.scale * SPHERE_BLAST_RADIUS_FACTOR;
 		const hw = ww / 2;
 		let dx = (playerPos[0] ?? 0) - entity.x;

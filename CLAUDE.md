@@ -207,6 +207,11 @@ Deeper design rationale and "what's deferred and why" notes live in `notes/`:
 
 - `notes/entity-system.md` — entity taxonomy, mesh generation, render pipeline, lifecycle
 - `notes/entity-physics-and-ai.md` — physics model, AI dispatch, cross-cutting patterns (wrap handling, material table), explicitly deferred work
+- `notes/spawning-and-despawning.md` — enemy lifecycle: born-from-blocks spawning, Director pacing, despawn conditions, Shape-dispatched death (sphere explode/carve/knockback, cube petrify)
+- `notes/flow-field.md` — shared BFS pursuit field (the smart-pathing bubble around the player) spheres navigate by
+- `notes/sticky-spheres.md` — flow-field invalidation + sphere drop-zone spawning
+- `notes/cube-enemy.md` — cube enemy design + phased plan (beveled mesh, AABB physics, tipping movement, climb-by-placing); the running cube reference
+- `notes/cube-tip-placement-animation.md` — designed-not-built: tip-scaffold blocks falling in rather than popping
 - `notes/projectile-and-tool-system.md` — Tool + BuildProfile types, projectile runtime, OBB hitbox + SAT, render pipeline, input flow, deferred work
 - `notes/void-floor.md` — rising void hazard (the "fire floor"): bands, chunk-delete floor, design intent, stubbed seams
 - `notes/physics-and-collision.md` — player physics and AABB-vs-voxel collision (predates entity work)

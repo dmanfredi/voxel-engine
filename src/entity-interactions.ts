@@ -331,6 +331,31 @@ export interface PlayerVelLike {
 	velZ: number;
 }
 
+/** Minimal player-hit contract — `GameState` satisfies it. */
+export interface PlayerHitLike {
+	bp: number;
+	lockoutRemaining: number;
+}
+
+// BP lost on a dead-on hit from a modal-size sphere. The source scales this
+// by sphere size, so a bigger blast exceeds it — it's the anchor, not a cap.
+const BASE_BP_PENALTY = 200;
+// Seconds the BP economy stays frozen after any hit. Flat, regardless of
+// severity: how hard you were hit is the BP cost's job, not the lockout's.
+export const LOCKOUT_DURATION = 1.6;
+
+/**
+ * Apply a hit to the player: subtract BP scaled by `severity` and refresh the
+ * lockout to full. Shape-agnostic — every damage source should funnel here.
+ */
+export function applyPlayerHit(target: PlayerHitLike, severity: number): void {
+	target.bp = Math.max(0, target.bp - Math.round(BASE_BP_PENALTY * severity));
+	target.lockoutRemaining = Math.max(
+		target.lockoutRemaining,
+		LOCKOUT_DURATION,
+	);
+}
+
 /**
  * Player AABB vs cube OBB — full SAT (15 axes: 3 world + 3 OBB + 9 edge
  * crosses). On overlap, pushes player along the minimum-translation axis.

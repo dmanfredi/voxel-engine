@@ -51,17 +51,32 @@ canvas {
 	}
 
 	.bp-orb {
+		position: relative;
 		width: 150px;
 		height: 150px;
-		border-radius: 50%;
-		margin-bottom: -30px;
 
-		background: #28292e;
-		border: 3px solid rgba(187, 188, 196, 0.34);
+		/* Melting-outline construction */
+		.bp-orb-ring {
+			position: absolute;
+			inset: 0;
+			border-radius: 50%;
+			background: #e0564f;
+			opacity: 0;
+			pointer-events: none;
+		}
 
-		display: flex;
-		align-items: center;
-		justify-content: center;
+		.bp-orb-fill {
+			position: absolute;
+			inset: 5px;
+			border-radius: 50%;
+
+			background: #28292e;
+			border: 3px solid rgba(187, 188, 196, 0.34);
+
+			display: flex;
+			align-items: center;
+			justify-content: center;
+		}
 
 		.bp-orb-value {
 			font-size: 32px;
@@ -69,8 +84,17 @@ canvas {
 			font-family: sans-serif;
 			color: rgba(255, 255, 255, 0.95);
 			user-select: none;
-			padding-bottom: 40px;
-			letter-spacing: 1.5px;
+			padding-bottom: 10px;
+			letter-spacing: 2.5px;
+		}
+
+		&.locked {
+			.bp-orb-ring {
+				opacity: 1;
+			}
+			.bp-orb-value {
+				opacity: 0.35;
+			}
 		}
 	}
 
@@ -83,8 +107,8 @@ canvas {
 		align-items: center;
 
 		/* background-color: antiquewhite; */
-		height: 100px;
 		width: 600px;
+		padding-bottom: 10px;
 	}
 
 	.toolbar-item {

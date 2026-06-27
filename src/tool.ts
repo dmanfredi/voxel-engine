@@ -160,10 +160,15 @@ export function canFire(
 ): boolean {
 	if (side === 'lmb') {
 		if (tool.lmbCooldownRemaining > 0) return false;
+		// Lockout freezes BP, so a costing fire is blocked; a free fire (the
+		// pickaxe) still goes — it carves, the break just earns nothing.
+		if (gameState.lockoutRemaining > 0 && tool.lmbCost > 0) return false;
 		if (gameState.bp < tool.lmbCost) return false;
 		return true;
 	}
 	if (tool.rmbCooldownRemaining > 0) return false;
+	// Placement is a build action — disallowed entirely during lockout.
+	if (gameState.lockoutRemaining > 0) return false;
 	// RMB needs enough BP for at least one block; per-cell BP is rechecked
 	// by the committer as it walks the target list.
 	if (gameState.bp < tool.buildProfile.costPerBlock) return false;

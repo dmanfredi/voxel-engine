@@ -31,8 +31,9 @@ import {
 	resolveSpherePair,
 	resolveSphereVsCube,
 	resolvePlayerVsCube,
+	applyPlayerHit,
 } from './entity-interactions';
-import type { PlayerVelLike } from './entity-interactions';
+import type { PlayerVelLike, PlayerHitLike } from './entity-interactions';
 import { entityAITick } from './entity-ai';
 import { cubeAITick } from './cube-ai';
 import { FlowField } from './flow-field';
@@ -391,10 +392,12 @@ const SPHERE_CARVE_RADIUS_FACTOR = 3.5;
 
 // Blast knockback (mechanism in knockbackPlayer). Reach scales with sphere size.
 // Impulse is the peak kick, in the same units as the player's jump / cube-fling speeds.
-// Up-bias leans the kick skyward.
+// Up-bias leans the kick skyward. Impulse peak is size-invariant (big spheres reach
+// further, not harder); the BP penalty alone scales with size, against this reference.
 const SPHERE_BLAST_RADIUS_FACTOR = 4.5;
 const SPHERE_BLAST_IMPULSE = 35;
 const SPHERE_BLAST_UP_BIAS = 0.5;
+const SPHERE_BLAST_REFERENCE_SCALE = 10;
 
 // ── EntityManager ───────────────────────────────────────────────────
 
@@ -577,6 +580,7 @@ export class EntityManager {
 		playerVel: PlayerVelLike,
 		playerHalfWidth: number,
 		playerHeight: number,
+		hitState: PlayerHitLike,
 		onRegionChanged: (
 			minBX: number,
 			minBY: number,
@@ -748,6 +752,7 @@ export class EntityManager {
 						entity,
 						playerPos,
 						playerVel,
+						hitState,
 						ww,
 						onRegionChanged,
 					);
@@ -786,7 +791,14 @@ export class EntityManager {
 				continue;
 			}
 
-			this.killEntity(entity, playerPos, playerVel, ww, onRegionChanged);
+			this.killEntity(
+				entity,
+				playerPos,
+				playerVel,
+				hitState,
+				ww,
+				onRegionChanged,
+			);
 			destroyEntityRenderData(entity.renderData);
 			this.entities.splice(i, 1);
 		}
@@ -1045,6 +1057,7 @@ export class EntityManager {
 		entity: Entity,
 		playerPos: Float32Array,
 		playerVel: PlayerVelLike,
+		hitState: PlayerHitLike,
 		ww: number,
 		onRegionChanged: RegionChangedFn,
 	): void {
@@ -1053,22 +1066,25 @@ export class EntityManager {
 				entity,
 				playerPos,
 				playerVel,
+				hitState,
 				ww,
 				onRegionChanged,
 			);
 		} else if (entity.shape === Shape.Cube) {
+			// Cubes petrify into terrain — no blast, so no player hit.
 			this.petrifyCube(entity, onRegionChanged);
 		}
 	}
 
 	/**
 	 * Sphere death — carve a spherical pocket of air around the death point,
-	 * then shove the player radially outward from the blast.
+	 * then shove the player radially outward and dock their BP.
 	 */
 	private explodeSphere(
 		entity: Entity,
 		playerPos: Float32Array,
 		playerVel: PlayerVelLike,
+		hitState: PlayerHitLike,
 		ww: number,
 		onRegionChanged: RegionChangedFn,
 	): void {
@@ -1106,16 +1122,20 @@ export class EntityManager {
 			this.flowField.invalidate();
 		}
 
-		// Knockback fires regardless of whether anything was carved — an
-		// explosion in open air still shoves the player.
-		this.knockbackPlayer(entity, playerPos, playerVel, ww);
+		// Fires regardless of whether anything was carved — a blast in open
+		// air still shoves the player and docks their BP.
+		this.knockbackPlayer(entity, playerPos, playerVel, hitState, ww);
 	}
 
-	/** Radial blast impulse on the player — additive, so stacked blasts compound. */
+	/**
+	 * Radial blast effect on the player: an additive shove (stacked blasts
+	 * compound) plus a BP/lockout hit. Both ride the same falloff `t`.
+	 */
 	private knockbackPlayer(
 		entity: Entity,
 		playerPos: Float32Array,
 		playerVel: PlayerVelLike,
+		hitState: PlayerHitLike,
 		ww: number,
 	): void {
 		const blastR = entity.scale * SPHERE_BLAST_RADIUS_FACTOR;
@@ -1137,7 +1157,8 @@ export class EntityManager {
 		// surface→rim band non-empty.)
 		const surfaceDist = Math.max(0, d - entity.scale);
 		const reach = blastR - entity.scale;
-		const impulse = SPHERE_BLAST_IMPULSE * (1 - surfaceDist / reach);
+		const t = 1 - surfaceDist / reach; // intersection severity, 1 at surface → 0 at rim
+		const impulse = SPHERE_BLAST_IMPULSE * t;
 
 		// Up-bias keeps the direction defined when d≈0, resolving to straight up.
 		let dirX = 0;
@@ -1152,6 +1173,11 @@ export class EntityManager {
 		playerVel.velX += (dirX / dl) * impulse;
 		playerVel.velY += (dirY / dl) * impulse;
 		playerVel.velZ += (dirZ / dl) * impulse;
+
+		// BP/lockout hit: size folds in here (not into the impulse) so bigger
+		// blasts cost more BP while the knockback peak stays size-invariant.
+		const sizeFactor = entity.scale / SPHERE_BLAST_REFERENCE_SCALE;
+		applyPlayerHit(hitState, sizeFactor * t);
 	}
 
 	/**

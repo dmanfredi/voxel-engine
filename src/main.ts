@@ -12,6 +12,7 @@ import { extractBlockProps } from './block';
 import { raycast, type RaycastHit } from './raycast';
 // import { initHighlight, drawHighlight } from './highlight';
 import { createGameState } from './game-state';
+import { LOCKOUT_DURATION } from './entity-interactions';
 import { autoClimb } from './auto-climb';
 import { ChunkLoader } from './chunk-loader';
 import { MeshScheduler } from './mesh-scheduler';
@@ -604,13 +605,44 @@ async function main(): Promise<void> {
 	};
 
 	const bpOrb = document.querySelector<HTMLElement>('.bp-orb-value');
-	if (!bpOrb) throw new Error('BP orb element not found');
+	const bpOrbBox = document.querySelector<HTMLElement>('.bp-orb');
+	const bpOrbRing = document.querySelector<HTMLElement>('.bp-orb-ring');
+	if (!bpOrb || !bpOrbBox || !bpOrbRing)
+		throw new Error('BP orb elements not found');
 	const bpOrbEl: HTMLElement = bpOrb;
+	const bpOrbBoxEl: HTMLElement = bpOrbBox;
+	const bpOrbRingEl: HTMLElement = bpOrbRing;
 
+	// Dirty-checked: called every frame (a blast can dock BP mid-frame with no
+	// callback out), but only writes the DOM when the value actually moved.
+	let renderedBP: number | null = null;
 	function updateBPDisplay(): void {
+		if (gameState.bp === renderedBP) return;
+		renderedBP = gameState.bp;
 		bpOrbEl.textContent = String(gameState.bp);
 	}
 	updateBPDisplay();
+
+	// Lockout feedback: dim the orb (disabled look) and melt its outline ring
+	// from the top as the timer drains. The class flips once per lock/unlock;
+	// the clip-path genuinely animates, so it writes only while draining.
+	let lockedNow = false;
+	function updateLockoutDisplay(): void {
+		const locked = gameState.lockoutRemaining > 0;
+		if (locked) {
+			if (!lockedNow) {
+				bpOrbBoxEl.classList.add('locked');
+				lockedNow = true;
+			}
+			const drained =
+				(1 - gameState.lockoutRemaining / LOCKOUT_DURATION) * 100;
+			bpOrbRingEl.style.clipPath = `inset(${String(drained)}% 0 0 0)`;
+		} else if (lockedNow) {
+			bpOrbBoxEl.classList.remove('locked');
+			lockedNow = false;
+		}
+	}
+	updateLockoutDisplay();
 
 	// Toolbar — 1-4 keys and scroll wheel write through to gameState so
 	// LMB/RMB handlers read from a single source of truth.
@@ -780,8 +812,11 @@ async function main(): Promise<void> {
 			onBlockBroken: (bx, by, bz, sourceTool) => {
 				onBlockChanged(bx, by, bz);
 				entityManager.invalidateFlowField();
-				gameState.bp += sourceTool.bpPerBreak;
-				updateBPDisplay();
+				// Carve still lands during lockout; the BP earning is what's frozen.
+				if (gameState.lockoutRemaining <= 0) {
+					gameState.bp += sourceTool.bpPerBreak;
+					updateBPDisplay();
+				}
 			},
 		},
 		device,
@@ -916,6 +951,11 @@ async function main(): Promise<void> {
 		const dt = Math.min(0.1, (t - lastT) / 1000);
 		lastT = t;
 
+		gameState.lockoutRemaining = Math.max(
+			0,
+			gameState.lockoutRemaining - dt,
+		);
+
 		if (debuggerParams.freecam) {
 			FREECAM(keysDown, cameraPos, cameraFront, cameraUp, dt * 300);
 		} else {
@@ -989,9 +1029,13 @@ async function main(): Promise<void> {
 			playerState,
 			playerHalfWidth,
 			playerHeight,
+			gameState,
 			onRegionChanged,
 		);
 		debuggerParams.enemyCount = entityManager.activeCount;
+		// A blast this frame may have docked BP and set the lockout; reflect both.
+		updateBPDisplay();
+		updateLockoutDisplay();
 
 		projectileManager.update(dt, cameraPos);
 

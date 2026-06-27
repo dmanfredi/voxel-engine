@@ -180,7 +180,7 @@ After (load-bearing only — the *why* of cooldown ticking when ungrounded):
 Don't write:
 
 - **Version refs** (`v1`, `for v1`) — say `currently` or drop the hedge.
-- **Specific tuning numbers in prose** (`speed=30`, `0.15s cooldown`, `up to four BRICK`) — the code states them, and they'll change. Describe the principle, not the value.
+- **Specific values in prose** (`speed=30`, `0.15s cooldown`, `up to four BRICK`, `150px tall`, `bottom 30px`) — the code states them, and they'll change; a value in prose is just a second copy waiting to drift. Describe the principle, not the number (e.g. "the visible fraction", not "the bottom 30px"). Applies to tuning constants and layout/dimension values alike, including ones mirrored from CSS.
 - **Specific block/tool/material names in cross-cutting docs** (`MARBLE`, `BRICK`, `DARK_MARBLE`) — content churns; reference the concept (`soft blocks`) or omit.
 - **Historical anchors** (`the old behavior`, `pre-tools`, `carried over from`, `formerly`) — once the predecessor is gone, the comparison is dead weight.
 - **Tuning justifications for stubs** (`no tool fires fast enough to matter` on a stubbed cap) — the *reason* for the stub is itself a tuning artifact. Just say it's stubbed.

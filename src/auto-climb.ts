@@ -6,7 +6,7 @@ import type { EntityManager } from './entity';
 import { tryPlaceBlock } from './placement';
 
 /**
- * Places a BRICK block directly beneath the player's feet if that space is air
+ * Places a block directly beneath the player's feet if that space is air
  * and the player has BP. This is always active — jumping creates the gap that
  * lets it fire. Returns the block coords placed, or null if nothing happened.
  */
@@ -18,7 +18,12 @@ export function autoClimb(
 	entityManager: EntityManager,
 	gameState: GameState,
 ): { x: number; y: number; z: number } | null {
+	// OUTRIGHT DISABLED. TESTING GAMEPLAY IMPLICATIONS
+	return null;
+
 	if (gameState.bp <= 0) return null;
+	// Auto-climb places a block — a build action, frozen during the hit lockout.
+	if (gameState.lockoutRemaining > 0) return null;
 
 	const feetY = (cameraPos[1] ?? 0) - playerHeight;
 	const bx = Math.floor((cameraPos[0] ?? 0) / blockSize);

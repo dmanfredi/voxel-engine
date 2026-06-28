@@ -255,15 +255,6 @@ export interface Entity {
 	// entities with an active tip; uploadTransform switches to the tip
 	// composite transform.
 	tip: TipState | null;
-	// Last climb tip's horizontal direction. Drives the Option-A zigzag:
-	// each vertical-intent climb flips sign from the previous one, netting
-	// +2·edge vertical and zero horizontal across each pair of climbs.
-	// Both zero = cube has never climbed; the AI picks the first direction
-	// from player-relative geometry. Only climb tips (dy=1) update these;
-	// horizontal walks leave them alone so the zigzag resumes intact after
-	// a detour. Set inside `tryTipCube` after `startCubeTip` succeeds.
-	lastClimbDx: number;
-	lastClimbDz: number;
 	// Seconds until the next AI tip attempt for a Cube. Decrements each
 	// frame while idle (not mid-tip). When ≤ 0 AND the cube is grounded,
 	// the AI fires a tip and resets to `tipInterval`. Skipped entirely for
@@ -556,8 +547,6 @@ export class EntityManager {
 			role: config.role,
 			renderData,
 			tip: null,
-			lastClimbDx: 0,
-			lastClimbDz: 0,
 			tipCooldown,
 			tipDuration,
 			tipInterval,
@@ -942,14 +931,7 @@ export class EntityManager {
 		// ground-layer check will now pass. If something unexpected fails,
 		// it returns false and console.warns — blocks are already placed
 		// but nothing catastrophic: the scaffold just becomes inert terrain.
-		const ok = startCubeTip(entity, this.world, direction);
-		if (ok && dy === 1) {
-			// Remember this climb's horizontal direction so the next climb
-			// alternates (Option-A zigzag for net-vertical progress).
-			entity.lastClimbDx = dx;
-			entity.lastClimbDz = dz;
-		}
-		return ok;
+		return startCubeTip(entity, this.world, direction);
 	}
 
 	draw(pass: GPURenderPassEncoder, xray = false): void {

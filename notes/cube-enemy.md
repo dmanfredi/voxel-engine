@@ -2,7 +2,7 @@
 
 ## Status
 
-Forward-looking plan. The `Cube` shape exists as a stub in the entity Shape enum, and `Role.Zone` / `Role.Crush` are listed in `entity-ai.ts` dispatch as unimplemented cases. No mesh, no physics, no AI yet. Expected to span several sessions; this doc is the running reference.
+Phases 1–4 are built and live in gameplay: beveled mesh (`cube.ts`), AABB-vs-voxel physics + the tipping primitive (`cube-physics.ts`), auto-scaffold navigation, climbing, and an autonomous greedy AI (`cube-ai.ts`). Cubes spawn from terrain (`Role.Crush` in the spawn table) and petrify back into blocks on death. **Phase 5 — Role behaviors (Zone / Crush) — is not yet implemented**; the AI is role-agnostic, so a `Role.Crush` cube currently beelines the player like any other. This doc is the running reference.
 
 ## Concept (original notes)
 
@@ -73,11 +73,13 @@ Debug trigger still `KeyT` — calls `tipAllCubesTowardPlayer` which now routes 
 
 Intentional geometry note: the 180° arc sweeps the cube up and over through a peak ~s·√2 above the pivot before landing on top of the wall. Reads as a handspring / pole-vault motion. Option A (tipping cubes non-collidable) hides any awkwardness during the arc. Revisit with easing curves or split-primitive climbs if the motion looks bad in playtest.
 
-**Option-A vertical zigzag (done).** A single edge-pivot tip can't land straight up (any arc around a cube edge ends horizontally displaced from the start), so "pure vertical climb" is achieved by alternating climb directions: tip east-up, then west-up, netting +2·edge vertical and zero horizontal across each pair. Per-cube state `lastClimbDx/Dz` tracks the most recent climb's horizontal direction and gets flipped on the next vertical-intent tip. Both-zero state means "never climbed" — the first climb seeds direction from the dominant horizontal axis to the player. Only climb tips (dy=1) update `lastClimbDx/Dz`; horizontal walks leave it alone so the zigzag resumes intact after a detour.
+**Move selection — scored greedy locomotion (done).** Each tip attempt is a scored argmax over the full candidate set (4 axis-aligned walks + 4 climbs) in `tipCubeTowardTarget`: score every candidate by the wrap-aware distance from its destination cell to the target, try the best-improving feasible one (`tryTip` validates + commits, mutating only on success, so blocked candidates fall through). Commit only if a candidate strictly improves over standing pat; otherwise no tip this attempt. This replaced an earlier hardcoded priority ladder (dominant-axis walk → same-axis climb) that couldn't try the perpendicular axis when the preferred one was blocked — the full enumeration gets that cross-axis fallback for free.
 
-`tipAllCubesTowardPlayer` now branches: player Δy > edge → vertical-intent mode (alternating climb); otherwise horizontal walk with same-direction climb fallback. Scaffold trail roughly doubles compared to a single-direction climb (pillars on alternating sides), which is the visible cost of staying within the tipping aesthetic rather than adding a separate pillar-jump primitive.
+Why greedy suffices despite the usual local-minima objection: a cube builds its own floor (scaffold) and climbs any wall, so walls and pits — the obstacle classes that create concave traps — are removed rather than routed around, leaving a near-convex navigable space where greedy is near-optimal. Reactive (re-decided every tip), so it absorbs the moving player and changing terrain with no path to invalidate. The vertical zigzag toward a target straight overhead is **emergent**, not coded: from directly below, each climb that lands offset-and-up beats standing pat and the next climb back over the top improves further, so greedy alternates sides on its own (no stored climb-direction state). Scaffold trail roughly doubles vs. a single-direction climb — the visible cost of staying within the tipping aesthetic.
 
-**Autonomous AI cadence (done).** Per-cube `tipCooldown` (seconds-to-next-tip) ticks down each idle frame; on expiry, if the cube is grounded, the AI fires `tipCubeTowardPlayer` and resets to the entity's cached `tipInterval`.
+The scorer is the depth-1 case of lookahead and shares its machinery (a scalar objective over candidate states); raising the depth is a future pass, as is a proactive stuck-breaker. Until then a stuck cube (no improving move) takes no tip and the despawn no-path timer recycles it.
+
+**Autonomous AI cadence (done).** Per-cube `tipCooldown` (seconds-to-next-tip) ticks down each idle frame; on expiry, if the cube is grounded, the AI runs `tipCubeTowardTarget` (whether or not it ends up tipping) and resets to the entity's cached `tipInterval`.
 
 **Per-entity tip timing.** Two cached fields drive cadence, analogous to how sphere AI caches `mass`/`restitution`:
 - `tipDuration = (size / REF_SIZE) / mat.tipSpeed` — **linear in size, density-independent, inversely material-scaled**. `tipSpeed` reads as "tips per second at reference size": a size-10 cube at `tipSpeed = 3.3` takes ~0.3s per tip; size-5 takes half that; size-20 takes double. Because each tip covers `2·size` world units, net world-space chase speed is roughly constant across sizes — a big cube has a long stride but takes proportionally longer to complete it, so both small and large cubes feel about as threatening. No base constant — the material value is the sole magnitude knob.
@@ -93,13 +95,14 @@ Why not mass-scale the animation? Initial design used `tipDuration ∝ mass`, bu
 
 Why no base constants? Earlier iterations had `tipDuration = BASE_TIP_DURATION · (size/REF_SIZE) / mat.tipSpeed` and `tipInterval = BASE_TIP_INTERVAL / mat.tipRate`, which left two magnitudes (global base vs per-material multiplier) fighting for the same job on each side. Folded both bases into the material values directly: `tipSpeed` reads as "tips per second at reference size" and `tipRate` reads as "attempts per second". Per-material values are the single magnitude knobs; no global constants to re-tune separately.
 
-The `KeyT` debug trigger and its `tipAllCubesTowardPlayer` helper are gone — the same targeting logic now lives in the private `tipCubeTowardPlayer` method, called both from the per-frame AI and reusable for future role-specific targeting.
+Targeting splits into two layers — the Phase 5 seam. `cubeTarget(playerPos)` returns the world-space point the cube wants (the player today; Crush/Zone will branch on `entity.role` to aim above the player or at a ring). `tipCubeTowardTarget` is the role-agnostic locomotion that closes on whatever target it's handed. Roles change the destination, not the movement.
 
 Ordering inside `EntityManager.update` Pass 1: AI fires first (may start a tip), then physics/tip-advance dispatch picks up the new state. Cooldown ticks regardless of `grounded` — an airborne cube whose timer expires fires the instant it lands rather than waiting another full interval.
 
 **Still to do:**
 
-- Cross-axis horizontal fallbacks (if the preferred axis is blocked both horizontal and climb, try the other axis).
+- **Proactive stuck-breaker.** A cube with no improving move waits and eventually despawns (no-path timer). A perturb-to-escape (or depth-N lookahead) would free it from concave overhangs — the one local-minimum class scaffold+climb don't remove (a ceiling directly above blocks the climb). Deferred until playtest shows it mattering; it'll want `hasPath` to track *progress* rather than just *mid-tip* so a laterally-sliding cube still recycles when genuinely stuck.
+- **Deliberate descent.** No down-candidate in the move set — a cube can't reach a target below it without falling, and falling is reserved as a death behavior (smash through to the void). Reaching a player who is below awaits that primitive.
 
 ### Phase 5 — Roles on top
 

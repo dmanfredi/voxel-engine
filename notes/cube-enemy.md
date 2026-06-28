@@ -2,7 +2,7 @@
 
 ## Status
 
-Phases 1–4 are built and live in gameplay: beveled mesh (`cube.ts`), AABB-vs-voxel physics + the tipping primitive (`cube-physics.ts`), auto-scaffold navigation, climbing, and an autonomous greedy AI (`cube-ai.ts`). Cubes spawn from terrain (`Role.Crush` in the spawn table) and petrify back into blocks on death. **Phase 5 — Role behaviors (Zone / Crush) — is not yet implemented**; the AI is role-agnostic, so a `Role.Crush` cube currently beelines the player like any other. This doc is the running reference.
+Phases 1–4 are built and live in gameplay: beveled mesh (`cube.ts`), AABB-vs-voxel physics + the tipping primitive (`cube-physics.ts`), auto-scaffold navigation, climbing, and an autonomous greedy AI (`cube-ai.ts`). Cubes spawn from terrain (`Role.Crush` in the spawn table) and petrify back into blocks on death. **Phase 5 — Role behaviors — is partly in:** Crush targets a perch above the player (the existing climb locomotion towers up over them) and despawns as a stub on arrival; Zone is not yet implemented. This doc is the running reference.
 
 ## Concept (original notes)
 
@@ -106,9 +106,10 @@ Ordering inside `EntityManager.update` Pass 1: AI fires first (may start a tip),
 
 ### Phase 5 — Roles on top
 
-- `Role.Zone` and `Role.Crush` become **targeting strategies** layered on the same movement primitive — they don't reimplement movement.
-- Zone: pick cells around the player to wall them in.
-- Crush: pick cells above the player and try to drop on them.
+`Role.Zone` and `Role.Crush` are **targeting strategies** layered on the same movement primitive — they don't reimplement movement. `cubeTarget` branches on role; locomotion is untouched.
+
+- **Crush — targeting in, payload stubbed.** `cubeTarget` aims a fixed height above the player, so the existing climb locomotion towers up over them with no new pathing. On reaching the perch (horizontally aligned and high enough, both with slack for the discrete tip stride) the AI raises `crushArrived` and the despawn pass silently removes the cube. The real payload — release and drop-smash onto the player — slots in where the stub despawn is, and unlocks together with the deferred descent primitive (see Phase 4 "Still to do").
+- **Zone — not started.** Pick cells around the player to wall them in.
 
 ## Open questions (resolve per-phase, not up front)
 

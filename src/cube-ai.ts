@@ -18,6 +18,7 @@
  */
 
 import type { Entity } from './entity';
+import { Role } from './entity';
 
 /**
  * Gameplay-level tip primitive, injected by EntityManager — needs world
@@ -46,34 +47,93 @@ const CANDIDATES: readonly (readonly [number, number, number])[] = [
 	[0, 1, -1],
 ];
 
+// Crush role tuning. The cube climbs to perch this high above the player.
+// Arrival carries slack on both axes because the discrete tip stride rarely lands the cube dead-center over the target.
+const CRUSH_PERCH_BLOCKS = 32;
+const CRUSH_ARRIVE_RADIUS_BLOCKS = 6;
+
 /**
  * Tick cooldown; on expiry, attempt a tip if grounded. Cooldown ticks
  * regardless of grounded so airborne cubes fire on the next grounded
  * frame rather than waiting a full interval. Mid-tip cubes skip entirely.
+ *
+ * Crush cubes first test whether they've perched above the player; on arrival
+ * they raise `crushArrived` and stop — the despawn pass removes them.
  */
 export function cubeAITick(
 	entity: Entity,
 	playerPos: Float32Array,
 	ww: number,
+	blockSize: number,
 	dt: number,
 	tryTip: TryTipFn,
 ): void {
 	if (entity.tip !== null) return;
+
+	// Crush goal (stub): perched above the player → flag for despawn. The real
+	// payload — release and drop-smash onto the player — replaces this when the
+	// descent primitive lands. See notes/cube-enemy.md.
+	if (
+		entity.role === Role.Crush &&
+		entity.grounded &&
+		crushReachedPerch(entity, playerPos, ww, blockSize)
+	) {
+		entity.crushArrived = true;
+		return;
+	}
+
 	entity.tipCooldown -= dt;
 	if (entity.tipCooldown <= 0 && entity.grounded) {
-		tipCubeTowardTarget(entity, playerPos, ww, tryTip);
+		tipCubeTowardTarget(entity, playerPos, ww, blockSize, tryTip);
 		entity.tipCooldown = entity.tipInterval;
 	}
 }
 
 /**
- * The world-space point this cube wants to reach. Role-dispatch seam for
- * Phase 5: Crush will aim above the player, Zone at a ring, Rush at the
- * player. Every role currently beelines the player; branch on `entity.role`
- * here when roles land (add the `entity` param back at that point).
+ * The world-space point this cube wants to reach — the role-dispatch seam.
+ * Crush perches a fixed height above the player; other roles beeline the
+ * player. Zone will branch here too when it lands.
  */
-function cubeTarget(playerPos: Float32Array): [number, number, number] {
-	return [playerPos[0] ?? 0, playerPos[1] ?? 0, playerPos[2] ?? 0];
+function cubeTarget(
+	entity: Entity,
+	playerPos: Float32Array,
+	blockSize: number,
+): [number, number, number] {
+	const px = playerPos[0] ?? 0;
+	const py = playerPos[1] ?? 0;
+	const pz = playerPos[2] ?? 0;
+	if (entity.role === Role.Crush) {
+		return [px, py + CRUSH_PERCH_BLOCKS * blockSize, pz];
+	}
+	return [px, py, pz];
+}
+
+/**
+ * True when a Crush cube is perched above the player: horizontally within the
+ * slack radius of the player's column (wrap-aware) and climbed to within that
+ * same slack of the perch height.
+ */
+function crushReachedPerch(
+	entity: Entity,
+	playerPos: Float32Array,
+	ww: number,
+	blockSize: number,
+): boolean {
+	const hw = ww / 2;
+	const py = playerPos[1] ?? 0;
+	let dx = (playerPos[0] ?? 0) - entity.x;
+	let dz = (playerPos[2] ?? 0) - entity.z;
+	if (dx > hw) dx -= ww;
+	else if (dx < -hw) dx += ww;
+	if (dz > hw) dz -= ww;
+	else if (dz < -hw) dz += ww;
+	const slack = CRUSH_ARRIVE_RADIUS_BLOCKS * blockSize;
+	const horizSq = dx * dx + dz * dz;
+	const aboveBy = entity.y - py;
+	return (
+		horizSq <= slack * slack &&
+		aboveBy >= CRUSH_PERCH_BLOCKS * blockSize - slack
+	);
 }
 
 /**
@@ -93,9 +153,10 @@ function tipCubeTowardTarget(
 	entity: Entity,
 	playerPos: Float32Array,
 	ww: number,
+	blockSize: number,
 	tryTip: TryTipFn,
 ): void {
-	const [tx, ty, tz] = cubeTarget(playerPos);
+	const [tx, ty, tz] = cubeTarget(entity, playerPos, blockSize);
 	const hw = ww / 2;
 	const edge = 2 * entity.scale;
 

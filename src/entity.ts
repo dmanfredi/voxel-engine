@@ -286,6 +286,10 @@ export interface Entity {
 	// Non-null while a sphere runs its self-destruct sequence (see DeathState).
 	// Drives the red death overlay and suppresses re-despawn while it plays.
 	death: DeathState | null;
+	// Cube + Role.Crush: raised by the AI when the cube perches above the
+	// player. The despawn pass silently removes it — a stub goal until the
+	// drop-smash payload replaces it. See notes/cube-enemy.md.
+	crushArrived: boolean;
 }
 
 /** Why an entity was removed — marks the despawn cause (for future death FX). */
@@ -555,6 +559,7 @@ export class EntityManager {
 			noPathTimer: 0,
 			hasPath: false,
 			death: null,
+			crushArrived: false,
 		});
 
 		// Initial upload with zero offset — next update() will apply proper wrap
@@ -656,7 +661,7 @@ export class EntityManager {
 				// the AI decides whether to start a tip this frame, and if
 				// it does, we route through advanceCubeTip instead of the
 				// normal physics tick.
-				cubeAITick(entity, playerPos, ww, dt, (e, dir) =>
+				cubeAITick(entity, playerPos, ww, blockSize, dt, (e, dir) =>
 					this.tryTipCube(e, dir, onRegionChanged),
 				);
 				if (entity.tip !== null) {
@@ -747,6 +752,14 @@ export class EntityManager {
 			}
 
 			if (entity.tip !== null) continue;
+
+			// Crush reached its perch (stub goal) — silent despawn, no petrify.
+			// Replaced by the drop-smash payload when the descent primitive lands.
+			if (entity.crushArrived) {
+				destroyEntityRenderData(entity.renderData);
+				this.entities.splice(i, 1);
+				continue;
+			}
 
 			let reason: DespawnReason | null = null;
 			if (

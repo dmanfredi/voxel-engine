@@ -20,6 +20,7 @@ import {
 	destroyEntityRenderData,
 } from './entity-renderer';
 import type { EntityRenderer, EntityRenderData } from './entity-renderer';
+import type { CrushBeam } from './crush-beam-renderer';
 import { entityPhysicsTick } from './sphere-physics';
 import {
 	entityCubePhysicsTick,
@@ -286,10 +287,10 @@ export interface Entity {
 	// Non-null while a sphere runs its self-destruct sequence (see DeathState).
 	// Drives the red death overlay and suppresses re-despawn while it plays.
 	death: DeathState | null;
-	// Cube + Role.Crush: raised by the AI when the cube perches above the
-	// player. The despawn pass silently removes it — a stub goal until the
-	// drop-smash payload replaces it. See notes/cube-enemy.md.
-	crushArrived: boolean;
+	// Cube + Role.Crush: non-null once the cube commits to its payload (perched
+	// above the player). Drives the telegraph → carve → plummet sequence and,
+	// later, the red beam render. See CrushState and notes/cube-enemy.md.
+	crush: CrushState | null;
 }
 
 /** Why an entity was removed — marks the despawn cause (for future death FX). */
@@ -305,6 +306,28 @@ export type DespawnReason = 'noPath' | 'expired' | 'proximity';
 export interface DeathState {
 	elapsed: number;
 	duration: number;
+}
+
+/**
+ * Crush payload sequence (Cube + Role.Crush). Non-null once the cube perches
+ * above the player and commits. Two phases:
+ *   - `telegraph`: cube frozen, red beam marks the locked column; `elapsed`
+ *     climbs to the hold duration. This window is the player's dodge.
+ *   - `plummet`: column carved, cube drops the shaft; `done` when it bottoms
+ *     out, at which point the despawn pass reaps it.
+ * The column (block coords) is locked at telegraph start so the carve matches
+ * exactly what the beam advertised — dodging the marked lane is the counterplay.
+ */
+export interface CrushState {
+	phase: 'telegraph' | 'plummet';
+	elapsed: number;
+	done: boolean;
+	bx0: number; // footprint min-corner X (block coords)
+	bz0: number; // footprint min-corner Z
+	n: number; // footprint edge, blocks (= cube width)
+	byHigh: number; // top shaft block — the cell directly under the cube
+	byLow: number; // bottom shaft block
+	floorY: number; // world Y where the plummet ends (byLow · blockSize)
 }
 
 /** Block-coord bbox remesh notify (inclusive). Matches main.ts onRegionChanged. */
@@ -393,6 +416,27 @@ const SPHERE_BLAST_RADIUS_FACTOR = 4.5;
 const SPHERE_BLAST_IMPULSE = 35;
 const SPHERE_BLAST_UP_BIAS = 0.5;
 const SPHERE_BLAST_REFERENCE_SCALE = 10;
+// BP lost on a dead-on hit from a modal-size sphere. Scaled by sphere size at
+// the call site, so a bigger blast exceeds it — an anchor, not a cap.
+const SPHERE_BP_PENALTY = 200;
+
+// ── Crush payload tuning ──
+// The perched cube holds a red telegraph for this long, then carves the column
+// and plummets down it. The hold is the player's window to leave the lane.
+const CRUSH_TELEGRAPH_SECONDS = 2;
+// Shaft depth (blocks) carved straight down from under the cube. A deep fixed
+// shaft reads the same as "to the void" for now; coupling it to the actual
+// rising-void floor is a clean follow-up.
+const CRUSH_CARVE_DEPTH_BLOCKS = 96;
+// Plummet speed down the carved shaft (world units/sec). The carve already
+// emptied the shaft, so this is a pure drama knob — no per-block break cost.
+const CRUSH_PLUMMET_SPEED = 600;
+// BP docked per block of cube width when the player is caught in the column.
+const CRUSH_BP_PER_BLOCK = 10;
+// Telegraph beam opacity ramps from MIN to MAX across the hold — the column
+// "charges up" so the carve reads as imminent.
+const CRUSH_BEAM_ALPHA_MIN = 0.0;
+const CRUSH_BEAM_ALPHA_MAX = 0.4;
 
 // ── EntityManager ───────────────────────────────────────────────────
 
@@ -559,7 +603,7 @@ export class EntityManager {
 			noPathTimer: 0,
 			hasPath: false,
 			death: null,
-			crushArrived: false,
+			crush: null,
 		});
 
 		// Initial upload with zero offset — next update() will apply proper wrap
@@ -658,13 +702,29 @@ export class EntityManager {
 				);
 			} else if (entity.shape === Shape.Cube) {
 				// AI-then-physics ordering mirrors the sphere branch above:
-				// the AI decides whether to start a tip this frame, and if
-				// it does, we route through advanceCubeTip instead of the
-				// normal physics tick.
-				cubeAITick(entity, playerPos, ww, blockSize, dt, (e, dir) =>
-					this.tryTipCube(e, dir, onRegionChanged),
-				);
-				if (entity.tip !== null) {
+				// the AI decides whether to start a tip (or commit to a crush)
+				// this frame; we then route through the matching advance.
+				// A committed crush suppresses the AI entirely — the cube no
+				// longer paths, it just runs its payload to completion.
+				if (entity.crush === null) {
+					cubeAITick(
+						entity,
+						playerPos,
+						ww,
+						blockSize,
+						dt,
+						(e, dir) => this.tryTipCube(e, dir, onRegionChanged),
+						(e) => {
+							this.beginCrush(e);
+						},
+					);
+				}
+				if (entity.crush !== null) {
+					// Committed: telegraph → carve → plummet. Path-stable so the
+					// no-path despawn never fires mid-sequence.
+					entity.hasPath = true;
+					this.advanceCrush(entity, dt, player, ww, onRegionChanged);
+				} else if (entity.tip !== null) {
 					// Mid-tip = actively translating toward the player, so it
 					// has a path (covers both a freshly-started and an ongoing
 					// tip). A grounded cube whose tip attempts keep failing
@@ -692,9 +752,9 @@ export class EntityManager {
 				if (a.shape === Shape.Sphere && b.shape === Shape.Sphere) {
 					resolveSpherePair(a, b, ww);
 				} else if (a.shape === Shape.Sphere && b.shape === Shape.Cube) {
-					resolveSphereVsCube(a, b, ww);
+					if (b.crush === null) resolveSphereVsCube(a, b, ww); // crushing cube is ghostly
 				} else if (a.shape === Shape.Cube && b.shape === Shape.Sphere) {
-					resolveSphereVsCube(b, a, ww);
+					if (a.crush === null) resolveSphereVsCube(b, a, ww);
 				}
 				// TODO(phase 2+): cube-vs-cube depenetration. At spawn cubes
 				// are authored apart and no dynamics currently push them into
@@ -709,7 +769,7 @@ export class EntityManager {
 		// leave velocity alone. Sphere-vs-player handled inside sphere
 		// physics (Pass 1).
 		for (const entity of this.entities) {
-			if (entity.shape !== Shape.Cube) continue;
+			if (entity.shape !== Shape.Cube || entity.crush !== null) continue; // crush is ghostly
 			resolvePlayerVsCube(
 				playerPos,
 				playerVel,
@@ -753,9 +813,10 @@ export class EntityManager {
 
 			if (entity.tip !== null) continue;
 
-			// Crush reached its perch (stub goal) — silent despawn, no petrify.
-			// Replaced by the drop-smash payload when the descent primitive lands.
-			if (entity.crushArrived) {
+			// Crushing cube runs its own sequence (Pass 1); reaped here only
+			// once the plummet bottoms out. No petrify — it fell to the void.
+			if (entity.crush !== null) {
+				if (!entity.crush.done) continue;
 				destroyEntityRenderData(entity.renderData);
 				this.entities.splice(i, 1);
 				continue;
@@ -957,6 +1018,38 @@ export class EntityManager {
 	}
 
 	/**
+	 * Telegraph columns to render this frame — one per crushing cube still in
+	 * its telegraph phase. Geometry comes straight from the locked `CrushState`
+	 * column; alpha ramps with telegraph progress so the lane charges up. World
+	 * wrap is ignored (the column sits right over the player, never across the
+	 * seam — same pragmatism as the void floor).
+	 */
+	collectCrushBeams(): CrushBeam[] {
+		const bs = this.world.blockSize;
+		const beams: CrushBeam[] = [];
+		for (const e of this.entities) {
+			const crush = e.crush;
+			if (crush === null || crush.phase !== 'telegraph') continue;
+			const progress = Math.min(
+				1,
+				crush.elapsed / CRUSH_TELEGRAPH_SECONDS,
+			);
+			const alpha =
+				CRUSH_BEAM_ALPHA_MIN +
+				(CRUSH_BEAM_ALPHA_MAX - CRUSH_BEAM_ALPHA_MIN) * progress;
+			beams.push({
+				centerX: (crush.bx0 + crush.n / 2) * bs,
+				centerZ: (crush.bz0 + crush.n / 2) * bs,
+				halfWidth: (crush.n * bs) / 2,
+				topY: (crush.byHigh + 1) * bs,
+				bottomY: crush.byLow * bs,
+				color: [1.0, 0.12, 0.12, alpha],
+			});
+		}
+		return beams;
+	}
+
+	/**
 	 * True if the enemy sphere overlaps the player's blast bubble — a sphere of
 	 * SPHERE_DEATH_PROXIMITY_BLOCKS around the player.
 	 * Wrap-aware horizontal delta; squared compare avoids a sqrt.
@@ -1148,7 +1241,7 @@ export class EntityManager {
 		// BP/lockout hit: size folds in here (not into the impulse) so bigger
 		// blasts cost more BP while the knockback peak stays size-invariant.
 		const sizeFactor = entity.scale / SPHERE_BLAST_REFERENCE_SCALE;
-		applyPlayerHit(hitState, sizeFactor * t);
+		applyPlayerHit(hitState, SPHERE_BP_PENALTY * sizeFactor * t);
 	}
 
 	/**
@@ -1188,6 +1281,125 @@ export class EntityManager {
 				bx0 + n - 1,
 				by0 + n - 1,
 				bz0 + n - 1,
+			);
+			this.flowField.invalidate();
+		}
+	}
+
+	/**
+	 * Begin the crush payload: lock the carve column (block coords) from the
+	 * cube's current footprint and enter the telegraph phase. Locking here is
+	 * what lets the eventual carve match exactly what the beam advertised —
+	 * leaving the marked lane is the player's counterplay.
+	 */
+	private beginCrush(entity: Entity): void {
+		const bs = this.world.blockSize;
+		const s = entity.scale;
+		const byHigh = Math.floor((entity.y - s) / bs) - 1; // first cell under the cube
+		entity.crush = {
+			phase: 'telegraph',
+			elapsed: 0,
+			done: false,
+			bx0: Math.floor((entity.x - s) / bs),
+			bz0: Math.floor((entity.z - s) / bs),
+			n: Math.round((2 * s) / bs),
+			byHigh,
+			byLow: byHigh - (CRUSH_CARVE_DEPTH_BLOCKS - 1),
+			floorY: (byHigh - (CRUSH_CARVE_DEPTH_BLOCKS - 1)) * bs,
+		};
+	}
+
+	/**
+	 * Advance the crush sequence one tick. Telegraph just runs the clock; on
+	 * expiry it carves the column (hitting a player caught inside), then the
+	 * cube plummets the now-empty shaft until it bottoms out.
+	 */
+	private advanceCrush(
+		entity: Entity,
+		dt: number,
+		player: PlayerContext,
+		ww: number,
+		onRegionChanged: RegionChangedFn,
+	): void {
+		const crush = entity.crush;
+		if (crush === null) return;
+		crush.elapsed += dt;
+
+		if (crush.phase === 'telegraph') {
+			if (crush.elapsed >= CRUSH_TELEGRAPH_SECONDS) {
+				this.crushCarve(entity, crush, player, ww, onRegionChanged);
+				crush.phase = 'plummet';
+				crush.elapsed = 0;
+			}
+			return;
+		}
+
+		// Plummet: straight down the carved (empty) shaft, collision-free —
+		// Pass 2/2.5 skip crushing cubes. The carve decoupled fall speed from
+		// remesh cost, so this is a pure drama knob. Bottom out → despawn pass.
+		entity.y -= CRUSH_PLUMMET_SPEED * dt;
+		if (entity.y <= crush.floorY) {
+			entity.y = crush.floorY;
+			crush.done = true;
+		}
+	}
+
+	/**
+	 * Resolve the crush impact: dock the player if they're standing in the
+	 * locked column (wrap-aware, below the cube), then carve the shaft to air
+	 * top-down. Top-down so a future beam-blocker block can halt the carve and
+	 * spare what's beneath it. One remesh + one flow-field invalidation for the
+	 * whole column — the economy that makes the beam beat an incremental smash.
+	 */
+	private crushCarve(
+		entity: Entity,
+		crush: CrushState,
+		player: PlayerContext,
+		ww: number,
+		onRegionChanged: RegionChangedFn,
+	): void {
+		const bs = this.world.blockSize;
+		const hw = ww / 2;
+		const halfFootprint = (crush.n * bs) / 2;
+
+		let dx = (player.pos[0] ?? 0) - entity.x;
+		let dz = (player.pos[2] ?? 0) - entity.z;
+		if (dx > hw) dx -= ww;
+		else if (dx < -hw) dx += ww;
+		if (dz > hw) dz -= ww;
+		else if (dz < -hw) dz += ww;
+		const inColumn =
+			Math.abs(dx) <= halfFootprint + player.halfWidth &&
+			Math.abs(dz) <= halfFootprint + player.halfWidth &&
+			(player.pos[1] ?? 0) <= entity.y;
+		if (inColumn) {
+			applyPlayerHit(player.hitState, CRUSH_BP_PER_BLOCK * crush.n);
+		}
+
+		let carved = false;
+		for (let by = crush.byHigh; by >= crush.byLow; by--) {
+			for (let ix = 0; ix < crush.n; ix++) {
+				for (let iz = 0; iz < crush.n; iz++) {
+					if (
+						this.world.setBlock(
+							crush.bx0 + ix,
+							by,
+							crush.bz0 + iz,
+							AIR,
+						)
+					)
+						carved = true;
+				}
+			}
+		}
+		if (carved) {
+			onRegionChanged(
+				crush.bx0,
+				crush.byLow,
+				crush.bz0,
+				crush.bx0 + crush.n - 1,
+				crush.byHigh,
+				crush.bz0 + crush.n - 1,
 			);
 			this.flowField.invalidate();
 		}

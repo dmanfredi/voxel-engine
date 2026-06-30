@@ -2,7 +2,7 @@
 
 ## Status
 
-Phases 1–4 are built and live in gameplay: beveled mesh (`cube.ts`), AABB-vs-voxel physics + the tipping primitive (`cube-physics.ts`), auto-scaffold navigation, climbing, and an autonomous greedy AI (`cube-ai.ts`). Cubes spawn from terrain (`Role.Crush` in the spawn table) and petrify back into blocks on death. **Phase 5 — Role behaviors — is partly in:** Crush targets a perch above the player (the existing climb locomotion towers up over them) and despawns as a stub on arrival; Zone is not yet implemented. This doc is the running reference.
+Phases 1–4 are built and live in gameplay: beveled mesh (`cube.ts`), AABB-vs-voxel physics + the tipping primitive (`cube-physics.ts`), auto-scaffold navigation, climbing, and an autonomous greedy AI (`cube-ai.ts`). Cubes spawn from terrain (`Role.Crush` in the spawn table) and petrify back into blocks on death. **Phase 5 — Role behaviors — is partly in:** Crush climbs to perch above the player, telegraphs with a red column, then carves a shaft straight down and plummets through it; Zone is not yet implemented. This doc is the running reference.
 
 ## Concept (original notes)
 
@@ -108,7 +108,18 @@ Ordering inside `EntityManager.update` Pass 1: AI fires first (may start a tip),
 
 `Role.Zone` and `Role.Crush` are **targeting strategies** layered on the same movement primitive — they don't reimplement movement. `cubeTarget` branches on role; locomotion is untouched.
 
-- **Crush — targeting in, payload stubbed.** `cubeTarget` aims a fixed height above the player, so the existing climb locomotion towers up over them with no new pathing. On reaching the perch (horizontally aligned and high enough, both with slack for the discrete tip stride) the AI raises `crushArrived` and the despawn pass silently removes the cube. The real payload — release and drop-smash onto the player — slots in where the stub despawn is, and unlocks together with the deferred descent primitive (see Phase 4 "Still to do").
+- **Crush — implemented (beam visual pending).** `cubeTarget` aims a fixed height above the player, so the existing climb locomotion towers up over them with no new pathing. On reaching the perch the AI calls `beginCrush`; EntityManager then runs a telegraph → carve → plummet sequence (`CrushState`):
+    1. **Telegraph** — the cube freezes and the locked N×N column is held for a hold window (the player's dodge). The lane is locked at this instant so the carve matches exactly what the telegraph advertised.
+    2. **Carve + hit** — the column is carved straight down to a deep shaft in one batched remesh, **top-down** so a future beam-blocker block can halt it and spare what's beneath. A player standing in the column (wrap-aware, below the cube) takes a BP hit of `CRUSH_BP_PER_BLOCK · width` plus the standard build lockout.
+    3. **Plummet** — the cube drops the now-empty shaft at a tunable speed (collision-free; pair/player resolution skip crushing cubes) and the despawn pass reaps it at the bottom. No petrify — it fell to the void.
+
+    The damage is **bound to the marked volume** (dealt at carve-time to whoever's in the column), which keeps the red-telegraph language honest: red = "leave this volume," the same rule the sphere blast follows, just a column instead of a sphere. The plummeting cube is feedback — the agent following its attack down the lane — not the damage source.
+
+    `applyPlayerHit` was generalized to take an **absolute BP cost** (each source owns its own scaling) so the cube's `10·width` isn't yoked to the sphere's anchor.
+
+    **Beam telegraph (done).** A translucent red column (`crush-beam-renderer.ts` + `shader/crush-beam.ts`, modeled on the void floor renderer) marks the locked lane. Procedural box geometry, premultiplied-alpha blend, drawn after the skybox with `depthCompare: 'always'` so it reads *through* the terrain it's about to carve (X-ray telegraph). Alpha ramps with telegraph progress, so the column charges up as the carve nears. `EntityManager.collectCrushBeams()` emits one beam per telegraph-phase cube straight from its `CrushState` column.
+
+    **Still deferred:** coupling the carve depth to the rising-void floor, and the beam-blocker counterplay block (the carve already loops top-down to make halting it cheap).
 - **Zone — not started.** Pick cells around the player to wall them in.
 
 ## Open questions (resolve per-phase, not up front)

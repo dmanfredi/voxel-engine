@@ -24,6 +24,7 @@ import { generateMips, numMipLevels } from './mipmap';
 import { initToolbar } from './toolbar';
 import { ProjectileManager } from './projectile-manager';
 import { initProjectileRenderer } from './projectile-renderer';
+import { initCrushBeamRenderer, drawCrushBeams } from './crush-beam-renderer';
 import { canFire, tickToolCooldowns, type Tool } from './tool';
 import {
 	createVoidFloorState,
@@ -536,6 +537,15 @@ async function main(): Promise<void> {
 
 	// Void floor renderer — own pipeline, shares group-0 binding-0 (VP matrix).
 	const voidFloorRenderer = initVoidFloorRenderer(
+		device,
+		presentationFormat,
+		mainGroup0BGL,
+		bindGroup,
+	);
+
+	// Crush telegraph beam renderer — translucent red column, drawn after the
+	// skybox so it composites over everything. Shares group-0 binding-0.
+	const crushBeamRenderer = initCrushBeamRenderer(
 		device,
 		presentationFormat,
 		mainGroup0BGL,
@@ -1255,6 +1265,15 @@ async function main(): Promise<void> {
 				},
 				{ y: voidFloorState.surfaceY, color: [0.15, 0.15, 0.25, 0.3] },
 			],
+		);
+
+		// Crush telegraph beams last — translucent red columns drawn over
+		// everything, so the marked lane is unmissable.
+		drawCrushBeams(
+			pass,
+			device,
+			crushBeamRenderer,
+			entityManager.collectCrushBeams(),
 		);
 
 		pass.end();

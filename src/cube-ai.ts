@@ -32,6 +32,13 @@ export type TryTipFn = (
 	direction: [number, number, number],
 ) => boolean;
 
+/**
+ * Commit the cube to its crush payload, injected by EntityManager — it owns
+ * the world-mutating telegraph → carve → plummet sequence the AI shouldn't
+ * reach into. Called once on arrival; the cube stops pathing afterward.
+ */
+export type BeginCrushFn = (entity: Entity) => void;
+
 // Candidate moves in a fixed order (stable tie-break for argmax). Four
 // axis-aligned walks (dy=0) and four climbs (dy=1). No descent candidate:
 // dropping isn't navigation — a falling cube smashes through to the void and
@@ -50,7 +57,7 @@ const CANDIDATES: readonly (readonly [number, number, number])[] = [
 // Crush role tuning. The cube climbs to perch this high above the player.
 // Arrival carries slack on both axes because the discrete tip stride rarely lands the cube dead-center over the target.
 const CRUSH_PERCH_BLOCKS = 32;
-const CRUSH_ARRIVE_RADIUS_BLOCKS = 6;
+const CRUSH_ARRIVE_RADIUS_BLOCKS = 1;
 
 /**
  * Tick cooldown; on expiry, attempt a tip if grounded. Cooldown ticks
@@ -58,7 +65,7 @@ const CRUSH_ARRIVE_RADIUS_BLOCKS = 6;
  * frame rather than waiting a full interval. Mid-tip cubes skip entirely.
  *
  * Crush cubes first test whether they've perched above the player; on arrival
- * they raise `crushArrived` and stop — the despawn pass removes them.
+ * they commit to the crush payload (via `beginCrush`) and stop pathing.
  */
 export function cubeAITick(
 	entity: Entity,
@@ -67,18 +74,18 @@ export function cubeAITick(
 	blockSize: number,
 	dt: number,
 	tryTip: TryTipFn,
+	beginCrush: BeginCrushFn,
 ): void {
 	if (entity.tip !== null) return;
 
-	// Crush goal (stub): perched above the player → flag for despawn. The real
-	// payload — release and drop-smash onto the player — replaces this when the
-	// descent primitive lands. See notes/cube-enemy.md.
+	// Perched above the player → commit. EntityManager takes over from here
+	// (telegraph → carve → plummet). See notes/cube-enemy.md.
 	if (
 		entity.role === Role.Crush &&
 		entity.grounded &&
 		crushReachedPerch(entity, playerPos, ww, blockSize)
 	) {
-		entity.crushArrived = true;
+		beginCrush(entity);
 		return;
 	}
 

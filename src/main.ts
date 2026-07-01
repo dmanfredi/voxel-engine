@@ -614,6 +614,43 @@ async function main(): Promise<void> {
 		}
 	}
 
+	function clampCanvasDimension(size: number): number {
+		return Math.max(
+			1,
+			Math.min(Math.floor(size), device.limits.maxTextureDimension2D),
+		);
+	}
+
+	function resizeCanvasToDisplaySize(entry: ResizeObserverEntry): boolean {
+		const canvas = entry.target as HTMLCanvasElement;
+		const devicePixelSize = entry.devicePixelContentBoxSize?.[0];
+		const contentBoxSize = entry.contentBoxSize[0];
+		const cssWidth = contentBoxSize
+			? contentBoxSize.inlineSize
+			: entry.contentRect.width;
+		const cssHeight = contentBoxSize
+			? contentBoxSize.blockSize
+			: entry.contentRect.height;
+
+		const width = clampCanvasDimension(
+			devicePixelSize
+				? devicePixelSize.inlineSize
+				: cssWidth * window.devicePixelRatio,
+		);
+		const height = clampCanvasDimension(
+			devicePixelSize
+				? devicePixelSize.blockSize
+				: cssHeight * window.devicePixelRatio,
+		);
+
+		if (canvas.width === width && canvas.height === height) {
+			return false;
+		}
+		canvas.width = width;
+		canvas.height = height;
+		return true;
+	}
+
 	// ============================================
 	// GAME STATE & FUNCTIONS
 	// ============================================
@@ -773,7 +810,7 @@ async function main(): Promise<void> {
 			},
 		};
 
-		const aspect = canvas.clientWidth / canvas.clientHeight;
+		const aspect = canvasTexture.width / canvasTexture.height;
 		const projection = mat4.perspective(
 			degToRad(60), // fieldOfView,
 			aspect,
@@ -1099,27 +1136,16 @@ async function main(): Promise<void> {
 
 	const observer = new ResizeObserver((entries) => {
 		for (const entry of entries) {
-			const canvas = entry.target as HTMLCanvasElement;
-			const boxSize = entry.contentBoxSize[0];
-			const width = boxSize
-				? boxSize.inlineSize
-				: entry.contentRect.width;
-			const height = boxSize
-				? boxSize.blockSize
-				: entry.contentRect.height;
-			canvas.width = Math.max(
-				1,
-				Math.min(width, device.limits.maxTextureDimension2D),
-			);
-			canvas.height = Math.max(
-				1,
-				Math.min(height, device.limits.maxTextureDimension2D),
-			);
-			// re-render
-			render();
+			if (resizeCanvasToDisplaySize(entry)) {
+				render();
+			}
 		}
 	});
-	observer.observe(canvas);
+	try {
+		observer.observe(canvas, { box: 'device-pixel-content-box' });
+	} catch {
+		observer.observe(canvas);
+	}
 
 	// Start animation loop after all initialization is complete
 	requestAnimationFrame((t) => {

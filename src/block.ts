@@ -25,9 +25,11 @@ export interface BlockProperties {
 
 export class BlockRegistry {
 	private blocks: (BlockProperties | undefined)[] = [];
+	private readonly solidById = new Uint8Array(256);
 
 	register(id: BlockId, properties: BlockProperties): void {
 		this.blocks[id] = properties;
+		this.solidById[id] = properties.solid ? 1 : 0;
 	}
 
 	get(id: BlockId): BlockProperties | undefined {
@@ -35,11 +37,15 @@ export class BlockRegistry {
 	}
 
 	isSolid(id: BlockId): boolean {
-		return this.blocks[id]?.solid ?? false;
+		return this.solidById[id] === 1;
 	}
 
 	get count(): number {
 		return this.blocks.length;
+	}
+
+	get solidFlags(): Uint8Array {
+		return this.solidById;
 	}
 }
 

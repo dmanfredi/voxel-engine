@@ -438,6 +438,11 @@ const CRUSH_BP_PER_BLOCK = 10;
 const CRUSH_BEAM_ALPHA_MIN = 0.0;
 const CRUSH_BEAM_ALPHA_MAX = 0.4;
 
+// Flow-field rebuild cadence. Movement and terrain edits only mark the shared
+// field dirty; while dirty, entities keep reading the last valid field until
+// this interval elapses.
+const FLOW_FIELD_REBUILD_INTERVAL_SECONDS = 0.25;
+
 // ── EntityManager ───────────────────────────────────────────────────
 
 export class EntityManager {
@@ -448,10 +453,11 @@ export class EntityManager {
 	private world: World;
 	private meshCache = new Map<Shape, CachedMesh>();
 	// One shared flow field — all spheres pursue the same player and read
-	// the same distance grid. Refreshed when the player crosses a voxel cell
-	// boundary or terrain inside the field changes (callers invoke
-	// invalidateFlowField after world mutations; see notes/sticky-spheres.md).
+	// the same distance grid. Dirtied by player-cell changes and terrain
+	// mutations, then rebuilt on a fixed cadence to bound main-thread spikes.
 	private flowField = new FlowField();
+	private flowFieldDirty = false;
+	private flowFieldRebuildTimer = 0;
 
 	constructor(renderer: EntityRenderer, device: GPUDevice, world: World) {
 		this.renderer = renderer;
@@ -460,12 +466,16 @@ export class EntityManager {
 	}
 
 	/**
-	 * Mark the flow field stale so the next AI tick rebuilds it. Call after
-	 * any world mutation (block place/break, scaffold, auto-climb). Cheap;
-	 * the actual BFS work happens on the next tick if needed.
+	 * Mark the flow field stale. Call after any world mutation (block
+	 * place/break, scaffold, auto-climb). Cheap; existing AI keeps using the
+	 * last valid field until the rebuild cadence allows a refresh.
 	 */
 	invalidateFlowField(): void {
-		this.flowField.invalidate();
+		this.markFlowFieldDirty();
+	}
+
+	private markFlowFieldDirty(): void {
+		this.flowFieldDirty = true;
 	}
 
 	/** Number of live entities — the spawner's population gauge against its cap. */
@@ -637,12 +647,12 @@ export class EntityManager {
 		const py = playerPos[1] ?? 0;
 		const pz = playerPos[2] ?? 0;
 
-		// Refresh the flow field if the player crossed a cell boundary,
-		// terrain invalidation flagged it stale, or the max sphere reach
-		// changed. BFS is synchronous on the main thread — fine while small;
-		// revisit with a worker if profiling shows it. Eye-position cell is
-		// the BFS source (player feet aren't available here), which reads as
-		// "spheres climb toward you" rather than "they crawl at your ankles."
+		// Refresh the flow field on a bounded cadence. Player-cell changes,
+		// terrain invalidation, and max sphere reach changes all collapse into
+		// a generic dirty bit; spheres keep using the last valid field while
+		// dirty. Eye-position cell is the BFS source (player feet aren't
+		// available here), which reads as "spheres climb toward you" rather
+		// than "they crawl at your ankles."
 		//
 		// maxReach drives the near-surface dilation in FlowField — must be
 		// at least 1 (so BFS can wrap convex edges) and at least
@@ -660,6 +670,15 @@ export class EntityManager {
 		if (
 			this.flowField.needsUpdate(playerBX, playerBY, playerBZ, maxReach)
 		) {
+			this.markFlowFieldDirty();
+		}
+		this.flowFieldRebuildTimer += dt;
+		if (
+			!this.flowField.isReady ||
+			(this.flowFieldDirty &&
+				this.flowFieldRebuildTimer >=
+					FLOW_FIELD_REBUILD_INTERVAL_SECONDS)
+		) {
 			this.flowField.update(
 				this.world,
 				playerBX,
@@ -667,6 +686,8 @@ export class EntityManager {
 				playerBZ,
 				maxReach,
 			);
+			this.flowFieldDirty = false;
+			this.flowFieldRebuildTimer = 0;
 		}
 
 		// Pass 1 — per-entity AI + solo physics, dispatched by shape.
@@ -998,7 +1019,7 @@ export class EntityManager {
 				dMinBY - 1,
 				dMinBZ + nVox - 1,
 			);
-			this.flowField.invalidate();
+			this.markFlowFieldDirty();
 		}
 
 		// startCubeTip re-checks destination + ground. After scaffold,
@@ -1184,7 +1205,7 @@ export class EntityManager {
 				cby + reach,
 				cbz + reach,
 			);
-			this.flowField.invalidate();
+			this.markFlowFieldDirty();
 		}
 
 		// Fires regardless of whether anything was carved — a blast in open
@@ -1282,7 +1303,7 @@ export class EntityManager {
 				by0 + n - 1,
 				bz0 + n - 1,
 			);
-			this.flowField.invalidate();
+			this.markFlowFieldDirty();
 		}
 	}
 
@@ -1401,7 +1422,7 @@ export class EntityManager {
 				crush.byHigh,
 				crush.bz0 + crush.n - 1,
 			);
-			this.flowField.invalidate();
+			this.markFlowFieldDirty();
 		}
 	}
 

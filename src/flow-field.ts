@@ -115,22 +115,20 @@ export class FlowField {
 		this.centerBZ = playerBZ;
 		this.lastReach = maxReachCells;
 
-		// Phase 1 — cache world solidity locally. ~117K isSolid calls; the
-		// dilation pass below would otherwise hit the world map ~(2K+1)³
-		// times more.
-		this.solid.fill(0);
-		for (let lz = 0; lz < SIZE; lz++) {
-			for (let ly = 0; ly < SIZE; ly++) {
-				for (let lx = 0; lx < SIZE; lx++) {
-					const bx = this.centerBX + (lx - FLOW_RADIUS);
-					const by = this.centerBY + (ly - FLOW_RADIUS);
-					const bz = this.centerBZ + (lz - FLOW_RADIUS);
-					if (world.isSolid(bx, by, bz)) {
-						this.solid[lx + ly * STRIDE_Y + lz * STRIDE_Z] = 1;
-					}
-				}
-			}
-		}
+		// Phase 1 — cache world solidity locally. This still scans the full
+		// 49³ field, but World does it chunk-by-chunk so the hot loop avoids
+		// per-cell wrapping, string chunk keys, and Map lookups.
+		world.fillSolidMask(
+			this.centerBX - FLOW_RADIUS,
+			this.centerBY - FLOW_RADIUS,
+			this.centerBZ - FLOW_RADIUS,
+			SIZE,
+			SIZE,
+			SIZE,
+			this.solid,
+			STRIDE_Y,
+			STRIDE_Z,
+		);
 
 		// Phase 2 — dilate solid mask into `nearSurface` by K cells. For
 		// each solid cell, mark the (2K+1)³ Chebyshev cube around it.

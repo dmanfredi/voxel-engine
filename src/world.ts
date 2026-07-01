@@ -79,6 +79,82 @@ export class World {
 	}
 
 	/**
+	 * Fill `out` with 0/1 solidity for an axis-aligned block-coordinate box.
+	 * The destination layout is x + y*strideY + z*strideZ. Missing chunks read
+	 * as air. X/Z wrap horizontally just like getBlock().
+	 */
+	fillSolidMask(
+		minX: number,
+		minY: number,
+		minZ: number,
+		sizeX: number,
+		sizeY: number,
+		sizeZ: number,
+		out: Uint8Array,
+		strideY: number,
+		strideZ: number,
+	): void {
+		out.fill(0);
+
+		const maxX = minX + sizeX;
+		const maxY = minY + sizeY;
+		const maxZ = minZ + sizeZ;
+		const minCX = Math.floor(minX / CHUNK_SIZE);
+		const maxCX = Math.floor((maxX - 1) / CHUNK_SIZE);
+		const minCY = Math.floor(minY / CHUNK_SIZE);
+		const maxCY = Math.floor((maxY - 1) / CHUNK_SIZE);
+		const minCZ = Math.floor(minZ / CHUNK_SIZE);
+		const maxCZ = Math.floor((maxZ - 1) / CHUNK_SIZE);
+		const CS2 = CHUNK_SIZE * CHUNK_SIZE;
+		const solidFlags = blockRegistry.solidFlags;
+		const w = this.widthChunks;
+
+		for (let cy = minCY; cy <= maxCY; cy++) {
+			const chunkMinY = cy * CHUNK_SIZE;
+			const y0 = Math.max(minY, chunkMinY);
+			const y1 = Math.min(maxY, chunkMinY + CHUNK_SIZE);
+
+			for (let cz = minCZ; cz <= maxCZ; cz++) {
+				const chunkMinZ = cz * CHUNK_SIZE;
+				const z0 = Math.max(minZ, chunkMinZ);
+				const z1 = Math.min(maxZ, chunkMinZ + CHUNK_SIZE);
+				const wrappedCZ = ((cz % w) + w) % w;
+
+				for (let cx = minCX; cx <= maxCX; cx++) {
+					const wrappedCX = ((cx % w) + w) % w;
+					const chunk = this.chunks.get(
+						chunkKey(wrappedCX, cy, wrappedCZ),
+					);
+					if (!chunk) continue;
+
+					const chunkMinX = cx * CHUNK_SIZE;
+					const x0 = Math.max(minX, chunkMinX);
+					const x1 = Math.min(maxX, chunkMinX + CHUNK_SIZE);
+					const localX0 = x0 - chunkMinX;
+					const runLength = x1 - x0;
+					const blocks = chunk.blocks;
+
+					for (let y = y0; y < y1; y++) {
+						const localY = y - chunkMinY;
+						const dstY = (y - minY) * strideY;
+						const srcY = localY * CS2;
+
+						for (let z = z0; z < z1; z++) {
+							const localZ = z - chunkMinZ;
+							let dst = dstY + (z - minZ) * strideZ + (x0 - minX);
+							let src = srcY + localZ * CHUNK_SIZE + localX0;
+							const srcEnd = src + runLength;
+							while (src < srcEnd) {
+								out[dst++] = solidFlags[blocks[src++]];
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	/**
 	 * Build a padded (CHUNK_SIZE+2)³ block array for the mesher.
 	 * Contains the target chunk's blocks in the interior, plus a 1-block
 	 * border read directly from neighbor chunk arrays.

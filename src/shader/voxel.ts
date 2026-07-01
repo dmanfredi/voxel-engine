@@ -8,6 +8,10 @@ const VoxelShader = /*wgsl*/ `
 	${buildMaterialLUT()}
 	${SUN_DIRECTION_WGSL}
 	const SHADOW_TEXEL_SIZE = vec2f(${SHADOW_TEXEL_SIZE}, ${SHADOW_TEXEL_SIZE});
+	const RENDER_MODE_ALBEDO: f32 = 1.0;
+	const RENDER_MODE_LIGHTING: f32 = 2.0;
+	const RENDER_MODE_AO: f32 = 3.0;
+	const AO_SHADOW_COLOR: vec3f = vec3f(0.1, 0.1, 0.1);
 
 	struct Uniforms {
 		matrix: mat4x4f,
@@ -21,6 +25,7 @@ const VoxelShader = /*wgsl*/ `
 		shadowBias: f32,
 		shadowsEnabled: f32,
 		shadowNormalBias: f32,
+		renderMode: f32,
 	}
 
 	struct Vertex {
@@ -39,6 +44,15 @@ const VoxelShader = /*wgsl*/ `
 		@location(3) ao: f32,
 		@location(4) worldPos: vec3f,
 		@location(5) shadowPos: vec4f,
+	}
+
+	struct TerrainLighting {
+		shadedBrightness: f32,
+		aoLighting: vec3f,
+		specular: vec3f,
+		directLight: f32,
+		fogFactor: f32,
+		fogColor: vec3f,
 	}
 
 	@group(0) @binding(0) var<uniform> uni: Uniforms;
@@ -109,49 +123,48 @@ const VoxelShader = /*wgsl*/ `
 			inBounds && sunFacing,
 		);
 	}
-
-	@fragment fn fs(vsOut: VSOutput) -> @location(0) vec4f {
-		let texColor = textureSampleBias(myTexture, mySampler, vsOut.uv, vsOut.texLayer, MIP_LOD_BIAS);
-
+	fn terrainFaceBrightness(normal: vec3f) -> f32 {
 		// Per-face shading aligned with LIGHT_DIR (sun is up / south / west).
 		// Lit sides brighter than shadowed sides; values roughly track
 		// dot(n, LIGHT_DIR) mapped into [0.5, 1.0].
-		let n = vsOut.normal;
-		var brightness: f32;
-		if (n.y > 0.5) {
-			brightness = 1.0;    // top      (+Y, sun overhead)
-		} else if (n.y < -0.5) {
-			brightness = 0.5;    // bottom   (-Y, away from sun)
-		} else if (n.z > 0.5) {
-			brightness = 0.9;    // south    (+Z, lit)
-		} else if (n.x < -0.5) {
-			brightness = 0.8;    // west     (-X, lit)
-		} else if (n.x > 0.5) {
-			brightness = 0.6;    // east     (+X, shadowed)
-		} else {
-			brightness = 0.55;   // north    (-Z, shadowed)
+		if (normal.y > 0.5) {
+			return 1.0; // top (+Y, sun overhead)
+		} else if (normal.y < -0.5) {
+			return 0.5; // bottom (-Y, away from sun)
+		} else if (normal.z > 0.5) {
+			return 0.9; // south (+Z, lit)
+		} else if (normal.x < -0.5) {
+			return 0.8; // west (-X, lit)
+		} else if (normal.x > 0.5) {
+			return 0.6; // east (+X, shadowed)
 		}
+		return 0.55; // north (-Z, shadowed)
+	}
 
-		// Sky-tinted specular: sample cubemap along reflection for highlight color
+	fn terrainFogFactor(worldPos: vec3f) -> f32 {
+		let dist = length(worldPos - uni.eyePosition);
+		return clamp((uni.fogEnd - dist) / (uni.fogEnd - uni.fogStart), 0.0, 1.0);
+	}
+
+	fn terrainSpecular(vsOut: VSOutput, normal: vec3f) -> vec3f {
 		let eyeToSurface = normalize(vsOut.worldPos - uni.eyePosition);
-		let reflected = reflect(eyeToSurface, n);
+		let reflected = reflect(eyeToSurface, normal);
 		let skyColor = textureSample(skyTexture, skySampler, reflected * vec3f(1, 1, -1));
 
-		// Per-material reflection params (LUT), additively boosted by global tweakpane values
 		let matShin = MATERIAL_SHININESS[vsOut.texLayer];
 		let matSpec = MATERIAL_SPEC_STRENGTH[vsOut.texLayer];
 		let effShin = matShin + uni.shininess;
 		let effSpec = matSpec + uni.specularStrength;
 
-		// Blinn-Phong specular highlight, tinted by skybox instead of white
 		let V = normalize(uni.eyePosition - vsOut.worldPos);
 		let H = normalize(LIGHT_DIR + V);
-		let spec = pow(max(dot(n, H), 0.0), effShin);
-		let specular = effSpec * spec * skyColor.rgb;
-		let sunVisibility = shadowVisibility(vsOut.shadowPos, n);
+		let spec = pow(max(dot(normal, H), 0.0), effShin);
+		return effSpec * spec * skyColor.rgb;
+	}
 
-		let dist = length(vsOut.worldPos - uni.eyePosition);
-		let fogFactor = clamp((uni.fogEnd - dist) / (uni.fogEnd - uni.fogStart), 0.0, 1.0);
+	fn computeTerrainLighting(vsOut: VSOutput, normal: vec3f) -> TerrainLighting {
+		let fogFactor = terrainFogFactor(vsOut.worldPos);
+		let sunVisibility = shadowVisibility(vsOut.shadowPos, normal);
 		let shadowFogFade = smoothstep(0.0, 1.0, fogFactor);
 		let directLight = mix(
 			1.0,
@@ -159,18 +172,44 @@ const VoxelShader = /*wgsl*/ `
 			shadowFogFade,
 		);
 
-		// a nice blue vec3f(0.49, 0.55, 0.68)
-		let shadowColor = vec3f(0.1, 0.1, 0.1); // AO shadow tint
 		let ambientBrightness = 0.5;
-		let directBrightness = max(brightness - ambientBrightness, 0.0);
+		let faceBrightness = terrainFaceBrightness(normal);
+		let directBrightness = max(faceBrightness - ambientBrightness, 0.0);
 		let shadedBrightness = ambientBrightness + directBrightness * directLight;
-		let lit = texColor.rgb * shadedBrightness;
-		let base = mix(shadowColor, lit, vsOut.ao);
-		let final_color = base + specular * directLight;
 
-		// Distance fog — sample skybox in eye-to-fragment direction so fog matches the sky behind it
+		let aoLighting = mix(AO_SHADOW_COLOR, vec3f(shadedBrightness), vsOut.ao);
+
+		let eyeToSurface = normalize(vsOut.worldPos - uni.eyePosition);
 		let fogColor = textureSample(skyTexture, skySampler, eyeToSurface * vec3f(1, 1, -1)).rgb;
-		let fogged = mix(fogColor, final_color, fogFactor);
+
+		return TerrainLighting(
+			shadedBrightness,
+			aoLighting,
+			terrainSpecular(vsOut, normal),
+			directLight,
+			fogFactor,
+			fogColor,
+		);
+	}
+
+	@fragment fn fs(vsOut: VSOutput) -> @location(0) vec4f {
+		let texColor = textureSampleBias(myTexture, mySampler, vsOut.uv, vsOut.texLayer, MIP_LOD_BIAS);
+		if (uni.renderMode == RENDER_MODE_ALBEDO) {
+			return vec4f(texColor.rgb, texColor.a);
+		}
+		if (uni.renderMode == RENDER_MODE_AO) {
+			return vec4f(vec3f(vsOut.ao), 1.0);
+		}
+
+		let n = vsOut.normal;
+		let lighting = computeTerrainLighting(vsOut, n);
+		if (uni.renderMode == RENDER_MODE_LIGHTING) {
+			return vec4f(lighting.aoLighting, 1.0);
+		}
+
+		let base = mix(AO_SHADOW_COLOR, texColor.rgb * lighting.shadedBrightness, vsOut.ao);
+		let final_color = base + lighting.specular * lighting.directLight;
+		let fogged = mix(lighting.fogColor, final_color, lighting.fogFactor);
 		return vec4f(fogged, texColor.a);
 	}
 `;

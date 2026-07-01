@@ -170,7 +170,7 @@ export function greedyMesh(
 
 		// Sweep through slices perpendicular to the axis
 		// We go from -1 to CHUNK_SIZE-1 to catch boundary faces
-		for (x[axis] = -1; x[axis] < CHUNK_SIZE; ) {
+		for (x[axis] = -1; x[axis] < CHUNK_SIZE;) {
 			// Build the mask for this slice
 			let n = 0;
 			for (x[v] = 0; x[v] < CHUNK_SIZE; x[v]++) {
@@ -212,7 +212,7 @@ export function greedyMesh(
 			// Now greedy merge the mask into rectangles
 			n = 0;
 			for (let j = 0; j < CHUNK_SIZE; j++) {
-				for (let i = 0; i < CHUNK_SIZE; ) {
+				for (let i = 0; i < CHUNK_SIZE;) {
 					const maskVal = mask[n];
 
 					if (maskVal !== 0) {

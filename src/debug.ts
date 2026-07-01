@@ -1,11 +1,21 @@
 import Stats from 'stats.js';
 import { Pane } from 'tweakpane';
 
+export const RENDER_MODE = {
+	Final: 0,
+	Albedo: 1,
+	Lighting: 2,
+	AO: 3,
+} as const;
+
+export type RenderMode = keyof typeof RENDER_MODE;
+
 export const stats = new Stats();
 stats.showPanel(0); // 0: fps, 1: ms, 2: mb, 3+: custom
 document.body.appendChild(stats.dom);
 
 export const debuggerParams = {
+	renderMode: 'Final' as RenderMode,
 	wireframe: false,
 	freecam: false,
 	vertices: 0,
@@ -30,30 +40,51 @@ export function refreshDebug(): void {
 
 export function BuildDebug(render: () => void): void {
 	pane = new Pane({ title: 'Debug' });
-	const wireframeBinding = pane.addBinding(debuggerParams, 'wireframe', {
-		label: 'Wireframe',
-	});
-	pane.addBinding(debuggerParams, 'freecam', {
+	const renderDebugFolder = pane.addFolder({ title: 'Render Debug' });
+	const renderModeBinding = renderDebugFolder.addBinding(
+		debuggerParams,
+		'renderMode',
+		{
+			label: 'View Mode',
+			options: {
+				Final: 'Final',
+				Albedo: 'Albedo',
+				Lighting: 'Lighting',
+				AO: 'AO',
+			},
+		},
+	);
+	const wireframeBinding = renderDebugFolder.addBinding(
+		debuggerParams,
+		'wireframe',
+		{
+			label: 'Wireframe',
+		},
+	);
+	const requestDebugRender = () => {
+		requestAnimationFrame(() => {
+			render();
+		});
+	};
+	renderModeBinding.on('change', requestDebugRender);
+	wireframeBinding.on('change', requestDebugRender);
+
+	const playerFolder = pane.addFolder({ title: 'Player' });
+	playerFolder.addBinding(debuggerParams, 'freecam', {
 		label: 'Freecam',
 	});
-	pane.addBinding(debuggerParams, 'vertices', {
+	playerFolder.addBinding(debuggerParams, 'vertices', {
 		readonly: true,
 		label: 'Vertices',
 		format: (v) => v.toFixed(0),
 	});
-	pane.addBinding(debuggerParams, 'targetBlock', {
+	playerFolder.addBinding(debuggerParams, 'targetBlock', {
 		readonly: true,
 		label: 'Target',
 	});
-	pane.addBinding(debuggerParams, 'playerPos', {
+	playerFolder.addBinding(debuggerParams, 'playerPos', {
 		readonly: true,
 		label: 'Location',
-	});
-
-	wireframeBinding.on('change', () => {
-		requestAnimationFrame(() => {
-			render();
-		});
 	});
 
 	const reflFolder = pane.addFolder({ title: 'Specular' });

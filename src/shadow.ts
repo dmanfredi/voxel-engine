@@ -11,10 +11,10 @@ function f32Literal(n: number): string {
 }
 
 const BAYER_8X8 = [
-	0, 48, 12, 60, 3, 51, 15, 63, 32, 16, 44, 28, 35, 19, 47, 31, 8, 56, 4,
-	52, 11, 59, 7, 55, 40, 24, 36, 20, 43, 27, 39, 23, 2, 50, 14, 62, 1, 49,
-	13, 61, 34, 18, 46, 30, 33, 17, 45, 29, 10, 58, 6, 54, 9, 57, 5, 53, 42,
-	26, 38, 22, 41, 25, 37, 21,
+	0, 48, 12, 60, 3, 51, 15, 63, 32, 16, 44, 28, 35, 19, 47, 31, 8, 56, 4, 52,
+	11, 59, 7, 55, 40, 24, 36, 20, 43, 27, 39, 23, 2, 50, 14, 62, 1, 49, 13, 61,
+	34, 18, 46, 30, 33, 17, 45, 29, 10, 58, 6, 54, 9, 57, 5, 53, 42, 26, 38, 22,
+	41, 25, 37, 21,
 ];
 
 function wgslVec3(v: Float32Array): string {
@@ -28,9 +28,9 @@ function buildTerrainShadowShader(worldWrapWidth: number): string {
 	const lightX = vec3.normalize(vec3.cross(vec3.create(0, 1, 0), lightDir));
 	const lightY = vec3.normalize(vec3.cross(lightDir, lightX));
 	const ditherCellSize = (SHADOW_HALF_EXTENT * 2) / SHADOW_MAP_SIZE;
-	const bayer8x8 = BAYER_8X8.map((n) =>
-		f32Literal((n + 0.5) / 64),
-	).join(', ');
+	const bayer8x8 = BAYER_8X8.map((n) => f32Literal((n + 0.5) / 64)).join(
+		', ',
+	);
 
 	return /* wgsl */ `
 	const WORLD_WRAP_WIDTH = ${f32Literal(worldWrapWidth)};

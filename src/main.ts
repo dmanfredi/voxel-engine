@@ -8,7 +8,13 @@ import {
 	SHADOW_HALF_EXTENT,
 } from './shadow';
 
-import { BuildDebug, refreshDebug, debuggerParams, stats } from './debug';
+import {
+	BuildDebug,
+	refreshDebug,
+	debuggerParams,
+	stats,
+	RENDER_MODE,
+} from './debug';
 import { greedyMesh } from './greedy-mesh';
 import { FREECAM, physicsTick, createPlayerState } from './movement';
 import { World } from './world';
@@ -324,8 +330,9 @@ async function main(): Promise<void> {
 	// f32      = 4 bytes  (offset 88)  fogEnd
 	// mat4x4f  = 64 bytes (offset 96)  lightViewProjection
 	// f32 x 4  = 16 bytes (offset 160) shadow strength/bias/enabled/normal bias
-	// Total: 176 bytes
-	const uniformBufferSize = 176;
+	// f32      = 4 bytes  (offset 176) renderMode
+	// Total: 192 bytes (padded to uniform struct alignment)
+	const uniformBufferSize = 192;
 	const uniformBuffer = device.createBuffer({
 		label: 'uniforms',
 		size: uniformBufferSize,
@@ -800,6 +807,7 @@ async function main(): Promise<void> {
 		uniformValues[41] = debuggerParams.shadowBias;
 		uniformValues[42] = debuggerParams.shadows ? 1 : 0;
 		uniformValues[43] = debuggerParams.shadowNormalBias;
+		uniformValues[44] = RENDER_MODE[debuggerParams.renderMode];
 		device.queue.writeBuffer(uniformBuffer, 0, uniformValues);
 
 		const chunkExtent = CHUNK_SIZE * BLOCK_SIZE;
@@ -947,7 +955,9 @@ async function main(): Promise<void> {
 		entityManager.draw(pass);
 
 		// Draw skybox (after geometry, uses less-equal depth test)
-		drawSkybox(pass, device, skybox, viewMatrix, projection);
+		if (debuggerParams.renderMode === 'Final') {
+			drawSkybox(pass, device, skybox, viewMatrix, projection);
+		}
 
 		pass.end();
 

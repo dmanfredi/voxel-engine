@@ -12,6 +12,9 @@ const ENTITY_UNIFORM_SIZE = 80; // mat4x4f(64) + u32 texLayer(4) + f32 texScale(
 
 const entityShader = /*wgsl*/ `
 	${buildMaterialLUT()}
+	const RENDER_MODE_ALBEDO: f32 = 1.0;
+	const RENDER_MODE_LIGHTING: f32 = 2.0;
+	const RENDER_MODE_AO: f32 = 3.0;
 
 	struct Uniforms {
 		matrix: mat4x4f,
@@ -20,6 +23,12 @@ const entityShader = /*wgsl*/ `
 		specularStrength: f32,
 		fogStart: f32,
 		fogEnd: f32,
+		lightMatrix: mat4x4f,
+		shadowStrength: f32,
+		shadowBias: f32,
+		shadowsEnabled: f32,
+		shadowNormalBias: f32,
+		renderMode: f32,
 	}
 
 	struct EntityUniforms {
@@ -64,12 +73,21 @@ const entityShader = /*wgsl*/ `
 
 	@fragment fn fs(inp: VSOutput) -> @location(0) vec4f {
 		let texColor = textureSample(myTexture, mySampler, inp.uv, entity.texLayer);
+		if (uni.renderMode == RENDER_MODE_ALBEDO) {
+			return vec4f(texColor.rgb, texColor.a);
+		}
+		if (uni.renderMode == RENDER_MODE_AO) {
+			return vec4f(vec3f(1.0), 1.0);
+		}
 
 		// Smooth diffuse lighting (unlike voxel per-face step function)
 		let n = normalize(inp.normal);
 		let diffuse = max(dot(n, LIGHT_DIR), 0.0);
 		let ambient = 0.5;
 		let brightness = ambient + (1.0 - ambient) * diffuse;
+		if (uni.renderMode == RENDER_MODE_LIGHTING) {
+			return vec4f(vec3f(brightness), 1.0);
+		}
 
 		// Sky-tinted specular (matches voxel shader)
 		let eyeToSurface = normalize(inp.worldPos - uni.eyePosition);

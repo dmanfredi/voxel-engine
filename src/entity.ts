@@ -616,11 +616,12 @@ export class EntityManager {
 		return ok;
 	}
 
-	draw(pass: GPURenderPassEncoder): void {
+	draw(pass: GPURenderPassEncoder, sampleCount: number): void {
 		drawEntities(
 			pass,
 			this.renderer,
 			this.entities.map((e) => e.renderData),
+			sampleCount,
 		);
 	}
 

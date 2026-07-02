@@ -10,12 +10,20 @@ export const RENDER_MODE = {
 
 export type RenderMode = keyof typeof RENDER_MODE;
 
+export const MSAA_MODE = {
+	Off: 1,
+	'4x': 4,
+} as const;
+
+export type MSAAMode = keyof typeof MSAA_MODE;
+
 export const stats = new Stats();
 stats.showPanel(0); // 0: fps, 1: ms, 2: mb, 3+: custom
 document.body.appendChild(stats.dom);
 
 export const debuggerParams = {
 	renderMode: 'Final' as RenderMode,
+	msaa: 'Off' as MSAAMode,
 	wireframe: false,
 	freecam: false,
 	vertices: 0,
@@ -54,6 +62,13 @@ export function BuildDebug(render: () => void): void {
 			},
 		},
 	);
+	const msaaBinding = renderDebugFolder.addBinding(debuggerParams, 'msaa', {
+		label: 'MSAA',
+		options: {
+			'No MSAA': 'Off',
+			'4x MSAA': '4x',
+		},
+	});
 	const wireframeBinding = renderDebugFolder.addBinding(
 		debuggerParams,
 		'wireframe',
@@ -67,6 +82,7 @@ export function BuildDebug(render: () => void): void {
 		});
 	};
 	renderModeBinding.on('change', requestDebugRender);
+	msaaBinding.on('change', requestDebugRender);
 	wireframeBinding.on('change', requestDebugRender);
 
 	const playerFolder = pane.addFolder({ title: 'Player' });

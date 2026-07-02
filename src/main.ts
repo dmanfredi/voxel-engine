@@ -14,6 +14,7 @@ import {
 	debuggerParams,
 	stats,
 	RENDER_MODE,
+	MSAA_MODE,
 } from './debug';
 import { greedyMesh } from './greedy-mesh';
 import { FREECAM, physicsTick, createPlayerState } from './movement';
@@ -209,32 +210,40 @@ async function main(): Promise<void> {
 		],
 	};
 
-	const pipeline = device.createRenderPipeline({
-		label: '3 attributes',
-		layout: mainPipelineLayout,
-		vertex: {
-			module,
-			entryPoint: 'vs',
-			buffers: [vertexBufferLayout],
-		},
-		fragment: {
-			module,
-			entryPoint: 'fs',
-			targets: [{ format: presentationFormat }],
-		},
-		primitive: {
-			cullMode: 'back',
-		},
-		depthStencil: {
-			depthWriteEnabled: true,
-			depthCompare: 'less',
-			format: 'depth24plus',
-		},
-	});
+	function createMainPipeline(sampleCount: number): GPURenderPipeline {
+		return device.createRenderPipeline({
+			label: `voxel pipeline ${String(sampleCount)}x`,
+			layout: mainPipelineLayout,
+			vertex: {
+				module,
+				entryPoint: 'vs',
+				buffers: [vertexBufferLayout],
+			},
+			fragment: {
+				module,
+				entryPoint: 'fs',
+				targets: [{ format: presentationFormat }],
+			},
+			primitive: {
+				cullMode: 'back',
+			},
+			depthStencil: {
+				depthWriteEnabled: true,
+				depthCompare: 'less',
+				format: 'depth24plus',
+			},
+			multisample: { count: sampleCount },
+		});
+	}
 
-	const barycentricCoordinatesBasedWireframePipeline =
-		device.createRenderPipeline({
-			label: 'barycentric coordinates based wireframe pipeline',
+	const pipelines = {
+		1: createMainPipeline(1),
+		4: createMainPipeline(4),
+	};
+
+	function createWireframePipeline(sampleCount: number): GPURenderPipeline {
+		return device.createRenderPipeline({
+			label: `barycentric coordinates based wireframe pipeline ${String(sampleCount)}x`,
 			layout: wireframePipelineLayout,
 			vertex: {
 				module: wireframeModule,
@@ -267,7 +276,14 @@ async function main(): Promise<void> {
 				depthCompare: 'less-equal',
 				format: 'depth24plus',
 			},
+			multisample: { count: sampleCount },
 		});
+	}
+
+	const wireframePipelines = {
+		1: createWireframePipeline(1),
+		4: createWireframePipeline(4),
+	};
 
 	// Load block textures into a texture array (one layer per block type)
 	const TEXTURE_SIZE = 1024;
@@ -598,20 +614,60 @@ async function main(): Promise<void> {
 	// TODO: re-enable water once it supports chunked worlds
 
 	let depthTexture: GPUTexture;
+	let depthTextureSampleCount = 0;
+	let msaaColorTexture: GPUTexture | undefined;
+	let msaaColorTextureSampleCount = 0;
 
-	function ensureDepthTexture(width: number, height: number) {
+	function ensureDepthTexture(
+		width: number,
+		height: number,
+		sampleCount: number,
+	): void {
 		if (
 			!depthTexture ||
 			depthTexture.width !== width ||
-			depthTexture.height !== height
+			depthTexture.height !== height ||
+			depthTextureSampleCount !== sampleCount
 		) {
 			depthTexture?.destroy();
 			depthTexture = device.createTexture({
 				size: [width, height],
 				format: 'depth24plus',
+				sampleCount,
 				usage: GPUTextureUsage.RENDER_ATTACHMENT,
 			});
+			depthTextureSampleCount = sampleCount;
 		}
+	}
+
+	function releaseMsaaColorTexture(): void {
+		msaaColorTexture?.destroy();
+		msaaColorTexture = undefined;
+		msaaColorTextureSampleCount = 0;
+	}
+
+	function getMsaaColorView(
+		width: number,
+		height: number,
+		sampleCount: number,
+	): GPUTextureView {
+		if (
+			!msaaColorTexture ||
+			msaaColorTexture.width !== width ||
+			msaaColorTexture.height !== height ||
+			msaaColorTextureSampleCount !== sampleCount
+		) {
+			msaaColorTexture?.destroy();
+			msaaColorTexture = device.createTexture({
+				label: 'MSAA color target',
+				size: [width, height],
+				format: presentationFormat,
+				sampleCount,
+				usage: GPUTextureUsage.RENDER_ATTACHMENT,
+			});
+			msaaColorTextureSampleCount = sampleCount;
+		}
+		return msaaColorTexture.createView();
 	}
 
 	function clampCanvasDimension(size: number): number {
@@ -790,18 +846,40 @@ async function main(): Promise<void> {
 		const canvasTexture = context?.getCurrentTexture();
 		if (!canvasTexture) throw new Error('No canvasTexture found!');
 
-		ensureDepthTexture(canvasTexture.width, canvasTexture.height);
+		const sampleCount = MSAA_MODE[debuggerParams.msaa];
+		const canvasView = canvasTexture.createView();
+		ensureDepthTexture(
+			canvasTexture.width,
+			canvasTexture.height,
+			sampleCount,
+		);
+
+		const colorAttachment: GPURenderPassColorAttachment =
+			sampleCount === 1
+				? {
+						view: canvasView,
+						loadOp: 'clear',
+						storeOp: 'store',
+						clearValue: { r: 0, g: 0, b: 0, a: 0 }, // clear totally
+					}
+				: {
+						view: getMsaaColorView(
+							canvasTexture.width,
+							canvasTexture.height,
+							sampleCount,
+						),
+						resolveTarget: canvasView,
+						loadOp: 'clear',
+						storeOp: 'discard',
+						clearValue: { r: 0, g: 0, b: 0, a: 0 }, // clear totally
+					};
+		if (sampleCount === 1) {
+			releaseMsaaColorTexture();
+		}
 
 		const renderPassDescriptor: GPURenderPassDescriptor = {
 			label: 'main pass',
-			colorAttachments: [
-				{
-					view: canvasTexture.createView(),
-					loadOp: 'clear',
-					storeOp: 'store',
-					clearValue: { r: 0, g: 0, b: 0, a: 0 }, // clear totally
-				},
-			],
+			colorAttachments: [colorAttachment],
 			depthStencilAttachment: {
 				view: depthTexture.createView(),
 				depthClearValue: 1.0,
@@ -955,7 +1033,7 @@ async function main(): Promise<void> {
 		const pass = encoder.beginRenderPass(renderPassDescriptor);
 
 		// Draw all chunk meshes
-		pass.setPipeline(pipeline);
+		pass.setPipeline(pipelines[sampleCount]);
 		pass.setBindGroup(0, bindGroup);
 		for (const chunkRender of chunkRenderMap.values()) {
 			pass.setBindGroup(1, chunkRender.offsetBindGroup);
@@ -966,7 +1044,7 @@ async function main(): Promise<void> {
 
 		// Draw wireframes
 		if (debuggerParams.wireframe) {
-			pass.setPipeline(barycentricCoordinatesBasedWireframePipeline);
+			pass.setPipeline(wireframePipelines[sampleCount]);
 			for (const chunkRender of chunkRenderMap.values()) {
 				pass.setBindGroup(0, chunkRender.wireframeBindGroup);
 				pass.setBindGroup(1, chunkRender.offsetBindGroup);
@@ -989,11 +1067,18 @@ async function main(): Promise<void> {
 		}
 
 		// Draw entities (after terrain, before skybox)
-		entityManager.draw(pass);
+		entityManager.draw(pass, sampleCount);
 
 		// Draw skybox (after geometry, uses less-equal depth test)
 		if (debuggerParams.renderMode === 'Final') {
-			drawSkybox(pass, device, skybox, viewMatrix, projection);
+			drawSkybox(
+				pass,
+				device,
+				skybox,
+				viewMatrix,
+				projection,
+				sampleCount,
+			);
 		}
 
 		pass.end();

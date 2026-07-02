@@ -118,7 +118,7 @@ const entityShader = /*wgsl*/ `
 `;
 
 export interface EntityRenderer {
-	pipeline: GPURenderPipeline;
+	pipelines: Record<number, GPURenderPipeline>;
 	sharedBindGroup0: GPUBindGroup;
 	group1Layout: GPUBindGroupLayout;
 }
@@ -155,49 +155,59 @@ export function initEntityRenderer(
 		bindGroupLayouts: [mainGroup0BGL, group1Layout],
 	});
 
-	const pipeline = device.createRenderPipeline({
-		label: 'entity pipeline',
-		layout: pipelineLayout,
-		vertex: {
-			module,
-			entryPoint: 'vs',
-			buffers: [
-				{
-					arrayStride: 32, // pos(3) + normal(3) + uv(2) = 8 floats
-					attributes: [
-						{
-							shaderLocation: 0,
-							offset: 0,
-							format: 'float32x3',
-						},
-						{
-							shaderLocation: 1,
-							offset: 12,
-							format: 'float32x3',
-						},
-						{
-							shaderLocation: 2,
-							offset: 24,
-							format: 'float32x2',
-						},
-					],
-				},
-			],
-		},
-		fragment: {
-			module,
-			entryPoint: 'fs',
-			targets: [{ format: presentationFormat }],
-		},
-		primitive: { cullMode: 'back' },
-		depthStencil: {
-			depthWriteEnabled: true,
-			depthCompare: 'less',
-			format: 'depth24plus',
-		},
-	});
+	function createEntityPipeline(sampleCount: number): GPURenderPipeline {
+		return device.createRenderPipeline({
+			label: `entity pipeline ${String(sampleCount)}x`,
+			layout: pipelineLayout,
+			vertex: {
+				module,
+				entryPoint: 'vs',
+				buffers: [
+					{
+						arrayStride: 32, // pos(3) + normal(3) + uv(2) = 8 floats
+						attributes: [
+							{
+								shaderLocation: 0,
+								offset: 0,
+								format: 'float32x3',
+							},
+							{
+								shaderLocation: 1,
+								offset: 12,
+								format: 'float32x3',
+							},
+							{
+								shaderLocation: 2,
+								offset: 24,
+								format: 'float32x2',
+							},
+						],
+					},
+				],
+			},
+			fragment: {
+				module,
+				entryPoint: 'fs',
+				targets: [{ format: presentationFormat }],
+			},
+			primitive: { cullMode: 'back' },
+			depthStencil: {
+				depthWriteEnabled: true,
+				depthCompare: 'less',
+				format: 'depth24plus',
+			},
+			multisample: { count: sampleCount },
+		});
+	}
 
-	return { pipeline, sharedBindGroup0, group1Layout };
+	return {
+		pipelines: {
+			1: createEntityPipeline(1),
+			4: createEntityPipeline(4),
+		},
+		sharedBindGroup0,
+		group1Layout,
+	};
 }
 
 export function createEntityRenderData(
@@ -255,9 +265,10 @@ export function drawEntities(
 	pass: GPURenderPassEncoder,
 	renderer: EntityRenderer,
 	entities: EntityRenderData[],
+	sampleCount: number,
 ): void {
 	if (entities.length === 0) return;
-	pass.setPipeline(renderer.pipeline);
+	pass.setPipeline(renderer.pipelines[sampleCount]);
 	pass.setBindGroup(0, renderer.sharedBindGroup0);
 	for (const e of entities) {
 		pass.setBindGroup(1, e.bindGroup);

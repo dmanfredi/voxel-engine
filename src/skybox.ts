@@ -8,7 +8,7 @@ import skyPz from '../assets/skybox-sunny/pz.png';
 import skyNz from '../assets/skybox-sunny/nz.png';
 
 export interface SkyboxResources {
-	pipeline: GPURenderPipeline;
+	pipelines: Record<number, GPURenderPipeline>;
 	bindGroup: GPUBindGroup;
 	uniformBuffer: GPUBuffer;
 	uniformValues: Float32Array<ArrayBuffer>;
@@ -106,20 +106,47 @@ export async function initSkybox(
 		code: SKYBOX_SHADER,
 	});
 
-	const pipeline = device.createRenderPipeline({
-		label: 'skybox pipeline',
-		layout: 'auto',
-		vertex: { module },
-		fragment: {
-			module,
-			targets: [{ format: presentationFormat }],
-		},
-		depthStencil: {
-			depthWriteEnabled: false,
-			depthCompare: 'less-equal',
-			format: 'depth24plus',
-		},
+	const bindGroupLayout = device.createBindGroupLayout({
+		label: 'skybox bind group layout',
+		entries: [
+			{
+				binding: 0,
+				visibility: GPUShaderStage.FRAGMENT,
+				buffer: { type: 'uniform' },
+			},
+			{
+				binding: 1,
+				visibility: GPUShaderStage.FRAGMENT,
+				sampler: { type: 'filtering' },
+			},
+			{
+				binding: 2,
+				visibility: GPUShaderStage.FRAGMENT,
+				texture: { sampleType: 'float', viewDimension: 'cube' },
+			},
+		],
 	});
+	const pipelineLayout = device.createPipelineLayout({
+		bindGroupLayouts: [bindGroupLayout],
+	});
+
+	function createSkyboxPipeline(sampleCount: number): GPURenderPipeline {
+		return device.createRenderPipeline({
+			label: `skybox pipeline ${String(sampleCount)}x`,
+			layout: pipelineLayout,
+			vertex: { module },
+			fragment: {
+				module,
+				targets: [{ format: presentationFormat }],
+			},
+			depthStencil: {
+				depthWriteEnabled: false,
+				depthCompare: 'less-equal',
+				format: 'depth24plus',
+			},
+			multisample: { count: sampleCount },
+		});
+	}
 
 	const texture = await loadCubemapTexture(
 		device,
@@ -143,7 +170,7 @@ export async function initSkybox(
 
 	const bindGroup = device.createBindGroup({
 		label: 'skybox bind group',
-		layout: pipeline.getBindGroupLayout(0),
+		layout: bindGroupLayout,
 		entries: [
 			{ binding: 0, resource: { buffer: uniformBuffer } },
 			{ binding: 1, resource: sampler },
@@ -152,7 +179,10 @@ export async function initSkybox(
 	});
 
 	return {
-		pipeline,
+		pipelines: {
+			1: createSkyboxPipeline(1),
+			4: createSkyboxPipeline(4),
+		},
 		bindGroup,
 		uniformBuffer,
 		uniformValues,
@@ -167,6 +197,7 @@ export function drawSkybox(
 	resources: SkyboxResources,
 	viewMatrix: Mat4,
 	projectionMatrix: Mat4,
+	sampleCount: number,
 ): void {
 	// Create view matrix with translation removed (rotation only)
 	const viewRotationOnly = mat4.clone(viewMatrix);
@@ -193,7 +224,7 @@ export function drawSkybox(
 	);
 
 	// Draw the skybox
-	pass.setPipeline(resources.pipeline);
+	pass.setPipeline(resources.pipelines[sampleCount]);
 	pass.setBindGroup(0, resources.bindGroup);
 	pass.draw(3);
 }

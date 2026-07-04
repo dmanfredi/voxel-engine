@@ -52,6 +52,54 @@ export function singleBlockBuild(
 	};
 }
 
+/**
+ * Resolves camera-forward into the direction a projectile travels, writing
+ * the unit result into `out` and returning false to reject the shot. A null
+ * constraint on a Tool means "fire straight down the camera ray" (the default).
+ */
+export type AimConstraint = (
+	cameraDir: Float32Array,
+	out: Float32Array,
+) => boolean;
+
+/**
+ * Fire only when the camera aims within `slackDeg` of one of the six axes,
+ * snapping to that exact axis so the bore stays grid-aligned rather than
+ * ragged; otherwise reject the shot.
+ */
+export function cardinalLock(slackDeg: number): AimConstraint {
+	const minDot = Math.cos((slackDeg * Math.PI) / 180);
+	return (cameraDir, out) => {
+		const x = cameraDir[0];
+		const y = cameraDir[1];
+		const z = cameraDir[2];
+		// Nearest axis = the largest-magnitude component. For a unit
+		// cameraDir that magnitude is cos(angle to the axis), so it compares
+		// directly against the cone's cos threshold.
+		const ax = Math.abs(x);
+		const ay = Math.abs(y);
+		const az = Math.abs(z);
+		let dot: number;
+		if (ax >= ay && ax >= az) {
+			dot = ax;
+			out[0] = Math.sign(x);
+			out[1] = 0;
+			out[2] = 0;
+		} else if (ay >= az) {
+			dot = ay;
+			out[0] = 0;
+			out[1] = Math.sign(y);
+			out[2] = 0;
+		} else {
+			dot = az;
+			out[0] = 0;
+			out[1] = 0;
+			out[2] = Math.sign(z);
+		}
+		return dot >= minDot;
+	};
+}
+
 export type FireSide = 'lmb' | 'rmb';
 
 /**
@@ -100,6 +148,14 @@ export interface Tool {
 	 * branch is wired into the tick; non-null is a field-shaped hole.
 	 */
 	chargeTime: number | null;
+
+	// --- Aim ---
+	/**
+	 * Optional aim resolver; null fires straight down the camera ray. A
+	 * constraint can snap the direction (e.g. cardinal lock) or reject the
+	 * shot, in which case the fire path bails without spending cooldown or cost.
+	 */
+	aimConstraint: AimConstraint | null;
 
 	// --- Runtime state ---
 	/** Seconds until LMB can fire again. Ticked toward 0 each frame. */
@@ -207,7 +263,7 @@ export function tickToolCooldowns(
 /**
  * Starter pickaxe.
  */
-const PICKAXE_VISUAL = 8;
+const PICKAXE_VISUAL = 6;
 const pickaxeProjectile: ProjectileProfile = {
 	strength: 10,
 	speed: 200,
@@ -221,11 +277,40 @@ export const pickaxeTool: Tool = defineTool({
 	icon: null,
 	model: null,
 	projectile: pickaxeProjectile,
-	lmbCooldown: 0.5,
+	lmbCooldown: 0.4,
 	lmbCost: 0,
 	bpPerBreak: 1,
 	buildProfile: singleBlockBuild(MARBLE, 1),
 	rmbCooldown: 0.1,
 	spawnOffset: new Float32Array([0, -5, 5]),
 	chargeTime: null,
+	aimConstraint: null,
+});
+
+/**
+ * Cardinal-locked tunneller: fires a fat, grid-aligned projectile straight
+ * down one of the six axes.
+ */
+const BORE_VISUAL = 20;
+const boreProjectile: ProjectileProfile = {
+	strength: 90,
+	speed: 140,
+	hitbox: obbHitbox(BORE_VISUAL * 0.5),
+	maxLifetime: 5,
+	visualSize: BORE_VISUAL,
+};
+
+export const boreTool: Tool = defineTool({
+	name: 'Bore',
+	icon: null,
+	model: null,
+	projectile: boreProjectile,
+	lmbCooldown: 1.25,
+	lmbCost: 0,
+	bpPerBreak: 1,
+	buildProfile: singleBlockBuild(MARBLE, 1),
+	rmbCooldown: 0.1,
+	spawnOffset: new Float32Array([0, -5, 5]),
+	chargeTime: null,
+	aimConstraint: cardinalLock(5),
 });

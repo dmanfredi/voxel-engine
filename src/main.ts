@@ -683,8 +683,12 @@ async function main(): Promise<void> {
 	 * camera-local offset, reset its cooldown, debit its cost. Caller is
 	 * responsible for the canFire gate (so the per-frame loop doesn't
 	 * pay the offset math when the shot would be rejected anyway).
+	 *
+	 * Returns false without firing when the tool's aimConstraint rejects
+	 * the current aim (e.g. the Bore off its cardinal lanes) — no cooldown
+	 * or cost is spent, so the player can retry the instant they line up.
 	 */
-	function fireLMB(tool: Tool): void {
+	function fireLMB(tool: Tool): boolean {
 		// camera-local right = normalize(cross(front, up)). cameraUp is
 		// world-Y by construction, so this is well-defined unless the
 		// player is looking straight up/down — pitch is clamped to ±88°
@@ -709,31 +713,55 @@ async function main(): Promise<void> {
 				cameraFront[i] * off[2];
 		}
 
-		// Aim correction has two regimes split at PARALLEL_FIRE_RANGE.
-		// Beyond it, aim at the hit point on the crosshair ray so the
-		// projectile converges on the target. Inside it, fire parallel to
-		// cameraFront — the spawn offset is a large fraction of close-range
-		// distances, so a convergence-aimed direction over-rotates and the
-		// projectile veers heavily off the crosshair. Parallel-at-close
-		// keeps the visible offset small and constant (just the spawn nudge).
-		const aimReach = tool.projectile.speed * tool.projectile.maxLifetime;
-		const aimHit = raycast(cameraPos, cameraFront, world, aimReach);
-		if (aimHit && aimHit.distance < PARALLEL_FIRE_RANGE) {
-			spawnDirection[0] = cameraFront[0];
-			spawnDirection[1] = cameraFront[1];
-			spawnDirection[2] = cameraFront[2];
+		// Resolve the travel direction. A tool with an aimConstraint (the
+		// Bore's cardinal lock) resolves and may reject its own direction;
+		// tools without one use the crosshair convergence aiming below.
+		if (tool.aimConstraint) {
+			if (!tool.aimConstraint(cameraFront, spawnDirection)) {
+				return false;
+			}
+			// Center the spawn on the block grid along Y so a tall bore carves
+			// whole rows instead of dipping into the floor (the eye sits
+			// mid-block). Skip vertical lanes, where Y is the travel axis.
+			if (Math.abs(spawnDirection[1]) < 0.5) {
+				spawnOrigin[1] =
+					(Math.floor(spawnOrigin[1] / BLOCK_SIZE) + 0.5) *
+					BLOCK_SIZE;
+			}
 		} else {
-			const aimDistance = aimHit ? aimHit.distance : aimReach;
-			const tx =
-				cameraPos[0] + cameraFront[0] * aimDistance - spawnOrigin[0];
-			const ty =
-				cameraPos[1] + cameraFront[1] * aimDistance - spawnOrigin[1];
-			const tz =
-				cameraPos[2] + cameraFront[2] * aimDistance - spawnOrigin[2];
-			const tLen = Math.hypot(tx, ty, tz);
-			spawnDirection[0] = tx / tLen;
-			spawnDirection[1] = ty / tLen;
-			spawnDirection[2] = tz / tLen;
+			// Aim correction has two regimes split at PARALLEL_FIRE_RANGE.
+			// Beyond it, aim at the hit point on the crosshair ray so the
+			// projectile converges on the target. Inside it, fire parallel to
+			// cameraFront — the spawn offset is a large fraction of close-range
+			// distances, so a convergence-aimed direction over-rotates and the
+			// projectile veers heavily off the crosshair. Parallel-at-close
+			// keeps the visible offset small and constant (just the spawn nudge).
+			const aimReach =
+				tool.projectile.speed * tool.projectile.maxLifetime;
+			const aimHit = raycast(cameraPos, cameraFront, world, aimReach);
+			if (aimHit && aimHit.distance < PARALLEL_FIRE_RANGE) {
+				spawnDirection[0] = cameraFront[0];
+				spawnDirection[1] = cameraFront[1];
+				spawnDirection[2] = cameraFront[2];
+			} else {
+				const aimDistance = aimHit ? aimHit.distance : aimReach;
+				const tx =
+					cameraPos[0] +
+					cameraFront[0] * aimDistance -
+					spawnOrigin[0];
+				const ty =
+					cameraPos[1] +
+					cameraFront[1] * aimDistance -
+					spawnOrigin[1];
+				const tz =
+					cameraPos[2] +
+					cameraFront[2] * aimDistance -
+					spawnOrigin[2];
+				const tLen = Math.hypot(tx, ty, tz);
+				spawnDirection[0] = tx / tLen;
+				spawnDirection[1] = ty / tLen;
+				spawnDirection[2] = tz / tLen;
+			}
 		}
 
 		projectileManager.spawn(
@@ -748,6 +776,7 @@ async function main(): Promise<void> {
 			gameState.bp -= tool.lmbCost;
 			updateBPDisplay();
 		}
+		return true;
 	}
 
 	/**

@@ -290,12 +290,12 @@ export const pickaxeTool: Tool = defineTool({
 
 /**
  * Cardinal-locked tunneller: fires a grid-aligned slab straight down one of
- * the six axes — wide across the lane, one block thin along travel, so a
- * sweep-break clears a clean cross-section per tick.
+ * the six axes — wide across the lane, thin along travel, so each sweep-break
+ * clears a clean cross-section.
  */
 // Slab edges in world units: BORE_WIDTH across the lane (right/up),
-// BORE_THICKNESS along travel (forward). One block thin so each tick sweeps a
-// single grid slice.
+// BORE_THICKNESS along travel (forward). Thin along travel so each tick
+// sweeps a single grid slice.
 const BORE_WIDTH = 20;
 const BORE_THICKNESS = 10;
 const boreProjectile: ProjectileProfile = {

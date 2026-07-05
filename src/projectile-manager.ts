@@ -134,10 +134,10 @@ export class ProjectileManager {
 
 	/**
 	 * Per-tick update. Iterates backward so swap-pop dispose doesn't skip
-	 * elements. Order within a tick: age check → move → wrap → scan
-	 * hitbox cells for the first solid → break-or-stop → render-time
-	 * wrap-offset upload. `playerPos` drives the render-side wrap so
-	 * projectiles on the far side of the seam draw at their nearer copy.
+	 * elements. Order within a tick: age check → move → wrap → sweep-break
+	 * overlapped cells → render-time wrap-offset upload. `playerPos` drives
+	 * the render-side wrap so projectiles on the far side of the seam draw at
+	 * their nearer copy.
 	 */
 	update(dt: number, playerPos: Float32Array): void {
 		const bs = this.world.blockSize;

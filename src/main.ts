@@ -684,9 +684,10 @@ async function main(): Promise<void> {
 	 * responsible for the canFire gate (so the per-frame loop doesn't
 	 * pay the offset math when the shot would be rejected anyway).
 	 *
-	 * Returns false without firing when the tool's aimConstraint rejects
-	 * the current aim (e.g. the Bore off its cardinal lanes) — no cooldown
-	 * or cost is spent, so the player can retry the instant they line up.
+	 * Returns false without firing when the tool's aimConstraint rejects the
+	 * current aim (e.g. a cardinal-locked tool aimed off its lanes) — no
+	 * cooldown or cost is spent, so the player can retry the instant they
+	 * line up.
 	 */
 	function fireLMB(tool: Tool): boolean {
 		// camera-local right = normalize(cross(front, up)). cameraUp is
@@ -713,9 +714,9 @@ async function main(): Promise<void> {
 				cameraFront[i] * off[2];
 		}
 
-		// Resolve the travel direction. A tool with an aimConstraint (the
-		// Bore's cardinal lock) resolves and may reject its own direction;
-		// tools without one use the crosshair convergence aiming below.
+		// Resolve the travel direction. A tool with an aimConstraint (e.g.
+		// cardinal lock) resolves and may reject its own direction; tools
+		// without one use the crosshair convergence aiming below.
 		if (tool.aimConstraint) {
 			if (!tool.aimConstraint(cameraFront, spawnDirection)) {
 				return false;

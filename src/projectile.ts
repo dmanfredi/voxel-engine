@@ -7,12 +7,12 @@
  *
  * Hardness/strength rule (encoded in ProjectileManager, surfaced here
  * only by `strength`):
- * - Every block hit breaks — a projectile never stops without destroying
- *   something. Strength gates penetration, not the break itself.
- * - Strength decrements by the block's hardness on each break. The
- *   projectile disposes once strength ≤ 0, so its killing blow still lands
- *   a break rather than evaporating against a wall it can't afford.
- * - Disposes when: (a) strength ≤ 0 after a break, (b) age exceeds
+ * - Sweep-break: every solid cell the hitbox overlaps in a tick breaks — a
+ *   projectile never stops without destroying what it touches.
+ * - Strength decrements by each broken block's hardness. The whole tick's
+ *   overlap breaks before the strength ≤ 0 check, so strength is a soft cap
+ *   that rounds up to the last full sweep rather than cutting a slice short.
+ * - Disposes when: (a) strength ≤ 0 after a sweep, (b) age exceeds
  *   maxLifetime.
  */
 
@@ -20,52 +20,59 @@ import type { Tool } from './tool';
 
 export type VoxelCoord = readonly [number, number, number];
 
+/** Upper bound on cells one query may report; sizes the caller's scratch. */
+export const MAX_HITBOX_CELLS = 256;
+
 /**
- * A projectile's collision shape. Stateless: given position + orientation,
- * returns the voxel cells the hitbox currently overlaps, ordered
- * "leading-edge first" — the cell furthest along the projectile's forward
- * direction (column 2 of orientation) at index 0.
+ * A projectile's collision shape. One Hitbox is shared across every
+ * projectile of a profile, so `cellsAt` must not retain per-call state that
+ * outlives the call.
  *
- * Consumers iterate the returned list and process the first SOLID cell
- * (skipping over air); see ProjectileManager.update. Multiple cells with
- * tied forward projection are common for wide hitboxes — the ordering
- * only meaningfully ranks cells along the direction of travel, so
- * iterate-until-solid keeps a side-clipping cell from being lost to an
- * air cell that happened to win an arbitrary tiebreaker.
- *
- * `orientation` is a 4×4 column-major matrix; its third column is the
- * projectile's forward vector in world space.
+ * Allocation-free contract: `cellsAt` writes the overlapped voxel cells into
+ * the caller's `out` buffer as flat x,y,z triples and returns the cell count
+ * — it never allocates a per-call array. `out` must hold at least
+ * 3·MAX_HITBOX_CELLS ints. Cells are unordered: the consumer sweep-breaks
+ * every solid one, so no ranking is needed.
  */
 export interface Hitbox {
 	cellsAt(
 		position: Float32Array,
 		orientation: Float32Array,
 		blockSize: number,
-	): VoxelCoord[];
+		out: Int32Array,
+	): number;
 }
 
 /**
- * Oriented bounding box hitbox of half-extent `halfSize` in world units,
- * rotated by the projectile's orientation matrix. The box's local axes
- * are the columns of `orientation`.
- *
- * Returns every voxel cell the rotated box overlaps, sorted leading-edge
- * first along the projectile's forward direction.
- *
- * Algorithm:
- * 1. Compute the world-AABB of the rotated box to enumerate candidate cells.
- * 2. For each candidate, SAT-test the OBB against the cell (axis-aligned
- *    unit voxel). Cell is included iff no separating axis exists.
- * 3. Sort by leading-edge projection.
- *
- * SAT uses 15 axes: 3 OBB local axes, 3 world axes, 9 cross products.
- * Constant time per cell (~50 ops worst case). For halfSize < blockSize,
- * the world-AABB spans 1-8 cells, so total per-call work is ≤ ~400 ops.
+ * One oriented box of a compound hitbox, in the projectile's local frame
+ * (axes: right, up, forward), world units. A shape is a convex decomposition
+ * into these boxes — a slab is one box, an arc a handful.
  */
-export function obbHitbox(halfSize: number): Hitbox {
+export interface LocalBox {
+	/** Center offset from the projectile origin along local right/up/forward. */
+	offset: readonly [number, number, number];
+	/** Half-extents along local right, up, forward. */
+	half: readonly [number, number, number];
+}
+
+/**
+ * Hitbox as a union of oriented boxes, each rasterized against the voxel grid
+ * via SAT and merged into the overlapped-cell set. Analytic rather than an
+ * integer voxel mask, so it stays exact at any orientation — a rotated box
+ * rasterizes cleanly where a rotated mask would alias into holes. Non-convex
+ * shapes fall out of the union of convex boxes.
+ *
+ * Fully allocation-free and stateless: cellsAt writes into the caller's
+ * buffer and retains nothing across calls.
+ */
+export function compoundHitbox(boxes: readonly LocalBox[]): Hitbox {
+	// A single box's nested loops already emit distinct cells; only a
+	// multi-box union can revisit a cell at a seam, so dedup is skipped
+	// entirely for the common one-box case.
+	const single = boxes.length === 1;
+
 	return {
-		cellsAt(position, orientation, blockSize) {
-			// OBB local axes: right, up, forward (columns 0, 1, 2).
+		cellsAt(position, orientation, blockSize, out) {
 			const rx = orientation[0];
 			const ry = orientation[1];
 			const rz = orientation[2];
@@ -75,77 +82,122 @@ export function obbHitbox(halfSize: number): Hitbox {
 			const fx = orientation[8];
 			const fy = orientation[9];
 			const fz = orientation[10];
-
-			// World-AABB half-extents: project the OBB's three half-extent
-			// vectors onto each world axis and sum absolute values.
-			const aabbHX =
-				halfSize * (Math.abs(rx) + Math.abs(ux) + Math.abs(fx));
-			const aabbHY =
-				halfSize * (Math.abs(ry) + Math.abs(uy) + Math.abs(fy));
-			const aabbHZ =
-				halfSize * (Math.abs(rz) + Math.abs(uz) + Math.abs(fz));
-
-			const xMin = Math.floor((position[0] - aabbHX) / blockSize);
-			const xMax = Math.floor((position[0] + aabbHX) / blockSize);
-			const yMin = Math.floor((position[1] - aabbHY) / blockSize);
-			const yMax = Math.floor((position[1] + aabbHY) / blockSize);
-			const zMin = Math.floor((position[2] - aabbHZ) / blockSize);
-			const zMax = Math.floor((position[2] + aabbHZ) / blockSize);
-
 			const hb = blockSize * 0.5;
-			const cells: VoxelCoord[] = [];
-			const projs: number[] = [];
 
-			for (let x = xMin; x <= xMax; x++) {
-				for (let y = yMin; y <= yMax; y++) {
-					for (let z = zMin; z <= zMax; z++) {
-						const ccx = (x + 0.5) * blockSize;
-						const ccy = (y + 0.5) * blockSize;
-						const ccz = (z + 0.5) * blockSize;
-						const dx = ccx - position[0];
-						const dy = ccy - position[1];
-						const dz = ccz - position[2];
-						if (
-							satOverlap(
-								dx,
-								dy,
-								dz,
-								rx,
-								ry,
-								rz,
-								ux,
-								uy,
-								uz,
-								fx,
-								fy,
-								fz,
-								halfSize,
-								hb,
-							)
-						) {
-							cells.push([x, y, z]);
-							projs.push(dx * fx + dy * fy + dz * fz);
+			let count = 0;
+			let full = false;
+
+			for (let b = 0; b < boxes.length && !full; b++) {
+				const box = boxes[b];
+				const ox = box.offset[0];
+				const oy = box.offset[1];
+				const oz = box.offset[2];
+				const hr = box.half[0];
+				const hu = box.half[1];
+				const hf = box.half[2];
+
+				// Box center in world = projectile position + orientation·offset.
+				const bcx = position[0] + rx * ox + ux * oy + fx * oz;
+				const bcy = position[1] + ry * ox + uy * oy + fy * oz;
+				const bcz = position[2] + rz * ox + uz * oy + fz * oz;
+
+				// World-AABB of the rotated box → candidate cell range.
+				const aabbHX =
+					hr * Math.abs(rx) + hu * Math.abs(ux) + hf * Math.abs(fx);
+				const aabbHY =
+					hr * Math.abs(ry) + hu * Math.abs(uy) + hf * Math.abs(fy);
+				const aabbHZ =
+					hr * Math.abs(rz) + hu * Math.abs(uz) + hf * Math.abs(fz);
+				const xMin = Math.floor((bcx - aabbHX) / blockSize);
+				const xMax = Math.floor((bcx + aabbHX) / blockSize);
+				const yMin = Math.floor((bcy - aabbHY) / blockSize);
+				const yMax = Math.floor((bcy + aabbHY) / blockSize);
+				const zMin = Math.floor((bcz - aabbHZ) / blockSize);
+				const zMax = Math.floor((bcz + aabbHZ) / blockSize);
+
+				for (let x = xMin; x <= xMax && !full; x++) {
+					for (let y = yMin; y <= yMax && !full; y++) {
+						for (let z = zMin; z <= zMax; z++) {
+							const ccx = (x + 0.5) * blockSize;
+							const ccy = (y + 0.5) * blockSize;
+							const ccz = (z + 0.5) * blockSize;
+							if (
+								!satOverlap(
+									ccx - bcx,
+									ccy - bcy,
+									ccz - bcz,
+									rx,
+									ry,
+									rz,
+									ux,
+									uy,
+									uz,
+									fx,
+									fy,
+									fz,
+									hr,
+									hu,
+									hf,
+									hb,
+								)
+							) {
+								continue;
+							}
+
+							if (!single) {
+								let dup = false;
+								for (let k = 0; k < count; k++) {
+									if (
+										out[3 * k] === x &&
+										out[3 * k + 1] === y &&
+										out[3 * k + 2] === z
+									) {
+										dup = true;
+										break;
+									}
+								}
+								if (dup) continue;
+							}
+
+							// Capacity guard: never-hit safety net for a pathologically
+							// large shape. Stop cleanly rather than silently no-op the
+							// out-of-range typed-array writes.
+							if (count >= MAX_HITBOX_CELLS) {
+								full = true;
+								break;
+							}
+
+							out[3 * count] = x;
+							out[3 * count + 1] = y;
+							out[3 * count + 2] = z;
+							count++;
 						}
 					}
 				}
 			}
 
-			insertionSortByProj(cells, projs);
-			return cells;
+			return count;
 		},
 	};
 }
 
 /**
- * SAT overlap test: OBB (centered at origin in projectile-local space)
- * vs. axis-aligned voxel cell whose center is offset by (dx,dy,dz)
- * from the projectile center.
+ * Single centered box of uniform half-extent — the one-box compound, kept as
+ * a convenience for cube-shaped projectiles.
+ */
+export function obbHitbox(halfSize: number): Hitbox {
+	return compoundHitbox([
+		{ offset: [0, 0, 0], half: [halfSize, halfSize, halfSize] },
+	]);
+}
+
+/**
+ * SAT overlap test: an oriented box (local axes r,u,f; per-axis half-extents
+ * hr,hu,hf) vs an axis-aligned voxel cell whose center is offset by
+ * (dx,dy,dz) from the box center, cell half-extent `hb`. Returns true iff no
+ * separating axis exists. Fully inlined to avoid temp vec3 allocations.
  *
- * OBB local axes are (r, u, f); OBB half-extent is `h` (uniform). Cell
- * half-extent is `hb` (= blockSize/2). All math inlined to avoid temp
- * vec3 allocations in a hot path.
- *
- * Returns true iff no separating axis exists (i.e., shapes overlap).
+ * SAT uses 15 axes: 3 box local axes, 3 world axes, 9 cross products.
  */
 function satOverlap(
 	dx: number,
@@ -160,10 +212,12 @@ function satOverlap(
 	fx: number,
 	fy: number,
 	fz: number,
-	h: number,
+	hr: number,
+	hu: number,
+	hf: number,
 	hb: number,
 ): boolean {
-	// 3 OBB axes
+	// 3 box axes
 	if (
 		testAxis(
 			dx,
@@ -181,7 +235,9 @@ function satOverlap(
 			fx,
 			fy,
 			fz,
-			h,
+			hr,
+			hu,
+			hf,
 			hb,
 		)
 	)
@@ -203,7 +259,9 @@ function satOverlap(
 			fx,
 			fy,
 			fz,
-			h,
+			hr,
+			hu,
+			hf,
 			hb,
 		)
 	)
@@ -225,28 +283,89 @@ function satOverlap(
 			fx,
 			fy,
 			fz,
-			h,
+			hr,
+			hu,
+			hf,
 			hb,
 		)
 	)
 		return false;
 
-	// 3 world axes (1,0,0), (0,1,0), (0,0,1)
+	// 3 world axes
 	if (
-		testAxis(dx, dy, dz, 1, 0, 0, rx, ry, rz, ux, uy, uz, fx, fy, fz, h, hb)
+		testAxis(
+			dx,
+			dy,
+			dz,
+			1,
+			0,
+			0,
+			rx,
+			ry,
+			rz,
+			ux,
+			uy,
+			uz,
+			fx,
+			fy,
+			fz,
+			hr,
+			hu,
+			hf,
+			hb,
+		)
 	)
 		return false;
 	if (
-		testAxis(dx, dy, dz, 0, 1, 0, rx, ry, rz, ux, uy, uz, fx, fy, fz, h, hb)
+		testAxis(
+			dx,
+			dy,
+			dz,
+			0,
+			1,
+			0,
+			rx,
+			ry,
+			rz,
+			ux,
+			uy,
+			uz,
+			fx,
+			fy,
+			fz,
+			hr,
+			hu,
+			hf,
+			hb,
+		)
 	)
 		return false;
 	if (
-		testAxis(dx, dy, dz, 0, 0, 1, rx, ry, rz, ux, uy, uz, fx, fy, fz, h, hb)
+		testAxis(
+			dx,
+			dy,
+			dz,
+			0,
+			0,
+			1,
+			rx,
+			ry,
+			rz,
+			ux,
+			uy,
+			uz,
+			fx,
+			fy,
+			fz,
+			hr,
+			hu,
+			hf,
+			hb,
+		)
 	)
 		return false;
 
-	// 9 cross products of OBB axes × world axes
-	// r × (1,0,0) = (0, rz, -ry), etc.
+	// 9 cross products of box axes × world axes (r×, u×, f× each world axis)
 	if (
 		testAxis(
 			dx,
@@ -264,7 +383,9 @@ function satOverlap(
 			fx,
 			fy,
 			fz,
-			h,
+			hr,
+			hu,
+			hf,
 			hb,
 		)
 	)
@@ -286,7 +407,9 @@ function satOverlap(
 			fx,
 			fy,
 			fz,
-			h,
+			hr,
+			hu,
+			hf,
 			hb,
 		)
 	)
@@ -308,7 +431,9 @@ function satOverlap(
 			fx,
 			fy,
 			fz,
-			h,
+			hr,
+			hu,
+			hf,
 			hb,
 		)
 	)
@@ -330,7 +455,9 @@ function satOverlap(
 			fx,
 			fy,
 			fz,
-			h,
+			hr,
+			hu,
+			hf,
 			hb,
 		)
 	)
@@ -352,7 +479,9 @@ function satOverlap(
 			fx,
 			fy,
 			fz,
-			h,
+			hr,
+			hu,
+			hf,
 			hb,
 		)
 	)
@@ -374,7 +503,9 @@ function satOverlap(
 			fx,
 			fy,
 			fz,
-			h,
+			hr,
+			hu,
+			hf,
 			hb,
 		)
 	)
@@ -396,7 +527,9 @@ function satOverlap(
 			fx,
 			fy,
 			fz,
-			h,
+			hr,
+			hu,
+			hf,
 			hb,
 		)
 	)
@@ -418,7 +551,9 @@ function satOverlap(
 			fx,
 			fy,
 			fz,
-			h,
+			hr,
+			hu,
+			hf,
 			hb,
 		)
 	)
@@ -440,7 +575,9 @@ function satOverlap(
 			fx,
 			fy,
 			fz,
-			h,
+			hr,
+			hu,
+			hf,
 			hb,
 		)
 	)
@@ -450,9 +587,9 @@ function satOverlap(
 }
 
 /**
- * SAT axis test: returns true iff (ax,ay,az) is a separating axis.
- * Zero-length axes (cross of parallel vectors) are skipped automatically
- * — their projection sum is 0 on both sides, so the inequality fails.
+ * SAT axis test: true iff (ax,ay,az) separates the box from the cell.
+ * Zero-length axes (crosses of parallel vectors) self-skip — their extent
+ * sums are 0 on both sides, so the strict inequality fails.
  */
 function testAxis(
 	dx: number,
@@ -470,33 +607,18 @@ function testAxis(
 	fx: number,
 	fy: number,
 	fz: number,
-	h: number,
+	hr: number,
+	hu: number,
+	hf: number,
 	hb: number,
 ): boolean {
 	const obbExtent =
-		h *
-		(Math.abs(rx * ax + ry * ay + rz * az) +
-			Math.abs(ux * ax + uy * ay + uz * az) +
-			Math.abs(fx * ax + fy * ay + fz * az));
+		hr * Math.abs(rx * ax + ry * ay + rz * az) +
+		hu * Math.abs(ux * ax + uy * ay + uz * az) +
+		hf * Math.abs(fx * ax + fy * ay + fz * az);
 	const cellExtent = hb * (Math.abs(ax) + Math.abs(ay) + Math.abs(az));
 	const dist = Math.abs(dx * ax + dy * ay + dz * az);
 	return dist > obbExtent + cellExtent;
-}
-
-/** In-place insertion sort of parallel cells/projs arrays, descending by proj. */
-function insertionSortByProj(cells: VoxelCoord[], projs: number[]): void {
-	for (let i = 1; i < cells.length; i++) {
-		const cell = cells[i];
-		const p = projs[i];
-		let j = i - 1;
-		while (j >= 0 && projs[j] < p) {
-			cells[j + 1] = cells[j];
-			projs[j + 1] = projs[j];
-			j--;
-		}
-		cells[j + 1] = cell;
-		projs[j + 1] = p;
-	}
 }
 
 // prettier-ignore
@@ -588,13 +710,13 @@ export interface ProjectileProfile {
 	/** Seconds before the projectile disposes if nothing kills it first. */
 	maxLifetime: number;
 	/**
-	 * Edge length applied as a uniform scale to the renderer's unit-cube
-	 * mesh. Every projectile currently renders as a cube of this size;
-	 * when per-profile meshes land, this becomes a richer
-	 * `{ mesh, color, ... }` visual struct. Should usually match the
-	 * hitbox size so what you see is what hits.
+	 * Edge lengths [right, up, forward] applied as a non-uniform scale to the
+	 * renderer's [-1,1] cube, so the drawn box is visualSize long on each
+	 * local axis. Should match the hitbox extents (half = visualSize/2) so
+	 * what you see is what hits. When per-profile meshes land this becomes a
+	 * richer `{ mesh, color, ... }` visual struct.
 	 */
-	visualSize: number;
+	visualSize: readonly [number, number, number];
 }
 
 /**

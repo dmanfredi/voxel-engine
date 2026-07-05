@@ -15,6 +15,7 @@
 import { type BlockId, MARBLE } from './block';
 import type { GameState } from './game-state';
 import {
+	compoundHitbox,
 	obbHitbox,
 	type ProjectileProfile,
 	type VoxelCoord,
@@ -265,11 +266,11 @@ export function tickToolCooldowns(
  */
 const PICKAXE_VISUAL = 6;
 const pickaxeProjectile: ProjectileProfile = {
-	strength: 10,
-	speed: 200,
+	strength: 1000,
+	speed: 2000,
 	hitbox: obbHitbox(PICKAXE_VISUAL * 0.5),
 	maxLifetime: 5,
-	visualSize: PICKAXE_VISUAL,
+	visualSize: [PICKAXE_VISUAL, PICKAXE_VISUAL, PICKAXE_VISUAL],
 };
 
 export const pickaxeTool: Tool = defineTool({
@@ -288,16 +289,26 @@ export const pickaxeTool: Tool = defineTool({
 });
 
 /**
- * Cardinal-locked tunneller: fires a fat, grid-aligned projectile straight
- * down one of the six axes.
+ * Cardinal-locked tunneller: fires a grid-aligned slab straight down one of
+ * the six axes — wide across the lane, one block thin along travel, so a
+ * sweep-break clears a clean cross-section per tick.
  */
-const BORE_VISUAL = 20;
+// Slab edges in world units: BORE_WIDTH across the lane (right/up),
+// BORE_THICKNESS along travel (forward). One block thin so each tick sweeps a
+// single grid slice.
+const BORE_WIDTH = 20;
+const BORE_THICKNESS = 10;
 const boreProjectile: ProjectileProfile = {
 	strength: 90,
 	speed: 140,
-	hitbox: obbHitbox(BORE_VISUAL * 0.5),
+	hitbox: compoundHitbox([
+		{
+			offset: [0, 0, 0],
+			half: [BORE_WIDTH / 2, BORE_WIDTH / 2, BORE_THICKNESS / 2],
+		},
+	]),
 	maxLifetime: 5,
-	visualSize: BORE_VISUAL,
+	visualSize: [BORE_WIDTH, BORE_WIDTH, BORE_THICKNESS],
 };
 
 export const boreTool: Tool = defineTool({

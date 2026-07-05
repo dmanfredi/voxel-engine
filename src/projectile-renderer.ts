@@ -58,7 +58,9 @@ const projectileShader = /*wgsl*/ `
 		var out: VSOutput;
 		let worldPos = (inst.model * vec4f(vert.position, 1.0)).xyz;
 		out.position = uni.matrix * vec4f(worldPos, 1.0);
-		// Uniform scale: mat3(model) * normal preserves direction.
+		// Non-uniform scale skews diagonal (bevel) normals; axis-aligned
+		// faces stay correct after normalize. Proper normal matrix deferred
+		// — the bevel mislighting is cosmetic.
 		out.normal = normalize((inst.model * vec4f(vert.normal, 0.0)).xyz);
 		return out;
 	}

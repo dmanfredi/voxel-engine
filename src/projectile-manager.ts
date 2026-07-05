@@ -32,6 +32,7 @@ import type {
 import type { Tool } from './tool';
 import type { World } from './world';
 import {
+	MAX_HITBOX_CELLS,
 	orientationFromDirection,
 	type Projectile,
 	type ProjectileProfile,
@@ -65,6 +66,11 @@ export class ProjectileManager {
 	// Scratch model matrix — reused across all writeTransform calls.
 	// (Fresh allocation per projectile per frame is unnecessary GC pressure.)
 	private readonly modelScratch = mat4.create() as Float32Array<ArrayBuffer>;
+
+	// Scratch cell buffer for hitbox queries — flat x,y,z triples. Reused
+	// across every projectile: cellsAt fills it and the collision scan
+	// consumes it before the next call, so no per-frame allocation.
+	private readonly cellScratch = new Int32Array(3 * MAX_HITBOX_CELLS);
 
 	constructor(
 		world: World,
@@ -160,59 +166,33 @@ export class ProjectileManager {
 			p.position[0] = ((p.position[0] % ww) + ww) % ww;
 			p.position[2] = ((p.position[2] % ww) + ww) % ww;
 
-			// Collide. One-impact-one-block per tick: scan cells in
-			// leading-edge order and process the first SOLID one found.
-			// Air cells are skipped over rather than short-circuiting —
-			// otherwise a hitbox whose leading-edge cell is air (e.g. the
-			// just-broken cell ahead, with side cells clipping into a
-			// wall) misses the solid entirely.
-			//
-			// Still one impact per tick: we stop at the first solid.
-			// Subsequent solid cells remain reachable on later ticks if
-			// the hitbox still overlaps them.
+			// Sweep-break: destroy every solid cell the hitbox overlaps this
+			// tick, charging strength by each block's hardness. The whole
+			// overlap breaks before the strength check, so strength is a soft
+			// cap that rounds up to the last complete sweep rather than
+			// leaving a slice half-cleared (which would read as piecemeal).
 			let disposed = false;
-			const cells = p.profile.hitbox.cellsAt(
+			const cellCount = p.profile.hitbox.cellsAt(
 				p.position,
 				p.orientation,
 				bs,
+				this.cellScratch,
 			);
-			let hitBX = 0;
-			let hitBY = 0;
-			let hitBZ = 0;
-			let hitBlockId = AIR;
-			for (const cell of cells) {
-				const id = this.world.getBlock(cell[0], cell[1], cell[2]);
-				if (id !== AIR) {
-					hitBX = cell[0];
-					hitBY = cell[1];
-					hitBZ = cell[2];
-					hitBlockId = id;
-					break;
-				}
+			for (let c = 0; c < cellCount; c++) {
+				const bx = this.cellScratch[3 * c];
+				const by = this.cellScratch[3 * c + 1];
+				const bz = this.cellScratch[3 * c + 2];
+				const id = this.world.getBlock(bx, by, bz);
+				if (id === AIR) continue;
+				const props = blockRegistry.get(id);
+				if (!props) continue;
+				this.world.setBlock(bx, by, bz, AIR);
+				this.callbacks.onBlockBroken(bx, by, bz, p.sourceTool);
+				p.strength -= props.hardness;
 			}
-
-			if (hitBlockId !== AIR) {
-				const props = blockRegistry.get(hitBlockId);
-				if (props) {
-					// Every contact breaks its block — the projectile never
-					// stops without destroying something. Strength gates
-					// penetration, not the break: it decrements by hardness
-					// and the projectile dies once it hits zero, so the
-					// killing blow still lands a break (the leftover strength
-					// is spent on it rather than evaporating against a wall).
-					this.world.setBlock(hitBX, hitBY, hitBZ, AIR);
-					this.callbacks.onBlockBroken(
-						hitBX,
-						hitBY,
-						hitBZ,
-						p.sourceTool,
-					);
-					p.strength -= props.hardness;
-					if (p.strength <= 0) {
-						this.disposeAt(i);
-						disposed = true;
-					}
-				}
+			if (p.strength <= 0) {
+				this.disposeAt(i);
+				disposed = true;
 			}
 
 			// Survived this tick — push the new transform to the GPU.
@@ -235,17 +215,21 @@ export class ProjectileManager {
 		offsetX: number,
 		offsetZ: number,
 	): void {
-		// Cube mesh vertices live in [-1, 1] (half-extent convention,
-		// matching entity meshes), so scale by visualSize/2 to produce a
-		// cube of `visualSize` edge length. The hitbox uses the same
-		// half-extent (visualSize * 0.5) so collision and visual align.
-		const s = p.profile.visualSize * 0.5;
+		// Cube mesh vertices live in [-1, 1] (half-extent convention, matching
+		// entity meshes). Scale each local axis by visualSize/2 — a
+		// non-uniform scale turns the cube into the box the hitbox tests
+		// (half = visualSize/2), keeping what-you-see = what-hits.
+		const vs = p.profile.visualSize;
 		mat4.translation(
 			[p.position[0] + offsetX, p.position[1], p.position[2] + offsetZ],
 			this.modelScratch,
 		);
 		mat4.multiply(this.modelScratch, p.orientation, this.modelScratch);
-		mat4.scale(this.modelScratch, [s, s, s], this.modelScratch);
+		mat4.scale(
+			this.modelScratch,
+			[vs[0] * 0.5, vs[1] * 0.5, vs[2] * 0.5],
+			this.modelScratch,
+		);
 		updateProjectileTransform(this.device.queue, rd, this.modelScratch);
 	}
 

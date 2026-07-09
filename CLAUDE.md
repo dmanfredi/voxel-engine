@@ -77,7 +77,7 @@ Minecraft-style physics with tick-based simulation:
 - **movement.ts** — Minecraft-like physics tick: gravity, jump velocity, ground/air drag, horizontal acceleration. Uses `MC_TICK = 0.05` as the reference timestep; all physics values scale by `dt/MC_TICK`. Two modes: physics movement (default) and freecam (`FREECAM` function, toggled via debug panel).
 - **collision.ts** — AABB-vs-voxel-grid collision. `moveAndCollide()` resolves axes independently (X → Z → Y order). Player AABB is defined relative to eye position: feet at `pos.y - height`, top at `pos.y`. Returns per-axis collision flags (`onGround`, `collidedX`, `collidedZ`, `collidedCeiling`).
 
-The player is **not** an entity — deliberate, see `notes/entity-physics-and-ai.md`. Sphere-vs-sphere collision is built (entity-vs-entity); player remains a special-cased AABB. Revisit the player-as-entity refactor when enemy density / interaction complexity justifies unifying them.
+The player is **not** an entity — deliberate, see `notes/systems/entity-physics-and-ai.md`. Sphere-vs-sphere collision is built (entity-vs-entity); player remains a special-cased AABB. Revisit the player-as-entity refactor when enemy density / interaction complexity justifies unifying them.
 
 ### Entity System (src/entity.ts, src/entity-renderer.ts, src/icosphere.ts, src/entity-physics.ts, src/entity-ai.ts)
 
@@ -90,7 +90,7 @@ Per-frame flow runs in **three passes** over the entity list: (1) `entityAITick`
 - **entity-physics.ts** — Semi-implicit Euler mirroring `movement.ts`. Sphere-vs-voxel uses **closest-point narrowphase + contact-normal response** (not axis-separated — spheres need surface normals). Restitution is a pair property combined with `max()`. Resting-contact threshold prevents gravity-induced micro-bouncing. Also exports `resolveSpherePair` for sphere-vs-sphere collisions: wrap-aware contact normal, mass-weighted depenetration, classical impulse formula `j = factor·v_inward / (1/mA + 1/mB)`, momentum-conserving, grounded-flag inheritance for stacks. Wrap-aware throughout.
 - **entity-ai.ts** — Role-dispatched behaviors. Only `Role.Rush` implemented: wrap-aware straight-line thrust toward player, drag-driven natural turning, mid-air steering enabled. Mass-scaled per entity: `effectiveAccel = baseAccel·baseSpeed/mass` and `dragPerTick = baseDrag^(1/mass)` — heavy spheres ramp up AND ramp down slowly while terminal speed stays roughly mass-invariant. New roles = new switch case.
 
-See `notes/entity-system.md` and `notes/entity-physics-and-ai.md` for deeper design rationale and deferred decisions.
+See `notes/systems/entity-system.md` and `notes/systems/entity-physics-and-ai.md` for deeper design rationale and deferred decisions.
 
 ### Projectile & Tool System (src/tool.ts, src/projectile.ts, src/projectile-manager.ts, src/projectile-renderer.ts)
 
@@ -100,7 +100,7 @@ The player's interface to the world. **Tools** are singletons held in `gameState
 
 The renderer is its own pipeline (no texture sampling, no fog, hardcoded shader color) — much simpler than the entity pipeline because projectiles are short-lived markers, not lit geometry.
 
-See `notes/projectile-and-tool-system.md` for the full design rationale, deferred work, and tuning surface.
+See `notes/systems/projectile-and-tool-system.md` for the full design rationale, deferred work, and tuning surface.
 
 ### Block Placement (src/placement.ts)
 
@@ -203,18 +203,18 @@ Dead code kept as a "we tried this, here's why we didn't keep it" record (e.g. t
 
 ## Further Reading
 
-Deeper design rationale and "what's deferred and why" notes live in `notes/`:
+Deeper design rationale and "what's deferred and why" notes live in `notes/`; start at `notes/_index.md`:
 
-- `notes/entity-system.md` — entity taxonomy, mesh generation, render pipeline, lifecycle
-- `notes/entity-physics-and-ai.md` — physics model, AI dispatch, cross-cutting patterns (wrap handling, material table), explicitly deferred work
-- `notes/spawning-and-despawning.md` — enemy lifecycle: born-from-blocks spawning, Director pacing, despawn conditions, Shape-dispatched death (sphere explode/carve/knockback, cube petrify)
-- `notes/flow-field.md` — shared BFS pursuit field (the smart-pathing bubble around the player) spheres navigate by
-- `notes/sticky-spheres.md` — flow-field invalidation + sphere drop-zone spawning
-- `notes/cube-enemy.md` — cube enemy design + phased plan (beveled mesh, AABB physics, tipping movement, climb-by-placing); the running cube reference
-- `notes/cube-tip-placement-animation.md` — designed-not-built: tip-scaffold blocks falling in rather than popping
-- `notes/projectile-and-tool-system.md` — Tool + BuildProfile types, projectile runtime, OBB hitbox + SAT, render pipeline, input flow, deferred work
-- `notes/void-floor.md` — rising void hazard (the "fire floor"): bands, chunk-delete floor, design intent, stubbed seams
-- `notes/physics-and-collision.md` — player physics and AABB-vs-voxel collision (predates entity work)
-- `notes/skybox-integration.md` — skybox setup
+- `notes/systems/entity-system.md` — entity taxonomy, mesh generation, render pipeline, lifecycle
+- `notes/systems/entity-physics-and-ai.md` — physics model, AI dispatch, cross-cutting patterns (wrap handling, material table), explicitly deferred work
+- `notes/systems/spawning-and-despawning.md` — enemy lifecycle: born-from-blocks spawning, Director pacing, despawn conditions, Shape-dispatched death (sphere explode/carve/knockback, cube petrify)
+- `notes/systems/flow-field.md` — shared BFS pursuit field (the smart-pathing bubble around the player) spheres navigate by
+- `notes/systems/sticky-spheres.md` — flow-field invalidation + sphere drop-zone spawning
+- `notes/systems/cube-enemy.md` — cube enemy design + phased plan (beveled mesh, AABB physics, tipping movement, climb-by-placing); the running cube reference
+- `notes/proposals/cube-tip-placement-animation.md` — designed-not-built: tip-scaffold blocks falling in rather than popping
+- `notes/systems/projectile-and-tool-system.md` — Tool + BuildProfile types, projectile runtime, OBB hitbox + SAT, render pipeline, input flow, deferred work
+- `notes/systems/void-floor.md` — rising void hazard (the "fire floor"): bands, chunk-delete floor, design intent, stubbed seams
+- `notes/systems/physics-and-collision.md` — player physics and AABB-vs-voxel collision (predates entity work)
+- `notes/systems/skybox-integration.md` — skybox setup
 - `notes/TECHNICAL-ROADMAP.md` — phased plan + current progress
 - `notes/GAME-DESIGN.md` — game concept and design pillars

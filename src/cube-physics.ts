@@ -188,7 +188,7 @@ function resolveCubeAxis(
  *   - dy=+1, axis-aligned (dx,dz) → 180° climb (handspring onto wall)
  *
  * On success: position snaps to destination, velocity zeros, `entity.tip`
- * populated. Mid-tip collision is deferred (see notes/cube-enemy.md).
+ * populated. Mid-tip collision is deferred (see notes/systems/cube-enemy.md).
  */
 export function startCubeTip(
 	entity: Entity,

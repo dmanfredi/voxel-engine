@@ -111,7 +111,7 @@ function rush(
 	);
 	// Despawn signal: a sampleable gradient means the sphere has a path to the
 	// player (it's inside the flow field). Set before any early return so the
-	// no-path timer is always current. See notes/spawning-and-despawning.md.
+	// no-path timer is always current. See notes/systems/spawning-and-despawning.md.
 	entity.hasPath = fieldOk;
 	if (fieldOk) {
 		dirX = dirOut[0];

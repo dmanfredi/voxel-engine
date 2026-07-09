@@ -12,7 +12,7 @@
  *     Enemies are born from terrain and inherit its material.
  *
  * Unlike the terrain generators, the spawner holds a World reference — it
- * queries live terrain for spawn sites. See notes/spawning-and-despawning.md
+ * queries live terrain for spawn sites. See notes/systems/spawning-and-despawning.md
  * for the full design, the spawn-radius ↔ flow-field coupling, and deferred
  * work (telegraph visuals, dynamic pace, path-aware exposure).
  */

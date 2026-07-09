@@ -8,7 +8,7 @@
  * the moving player and ever-changing terrain. A cube builds its own floor
  * (scaffold) and climbs any wall, so walls/pits stop being obstacles and the
  * navigable space stays near-convex, the regime where greedy is near-optimal.
- * See notes/cube-enemy.md.
+ * See notes/systems/cube-enemy.md.
  *
  * Locomotion is role-agnostic — only `cubeTarget` varies per role (Phase 5).
  * Deferred by design (future pass): depth-N lookahead (this scorer is its
@@ -42,7 +42,7 @@ export type BeginCrushFn = (entity: Entity) => void;
 // Candidate moves in a fixed order (stable tie-break for argmax). Four
 // axis-aligned walks (dy=0) and four climbs (dy=1). No descent candidate:
 // dropping isn't navigation — a falling cube smashes through to the void and
-// despawns — so it never enters move selection. See notes/cube-enemy.md.
+// despawns — so it never enters move selection. See notes/systems/cube-enemy.md.
 const CANDIDATES: readonly (readonly [number, number, number])[] = [
 	[1, 0, 0],
 	[-1, 0, 0],
@@ -79,7 +79,7 @@ export function cubeAITick(
 	if (entity.tip !== null) return;
 
 	// Perched above the player → commit. EntityManager takes over from here
-	// (telegraph → carve → plummet). See notes/cube-enemy.md.
+	// (telegraph → carve → plummet). See notes/systems/cube-enemy.md.
 	if (
 		entity.role === Role.Crush &&
 		entity.grounded &&

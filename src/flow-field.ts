@@ -37,7 +37,7 @@
  * (49 blocks) is much smaller than world width so the field itself never
  * spans a wrap boundary — only the sphere↔center relationship can.
  *
- * See notes/sticky-spheres.md for the broader pursuit/locomotion model
+ * See notes/systems/sticky-spheres.md for the broader pursuit/locomotion model
  * this layer plugs into.
  */
 

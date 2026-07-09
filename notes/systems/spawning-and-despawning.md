@@ -211,13 +211,13 @@ the no-path threshold can shrink toward something that actually means "stuck."
 
 ## Further reading
 
-- `notes/entity-system.md` — the 5-axis taxonomy (Shape / Material / Role / Size /
+- `notes/systems/entity-system.md` — the 5-axis taxonomy (Shape / Material / Role / Size /
   Traits) this plugs into.
-- `notes/entity-physics-and-ai.md` — Shape-dispatched physics + the Rush AI the
+- `notes/systems/entity-physics-and-ai.md` — Shape-dispatched physics + the Rush AI the
   pursuit half assumes.
-- `notes/flow-field.md` — the 24-block pursuit bubble the dependency above hinges
+- `notes/systems/flow-field.md` — the 24-block pursuit bubble the dependency above hinges
   on.
-- `notes/void-floor.md` — the rising hazard the director's pace ultimately answers
+- `notes/systems/void-floor.md` — the rising hazard the director's pace ultimately answers
   to.
 - `notes/GAME-DESIGN.md` — blocks-as-the-verb, BP, the enemy roster this serves.
 </content>

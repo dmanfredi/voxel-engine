@@ -279,7 +279,7 @@ export interface Entity {
 	// entity can path (sphere: in the flow field; cube: mid-tip). Accumulates
 	// otherwise; crossing the threshold despawns the entity. High threshold
 	// for now — it absorbs the dumb-pursuit transit of enemies born outside
-	// the flow field (see notes/spawning-and-despawning.md).
+	// the flow field (see notes/systems/spawning-and-despawning.md).
 	noPathTimer: number;
 	// Set each frame by the AI: true if the entity has a path to the player.
 	// Reset to false at the top of the per-entity tick; the AI raises it.
@@ -289,7 +289,7 @@ export interface Entity {
 	death: DeathState | null;
 	// Cube + Role.Crush: non-null once the cube commits to its payload (perched
 	// above the player). Drives the telegraph → carve → plummet sequence and,
-	// later, the red beam render. See CrushState and notes/cube-enemy.md.
+	// later, the red beam render. See CrushState and notes/systems/cube-enemy.md.
 	crush: CrushState | null;
 }
 
@@ -366,7 +366,7 @@ interface CachedMesh {
 // Thresholds the despawn pass reads. NoPath is deliberately high: it must
 // exceed the worst-case transit of an enemy born in the outer spawn ring
 // (past the flow field) dumb-walking inward, or arrivals die en route. Drop
-// it once pathing range improves. See notes/spawning-and-despawning.md.
+// it once pathing range improves. See notes/systems/spawning-and-despawning.md.
 const DESPAWN_NOPATH_SECONDS = 10;
 const DESPAWN_LIFESPAN_SECONDS = 60;
 

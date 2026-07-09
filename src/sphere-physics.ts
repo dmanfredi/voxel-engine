@@ -110,7 +110,7 @@ export function entityPhysicsTick(
 	// records the shell contact but doesn't cancel the velocity (no
 	// penetration), and the sphere falls off. On a floor the pull is *into* the
 	// surface and gets eaten, so resting spheres in the zone are unaffected.
-	// See notes/sticky-spheres.md.
+	// See notes/systems/sticky-spheres.md.
 	if (!entity.noGravity && (!entity.attached || dropping)) {
 		entity.vy -= GRAVITY * t;
 		if (entity.vy < TERMINAL_VELOCITY) entity.vy = TERMINAL_VELOCITY;

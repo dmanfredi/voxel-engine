@@ -340,7 +340,7 @@ export interface PlayerHitLike {
 /**
  * The player facets the entity system reads and mutates each tick, bundled so
  * the many entity↔player call sites thread one object instead of loose args.
- * The player isn't an entity (deliberate — see notes/entity-physics-and-ai.md);
+ * The player isn't an entity (deliberate — see notes/systems/entity-physics-and-ai.md);
  * this is the seam where entity code reaches it.
  */
 export interface PlayerContext {

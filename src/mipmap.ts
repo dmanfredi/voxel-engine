@@ -17,7 +17,6 @@ export const generateMips = (() => {
 	> = {};
 
 	return function generateMips(device: GPUDevice, texture: GPUTexture) {
-		const format = texture.format;
 		if (!module) {
 			module = device.createShaderModule({
 				label: 'textured quad shaders for mip level generation',
@@ -59,16 +58,16 @@ export const generateMips = (() => {
 			});
 		}
 
-		pipelineByFormat[format] ??= device.createRenderPipeline({
+		pipelineByFormat[texture.format] ??= device.createRenderPipeline({
 			label: 'mip level generator pipeline',
 			layout: 'auto',
 			vertex: { module },
 			fragment: {
 				module,
-				targets: [{ format }],
+				targets: [{ format: texture.format }],
 			},
 		});
-		const pipeline = pipelineByFormat[format];
+		const pipeline = pipelineByFormat[texture.format];
 
 		if (!pipeline) {
 			throw new Error('Pipeline undefined');
@@ -92,7 +91,6 @@ export const generateMips = (() => {
 							binding: 1,
 							resource: texture.createView({
 								dimension: '2d',
-								format,
 								baseMipLevel: baseMipLevel - 1,
 								mipLevelCount: 1,
 								baseArrayLayer: layer,
@@ -108,7 +106,6 @@ export const generateMips = (() => {
 						{
 							view: texture.createView({
 								dimension: '2d',
-								format,
 								baseMipLevel: baseMipLevel,
 								mipLevelCount: 1,
 								baseArrayLayer: layer,

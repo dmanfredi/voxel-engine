@@ -1,5 +1,10 @@
 export const CHUNK_SIZE = 32;
 
+// Horizontal world size in chunks (X and Z, wrapping). Lives here rather
+// than main.ts so terrain generators can seam their patterns at the wrap
+// boundary without needing a World reference.
+export const WORLD_WIDTH_CHUNKS = 10;
+
 export function chunkKey(cx: number, cy: number, cz: number): string {
 	return `${String(cx)},${String(cy)},${String(cz)}`;
 }

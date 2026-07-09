@@ -6,6 +6,11 @@ export interface GreedyMeshResult {
 	numVertices: number;
 }
 
+// Vertex format: position (3) + normal (3) + uv (2) + ao (1) + texLayer
+// (1 as u32). Exported so GPU-side strides (vertex layouts, storage reads)
+// derive from the mesher that owns the format.
+export const VOXEL_VERTEX_FLOATS = 10;
+
 type AO = 0 | 1 | 2 | 3;
 
 // AO value (0 = most occluded, 3 = fully lit) → brightness multiplier
@@ -318,10 +323,8 @@ export function greedyMesh(
 
 	// Convert quads to vertex data
 	// Each quad = 2 triangles = 6 vertices
-	// Each vertex: position (3) + normal (3) + uv (2) + ao (1) + texLayer (1 as u32) = 10 floats
-	const FLOATS_PER_VERTEX = 10;
 	const numVertices = quads.length * 6;
-	const vertexData = new Float32Array(numVertices * FLOATS_PER_VERTEX);
+	const vertexData = new Float32Array(numVertices * VOXEL_VERTEX_FLOATS);
 	const uint32View = new Uint32Array(vertexData.buffer);
 
 	let vertexOffset = 0;
@@ -418,7 +421,7 @@ export function greedyMesh(
 		})();
 
 		for (const vert of triangleData) {
-			const base = vertexOffset * FLOATS_PER_VERTEX;
+			const base = vertexOffset * VOXEL_VERTEX_FLOATS;
 
 			// Position
 			vertexData[base + 0] = vert.pos[0];

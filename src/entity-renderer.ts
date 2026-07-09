@@ -6,34 +6,28 @@
  * Group 1 is per-entity: model matrix + texture layer.
  */
 
-import { buildMaterialLUT, buildTonemapWGSL } from './shader/shared';
+import {
+	buildMaterialLUT,
+	GAMMA_WGSL,
+	RENDER_MODE_WGSL,
+	SHARED_UNIFORMS_WGSL,
+	SKY_SAMPLE_WGSL,
+	TONEMAP_WGSL,
+} from './shader/shared';
+import { SUN_DIRECTION_WGSL } from './lighting';
+import { msaaVariants } from './render-config';
 
 const ENTITY_UNIFORM_SIZE = 80; // mat4x4f(64) + u32 texLayer(4) + f32 texScale(4) + padding(8) = 80
 
 const entityShader = /*wgsl*/ `
 	${buildMaterialLUT()}
-	${buildTonemapWGSL()}
-	const RENDER_MODE_ALBEDO: f32 = 1.0;
-	const RENDER_MODE_LIGHTING: f32 = 2.0;
-	const RENDER_MODE_AO: f32 = 3.0;
+	${TONEMAP_WGSL}
+	${SKY_SAMPLE_WGSL}
+	${GAMMA_WGSL}
+	${RENDER_MODE_WGSL}
+	${SUN_DIRECTION_WGSL}
 
-	struct Uniforms {
-		matrix: mat4x4f,
-		eyePosition: vec3f,
-		shininess: f32,
-		specularStrength: f32,
-		fogStart: f32,
-		fogEnd: f32,
-		lightMatrix: mat4x4f,
-		shadowStrength: f32,
-		shadowBias: f32,
-		shadowsEnabled: f32,
-		shadowNormalBias: f32,
-		renderMode: f32,
-		tonemapMode: f32,
-		exposure: f32,
-		skyIntensity: f32,
-	}
+	${SHARED_UNIFORMS_WGSL}
 
 	struct EntityUniforms {
 		model: mat4x4f,
@@ -62,8 +56,6 @@ const entityShader = /*wgsl*/ `
 
 	@group(1) @binding(0) var<uniform> entity: EntityUniforms;
 
-	const LIGHT_DIR = vec3f(-0.387, 0.730, 0.563);
-
 	@vertex fn vs(vert: Vertex) -> VSOutput {
 		var out: VSOutput;
 		let worldPos = (entity.model * vec4f(vert.position, 1.0)).xyz;
@@ -88,19 +80,16 @@ const entityShader = /*wgsl*/ `
 		let n = normalize(inp.normal);
 		let diffuse = max(dot(n, LIGHT_DIR), 0.0);
 		let ambient = 0.5;
-		// Perceptual→linear compensation (PINNED: retune alongside the
-		// tonemap experiment) — see the matching pow in the voxel shader.
-		let brightness = pow(ambient + (1.0 - ambient) * diffuse, 2.2);
+		// PINNED perceptual→linear pow — rationale on GAMMA in shader/shared.ts.
+		let brightness = pow(ambient + (1.0 - ambient) * diffuse, GAMMA);
 		if (uni.renderMode == RENDER_MODE_LIGHTING) {
 			return vec4f(vec3f(brightness), 1.0);
 		}
 
-		// Sky-tinted specular (matches voxel shader, including skyIntensity —
-		// every sky read must scale identically or reflections stop matching
-		// the drawn sky dome)
+		// Sky-tinted specular (matches voxel shader)
 		let eyeToSurface = normalize(inp.worldPos - uni.eyePosition);
 		let reflected = reflect(eyeToSurface, n);
-		let skyColor = textureSample(skyTexture, skySampler, reflected * vec3f(1, 1, -1)) * uni.skyIntensity;
+		let skyColor = sampleSky(skyTexture, skySampler, reflected, uni.skyIntensity);
 
 		// Per-material reflection params (LUT), additively boosted by global tweakpane values
 		let matShin = MATERIAL_SHININESS[entity.texLayer];
@@ -111,17 +100,17 @@ const entityShader = /*wgsl*/ `
 		let V = normalize(uni.eyePosition - inp.worldPos);
 		let H = normalize(LIGHT_DIR + V);
 		let spec = pow(max(dot(n, H), 0.0), effShin);
-		let specular = effSpec * spec * skyColor.rgb;
+		let specular = effSpec * spec * skyColor;
 
 		let final_color = texColor.rgb * brightness + specular;
 
 		// Distance fog matching voxel shader
 		let dist = length(inp.worldPos - uni.eyePosition);
 		let fogFactor = clamp((uni.fogEnd - dist) / (uni.fogEnd - uni.fogStart), 0.0, 1.0);
-		let fogColor = textureSample(skyTexture, skySampler, eyeToSurface * vec3f(1, 1, -1)).rgb * uni.skyIntensity;
+		let fogColor = sampleSky(skyTexture, skySampler, eyeToSurface, uni.skyIntensity);
 		let fogged = mix(fogColor, final_color, fogFactor);
 
-		let mapped = applyTonemap(fogged * uni.exposure, uni.tonemapMode);
+		let mapped = applyTonemap(fogged, uni.exposure, uni.tonemapMode);
 		return vec4f(mapped, texColor.a);
 	}
 `;
@@ -210,10 +199,7 @@ export function initEntityRenderer(
 	}
 
 	return {
-		pipelines: {
-			1: createEntityPipeline(1),
-			4: createEntityPipeline(4),
-		},
+		pipelines: msaaVariants(createEntityPipeline),
 		sharedBindGroup0,
 		group1Layout,
 	};

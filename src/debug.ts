@@ -1,31 +1,6 @@
 import Stats from 'stats.js';
 import { Pane } from 'tweakpane';
-
-export const RENDER_MODE = {
-	Final: 0,
-	Albedo: 1,
-	Lighting: 2,
-	AO: 3,
-} as const;
-
-export type RenderMode = keyof typeof RENDER_MODE;
-
-export const MSAA_MODE = {
-	Off: 1,
-	'4x': 4,
-} as const;
-
-export type MSAAMode = keyof typeof MSAA_MODE;
-
-export const TONEMAP_MODE = {
-	Off: 0,
-	Reinhard: 1,
-	ACES: 2,
-	AgX: 3,
-	'AgX Punchy': 4,
-} as const;
-
-export type TonemapMode = keyof typeof TONEMAP_MODE;
+import type { RenderMode, MSAAMode, TonemapMode } from './render-config';
 
 export const stats = new Stats();
 stats.showPanel(0); // 0: fps, 1: ms, 2: mb, 3+: custom
@@ -61,44 +36,30 @@ export function refreshDebug(): void {
 	pane?.refresh();
 }
 
-export function BuildDebug(render: () => void): void {
+// No change handlers on any binding: the rAF game loop re-renders every
+// frame, so pane edits take effect next tick without manual invalidation.
+export function BuildDebug(): void {
 	pane = new Pane({ title: 'Debug' });
 	const renderDebugFolder = pane.addFolder({ title: 'Render Debug' });
-	const renderModeBinding = renderDebugFolder.addBinding(
-		debuggerParams,
-		'renderMode',
-		{
-			label: 'View Mode',
-			options: {
-				Final: 'Final',
-				Albedo: 'Albedo',
-				Lighting: 'Lighting',
-				AO: 'AO',
-			},
-		},
-	);
-	const msaaBinding = renderDebugFolder.addBinding(debuggerParams, 'msaa', {
+	renderDebugFolder.addBinding(debuggerParams, 'renderMode', {
+		label: 'View Mode',
+		options: {
+			Final: 'Final',
+			Albedo: 'Albedo',
+			Lighting: 'Lighting',
+			AO: 'AO',
+		} satisfies Record<RenderMode, RenderMode>,
+	});
+	renderDebugFolder.addBinding(debuggerParams, 'msaa', {
 		label: 'MSAA',
 		options: {
 			'No MSAA': 'Off',
 			'4x MSAA': '4x',
-		},
+		} satisfies Record<string, MSAAMode>,
 	});
-	const wireframeBinding = renderDebugFolder.addBinding(
-		debuggerParams,
-		'wireframe',
-		{
-			label: 'Wireframe',
-		},
-	);
-	const requestDebugRender = () => {
-		requestAnimationFrame(() => {
-			render();
-		});
-	};
-	renderModeBinding.on('change', requestDebugRender);
-	msaaBinding.on('change', requestDebugRender);
-	wireframeBinding.on('change', requestDebugRender);
+	renderDebugFolder.addBinding(debuggerParams, 'wireframe', {
+		label: 'Wireframe',
+	});
 
 	const playerFolder = pane.addFolder({ title: 'Player' });
 	playerFolder.addBinding(debuggerParams, 'freecam', {
@@ -162,7 +123,7 @@ export function BuildDebug(render: () => void): void {
 	});
 
 	const tonemapFolder = pane.addFolder({ title: 'Tonemap' });
-	const tonemapBinding = tonemapFolder.addBinding(debuggerParams, 'tonemap', {
+	tonemapFolder.addBinding(debuggerParams, 'tonemap', {
 		label: 'Curve',
 		options: {
 			Off: 'Off',
@@ -170,9 +131,8 @@ export function BuildDebug(render: () => void): void {
 			ACES: 'ACES',
 			AgX: 'AgX',
 			'AgX Punchy': 'AgX Punchy',
-		},
+		} satisfies Record<TonemapMode, TonemapMode>,
 	});
-	tonemapBinding.on('change', requestDebugRender);
 	tonemapFolder.addBinding(debuggerParams, 'exposure', {
 		label: 'Exposure',
 		min: 0.1,
@@ -209,13 +169,3 @@ export function BuildDebug(render: () => void): void {
 		step: 0.05,
 	});
 }
-
-// class Debugger {
-// 	constructor() {
-// 		bar: 1;
-// 	}
-
-// 	foo = (): number => {
-// 		return this.bar;
-// 	};
-// }

@@ -1,13 +1,57 @@
 import { mat4, vec3 } from 'wgpu-matrix';
 import { SUN_DIRECTION } from './lighting';
+import { f32Literal, wgslVec3, SHARED_UNIFORMS_WGSL } from './shader/shared';
+import { VOXEL_VERTEX_FLOATS } from './greedy-mesh';
 
 export const SHADOW_MAP_SIZE = 2048;
-export const SHADOW_HALF_EXTENT = 1800;
+const SHADOW_HALF_EXTENT = 1800;
 const SHADOW_DEPTH = 10000;
+const SHADOW_TEXEL_WORLD = (SHADOW_HALF_EXTENT * 2) / SHADOW_MAP_SIZE;
 
-function f32Literal(n: number): string {
-	const s = n.toString();
-	return s.includes('.') || s.includes('e') ? s : `${s}.0`;
+// Light-space basis. LIGHT_X/LIGHT_Y match the view basis mat4.lookAt derives
+// (up to sign), so a symmetric window test in this basis is exact against the
+// ortho frustum. SUN is kept raw (not normalized) because the eye offset in
+// computeLightViewProjection scales by it.
+const SUN = vec3.create(SUN_DIRECTION[0], SUN_DIRECTION[1], SUN_DIRECTION[2]);
+const LIGHT_X = vec3.normalize(vec3.cross(vec3.create(0, 1, 0), SUN));
+const LIGHT_Y = vec3.normalize(vec3.cross(SUN, LIGHT_X));
+
+/** Candidate wrap images of a chunk: the full 3x3 wrap lattice. */
+export const MAX_SHADOW_WRAPS = 9;
+const WRAP_PAIR_VEC4S = Math.ceil(MAX_SHADOW_WRAPS / 2);
+
+/**
+ * Float count of the per-chunk uniform: base offset vec4 followed by wrap
+ * (x, z) pairs packed two per vec4. Must match ChunkShadowUniform in the
+ * shadow WGSL; the voxel and wireframe shaders read only the leading vec4f.
+ */
+export const CHUNK_OFFSET_UNIFORM_FLOATS = 4 + WRAP_PAIR_VEC4S * 4;
+
+/**
+ * Light-space (LIGHT_X/LIGHT_Y) coordinates of the shadow window center,
+ * raw and snapped to whole shadow texels so the map doesn't shimmer as the
+ * camera moves.
+ */
+function lightWindowCenter(center: Float32Array): {
+	x: number;
+	y: number;
+	snappedX: number;
+	snappedY: number;
+} {
+	const x =
+		(center[0] ?? 0) * LIGHT_X[0] +
+		(center[1] ?? 0) * LIGHT_X[1] +
+		(center[2] ?? 0) * LIGHT_X[2];
+	const y =
+		(center[0] ?? 0) * LIGHT_Y[0] +
+		(center[1] ?? 0) * LIGHT_Y[1] +
+		(center[2] ?? 0) * LIGHT_Y[2];
+	return {
+		x,
+		y,
+		snappedX: Math.round(x / SHADOW_TEXEL_WORLD) * SHADOW_TEXEL_WORLD,
+		snappedY: Math.round(y / SHADOW_TEXEL_WORLD) * SHADOW_TEXEL_WORLD,
+	};
 }
 
 const BAYER_8X8 = [
@@ -17,11 +61,7 @@ const BAYER_8X8 = [
 	41, 25, 37, 21,
 ];
 
-function wgslVec3(v: Float32Array): string {
-	return `vec3f(${f32Literal(v[0])}, ${f32Literal(v[1])}, ${f32Literal(v[2])})`;
-}
-
-function buildTerrainShadowShader(worldWrapWidth: number): string {
+function buildTerrainShadowShader(): string {
 	const lightDir = vec3.normalize(
 		vec3.create(SUN_DIRECTION[0], SUN_DIRECTION[1], SUN_DIRECTION[2]),
 	);
@@ -33,35 +73,11 @@ function buildTerrainShadowShader(worldWrapWidth: number): string {
 	);
 
 	return /* wgsl */ `
-	const WORLD_WRAP_WIDTH = ${f32Literal(worldWrapWidth)};
 	const SHADOW_DITHER_CELL_SIZE = ${f32Literal(ditherCellSize)};
 	const LIGHT_DITHER_X = ${wgslVec3(lightX)};
 	const LIGHT_DITHER_Y = ${wgslVec3(lightY)};
-	const WRAP_OFFSETS = array<vec2f, 9>(
-		vec2f(-WORLD_WRAP_WIDTH, -WORLD_WRAP_WIDTH),
-		vec2f(0.0, -WORLD_WRAP_WIDTH),
-		vec2f(WORLD_WRAP_WIDTH, -WORLD_WRAP_WIDTH),
-		vec2f(-WORLD_WRAP_WIDTH, 0.0),
-		vec2f(0.0, 0.0),
-		vec2f(WORLD_WRAP_WIDTH, 0.0),
-		vec2f(-WORLD_WRAP_WIDTH, WORLD_WRAP_WIDTH),
-		vec2f(0.0, WORLD_WRAP_WIDTH),
-		vec2f(WORLD_WRAP_WIDTH, WORLD_WRAP_WIDTH),
-	);
 
-	struct Uniforms {
-		matrix: mat4x4f,
-		eyePosition: vec3f,
-		shininess: f32,
-		specularStrength: f32,
-		fogStart: f32,
-		fogEnd: f32,
-		lightMatrix: mat4x4f,
-		shadowStrength: f32,
-		shadowBias: f32,
-		shadowsEnabled: f32,
-		shadowNormalBias: f32,
-	}
+	${SHARED_UNIFORMS_WGSL}
 
 	struct Vertex {
 		@location(0) position: vec3f,
@@ -72,8 +88,16 @@ function buildTerrainShadowShader(worldWrapWidth: number): string {
 		@location(0) worldPos: vec3f,
 	}
 
+	// offset.xyz = chunk base offset (nearest wrap image, shared with the main
+	// pass), offset.w = caster fade alpha. wraps = wrap images selected on the
+	// CPU, (x, z) pairs packed two per vec4f, picked by instance index.
+	struct ChunkShadowUniform {
+		offset: vec4f,
+		wraps: array<vec4f, ${String(WRAP_PAIR_VEC4S)}>,
+	}
+
 	@group(0) @binding(0) var<uniform> uni: Uniforms;
-	@group(1) @binding(0) var<uniform> chunkOffset: vec4f;
+	@group(1) @binding(0) var<uniform> chunk: ChunkShadowUniform;
 
 	const BAYER_8X8 = array<f32, 64>(
 		${bayer8x8},
@@ -98,8 +122,9 @@ function buildTerrainShadowShader(worldWrapWidth: number): string {
 		vert: Vertex,
 		@builtin(instance_index) instanceIndex: u32
 	) -> VSOutput {
-		let wrapOffset = WRAP_OFFSETS[instanceIndex];
-		let worldPos = vert.position + chunkOffset.xyz + vec3f(wrapOffset.x, 0.0, wrapOffset.y);
+		let wrapPair = chunk.wraps[instanceIndex >> 1u];
+		let wrapOffset = select(wrapPair.xy, wrapPair.zw, (instanceIndex & 1u) == 1u);
+		let worldPos = vert.position + chunk.offset.xyz + vec3f(wrapOffset.x, 0.0, wrapOffset.y);
 		var out: VSOutput;
 		out.position = uni.lightMatrix * vec4f(worldPos, 1.0);
 		out.worldPos = worldPos;
@@ -113,7 +138,7 @@ function buildTerrainShadowShader(worldWrapWidth: number): string {
 			1.0,
 			clamp((uni.fogEnd - length(in.worldPos - uni.eyePosition)) / fogRange, 0.0, 1.0),
 		);
-		let casterAlpha = clamp(chunkOffset.w, 0.0, 1.0) * fogAlpha;
+		let casterAlpha = clamp(chunk.offset.w, 0.0, 1.0) * fogAlpha;
 		if (casterAlpha < ditherThreshold(in.worldPos)) {
 			discard;
 		}
@@ -133,7 +158,6 @@ export function initTerrainShadows(
 	device: GPUDevice,
 	chunkOffsetBGL: GPUBindGroupLayout,
 	uniformBuffer: GPUBuffer,
-	worldWrapWidth: number,
 ): TerrainShadowResources {
 	const texture = device.createTexture({
 		label: 'terrain shadow map',
@@ -151,7 +175,7 @@ export function initTerrainShadows(
 
 	const module = device.createShaderModule({
 		label: 'terrain shadow shader',
-		code: buildTerrainShadowShader(worldWrapWidth),
+		code: buildTerrainShadowShader(),
 	});
 
 	const uniformBGL = device.createBindGroupLayout({
@@ -183,7 +207,7 @@ export function initTerrainShadows(
 			entryPoint: 'vs',
 			buffers: [
 				{
-					arrayStride: 40,
+					arrayStride: VOXEL_VERTEX_FLOATS * 4,
 					attributes: [
 						{
 							shaderLocation: 0,
@@ -216,41 +240,119 @@ export function initTerrainShadows(
 
 export function computeLightViewProjection(
 	center: Float32Array,
-	halfExtent = SHADOW_HALF_EXTENT,
 ): Float32Array<ArrayBuffer> {
-	const lightDir = vec3.create(
-		SUN_DIRECTION[0],
-		SUN_DIRECTION[1],
-		SUN_DIRECTION[2],
-	);
-	const zAxis = lightDir;
-	const xAxis = vec3.normalize(vec3.cross(vec3.create(0, 1, 0), zAxis));
-	const yAxis = vec3.normalize(vec3.cross(zAxis, xAxis));
-	const texelSize = (halfExtent * 2) / SHADOW_MAP_SIZE;
-
-	const centerX =
-		(center[0] ?? 0) * xAxis[0] +
-		(center[1] ?? 0) * xAxis[1] +
-		(center[2] ?? 0) * xAxis[2];
-	const centerY =
-		(center[0] ?? 0) * yAxis[0] +
-		(center[1] ?? 0) * yAxis[1] +
-		(center[2] ?? 0) * yAxis[2];
-	const snappedX = Math.round(centerX / texelSize) * texelSize;
-	const snappedY = Math.round(centerY / texelSize) * texelSize;
-
+	const win = lightWindowCenter(center);
 	const lightCenter = vec3.create(center[0], center[1], center[2]);
-	vec3.addScaled(lightCenter, xAxis, snappedX - centerX, lightCenter);
-	vec3.addScaled(lightCenter, yAxis, snappedY - centerY, lightCenter);
-	const eye = vec3.addScaled(lightCenter, lightDir, SHADOW_DEPTH * 0.5);
+	vec3.addScaled(lightCenter, LIGHT_X, win.snappedX - win.x, lightCenter);
+	vec3.addScaled(lightCenter, LIGHT_Y, win.snappedY - win.y, lightCenter);
+	const eye = vec3.addScaled(lightCenter, SUN, SHADOW_DEPTH * 0.5);
 	const view = mat4.lookAt(eye, lightCenter, vec3.create(0, 1, 0));
 	const projection = mat4.ortho(
-		-halfExtent,
-		halfExtent,
-		-halfExtent,
-		halfExtent,
+		-SHADOW_HALF_EXTENT,
+		SHADOW_HALF_EXTENT,
+		-SHADOW_HALF_EXTENT,
+		SHADOW_HALF_EXTENT,
 		0,
 		SHADOW_DEPTH,
 	);
 	return mat4.multiply(projection, view);
+}
+
+export interface ShadowWrapSelector {
+	/** Recompute the light window for this frame's camera (the same center passed to computeLightViewProjection). */
+	update(center: Float32Array): void;
+	/**
+	 * Select the wrap images of a chunk (cube AABB centered at the given
+	 * world point) that overlap the shadow ortho window, writing their (x, z)
+	 * offsets into `out` starting at `outIndex`. Returns the count.
+	 */
+	select(
+		centerX: number,
+		centerY: number,
+		centerZ: number,
+		out: Float32Array,
+		outIndex: number,
+	): number;
+}
+
+/**
+ * The shadow ortho footprint spans slightly more than one wrap period, so a
+ * chunk can cast into the map through more than one wrap image — but rarely
+ * all of the lattice. Testing each image's AABB against the window in light
+ * space picks out just the images that can land texels. The test never culls
+ * along the light ray (depth), so it is conservative: drawing exactly the
+ * selected instances writes a map identical to drawing every image.
+ */
+export function createShadowWrapSelector(
+	chunkExtent: number,
+	worldWrapWidth: number,
+): ShadowWrapSelector {
+	const half = chunkExtent / 2;
+	// Projection radius of a chunk's cube AABB onto each light axis.
+	const boundX =
+		SHADOW_HALF_EXTENT +
+		half *
+			(Math.abs(LIGHT_X[0]) +
+				Math.abs(LIGHT_X[1]) +
+				Math.abs(LIGHT_X[2]));
+	const boundY =
+		SHADOW_HALF_EXTENT +
+		half *
+			(Math.abs(LIGHT_Y[0]) +
+				Math.abs(LIGHT_Y[1]) +
+				Math.abs(LIGHT_Y[2]));
+
+	// World offsets of the wrap lattice and their light-space projections.
+	const wrapWorld: number[] = [];
+	const wrapProjX: number[] = [];
+	const wrapProjY: number[] = [];
+	for (const wz of [-worldWrapWidth, 0, worldWrapWidth]) {
+		for (const wx of [-worldWrapWidth, 0, worldWrapWidth]) {
+			wrapWorld.push(wx, wz);
+			wrapProjX.push(wx * LIGHT_X[0] + wz * LIGHT_X[2]);
+			wrapProjY.push(wx * LIGHT_Y[0] + wz * LIGHT_Y[2]);
+		}
+	}
+
+	let windowX = 0;
+	let windowY = 0;
+
+	return {
+		update(center: Float32Array): void {
+			const win = lightWindowCenter(center);
+			windowX = win.snappedX;
+			windowY = win.snappedY;
+		},
+		select(
+			centerX: number,
+			centerY: number,
+			centerZ: number,
+			out: Float32Array,
+			outIndex: number,
+		): number {
+			const px =
+				centerX * LIGHT_X[0] +
+				centerY * LIGHT_X[1] +
+				centerZ * LIGHT_X[2] -
+				windowX;
+			const py =
+				centerX * LIGHT_Y[0] +
+				centerY * LIGHT_Y[1] +
+				centerZ * LIGHT_Y[2] -
+				windowY;
+			let count = 0;
+			for (let i = 0; i < MAX_SHADOW_WRAPS; i++) {
+				if (
+					Math.abs(px + wrapProjX[i]) > boundX ||
+					Math.abs(py + wrapProjY[i]) > boundY
+				) {
+					continue;
+				}
+				out[outIndex + count * 2] = wrapWorld[i * 2];
+				out[outIndex + count * 2 + 1] = wrapWorld[i * 2 + 1];
+				count++;
+			}
+			return count;
+		},
+	};
 }

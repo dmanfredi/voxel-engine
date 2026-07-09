@@ -3,24 +3,23 @@ import VoxelShader from './shader/voxel';
 import WireframeShader from './shader/wireframe';
 import { initSkybox, drawSkybox, type SkyboxResources } from './skybox';
 import {
+	CHUNK_OFFSET_UNIFORM_FLOATS,
 	computeLightViewProjection,
+	createShadowWrapSelector,
 	initTerrainShadows,
-	SHADOW_HALF_EXTENT,
 } from './shadow';
 
+import { BuildDebug, refreshDebug, debuggerParams, stats } from './debug';
 import {
-	BuildDebug,
-	refreshDebug,
-	debuggerParams,
-	stats,
 	RENDER_MODE,
 	MSAA_MODE,
 	TONEMAP_MODE,
-} from './debug';
-import { greedyMesh } from './greedy-mesh';
+	msaaVariants,
+} from './render-config';
+import { greedyMesh, VOXEL_VERTEX_FLOATS } from './greedy-mesh';
 import { FREECAM, physicsTick, createPlayerState } from './movement';
 import { World } from './world';
-import { CHUNK_SIZE, chunkKey } from './chunk';
+import { CHUNK_SIZE, WORLD_WIDTH_CHUNKS, chunkKey } from './chunk';
 import { AIR, MARBLE, extractBlockProps } from './block';
 import { raycast, type RaycastHit } from './raycast';
 // import { initHighlight, drawHighlight } from './highlight';
@@ -51,16 +50,15 @@ if (!navigator.gpu) {
 }
 
 const BLOCK_SIZE = 10;
-const WORLD_WIDTH = 10; // horizontal chunk width (X and Z), wrapping
 const VERTICAL_RADIUS = 6; // chunks above/below player to keep loaded
 const SPAWN_CY = 4; // initial player chunk Y
 
-const world = new World(BLOCK_SIZE, WORLD_WIDTH);
+const world = new World(BLOCK_SIZE, WORLD_WIDTH_CHUNKS);
 
 const degToRad = (d: number) => (d * Math.PI) / 180;
 const up = vec3.create(0, 1, 0);
 
-const worldCenter = (WORLD_WIDTH * CHUNK_SIZE * BLOCK_SIZE) / 2;
+const worldCenter = (WORLD_WIDTH_CHUNKS * CHUNK_SIZE * BLOCK_SIZE) / 2;
 const cameraPos = vec3.create(worldCenter, worldCenter, worldCenter);
 const cameraFront = vec3.create(0, 0, -1);
 const cameraUp = up;
@@ -78,9 +76,8 @@ interface ChunkRenderData {
 	wireframeBindGroup: GPUBindGroup;
 	offsetBuffer: GPUBuffer;
 	offsetBindGroup: GPUBindGroup;
-	offsetX: number;
-	offsetZ: number;
 	shadowCasterAlpha: number;
+	shadowWrapCount: number;
 	numVertices: number;
 }
 
@@ -219,7 +216,7 @@ async function main(): Promise<void> {
 	});
 
 	const vertexBufferLayout: GPUVertexBufferLayout = {
-		arrayStride: (3 + 3 + 2 + 1 + 1) * 4, // pos, normal, uv, ao, texLayer (4 bytes each)
+		arrayStride: VOXEL_VERTEX_FLOATS * 4,
 		attributes: [
 			{ shaderLocation: 0, offset: 0, format: 'float32x3' }, // position
 			{ shaderLocation: 1, offset: 12, format: 'float32x3' }, // normal
@@ -255,10 +252,7 @@ async function main(): Promise<void> {
 		});
 	}
 
-	const pipelines = {
-		1: createMainPipeline(1),
-		4: createMainPipeline(4),
-	};
+	const pipelines = msaaVariants(createMainPipeline);
 
 	function createWireframePipeline(sampleCount: number): GPURenderPipeline {
 		return device.createRenderPipeline({
@@ -299,10 +293,7 @@ async function main(): Promise<void> {
 		});
 	}
 
-	const wireframePipelines = {
-		1: createWireframePipeline(1),
-		4: createWireframePipeline(4),
-	};
+	const wireframePipelines = msaaVariants(createWireframePipeline);
 
 	// Load block textures into a texture array (one layer per block type)
 	const TEXTURE_SIZE = 1024;
@@ -372,6 +363,7 @@ async function main(): Promise<void> {
 	// f32      = 4 bytes  (offset 184) exposure
 	// f32      = 4 bytes  (offset 188) skyIntensity
 	// Total: 192 bytes (buffer exactly full)
+	// Must match SHARED_UNIFORMS_WGSL in shader/shared.ts.
 	const uniformBufferSize = 192;
 	const uniformBuffer = device.createBuffer({
 		label: 'uniforms',
@@ -383,7 +375,6 @@ async function main(): Promise<void> {
 		device,
 		chunkOffsetBGL,
 		uniformBuffer,
-		WORLD_WIDTH * CHUNK_SIZE * BLOCK_SIZE,
 	);
 
 	const blockTextureView = blockTextureArray.createView({
@@ -438,9 +429,11 @@ async function main(): Promise<void> {
 			],
 		});
 
+		// Sized for the shadow shader's ChunkShadowUniform; the voxel and
+		// wireframe shaders read only the leading vec4f.
 		const offsetBuffer = device.createBuffer({
 			label: `chunk ${key} offset`,
-			size: 16, // vec4f
+			size: CHUNK_OFFSET_UNIFORM_FLOATS * 4,
 			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 		});
 
@@ -459,9 +452,8 @@ async function main(): Promise<void> {
 			wireframeBindGroup,
 			offsetBuffer,
 			offsetBindGroup,
-			offsetX: 0,
-			offsetZ: 0,
 			shadowCasterAlpha: 1,
+			shadowWrapCount: 0,
 			numVertices,
 		});
 
@@ -555,6 +547,7 @@ async function main(): Promise<void> {
 	const skybox: SkyboxResources = await initSkybox(
 		device,
 		renderTargetFormat,
+		uniformBuffer,
 	);
 
 	// Bind group for main shader
@@ -583,45 +576,9 @@ async function main(): Promise<void> {
 		bindGroup,
 	);
 	const entityManager = new EntityManager(entityRenderer, device, world);
-	// entityManager.spawn({
-	// 	shape: Shape.Sphere,
-	// 	material: Material.DarkMarble,
-	// 	role: Role.Rush,
-	// 	x: worldCenter,
-	// 	y: worldCenter + 100,
-	// 	z: worldCenter - 100,
-	// 	size: 20,
-	// 	vx: 2,
-	// 	vz: 2,
-	// });
-
-	// entityManager.spawn({
-	// 	shape: Shape.Sphere,
-	// 	material: Material.Marble,
-	// 	role: Role.Rush,
-	// 	x: worldCenter,
-	// 	y: worldCenter + 100,
-	// 	z: worldCenter - 100,
-	// 	size: 10,
-	// 	vx: 3,
-	// 	vz: -2,
-	// });
-
-	// entityManager.spawn({
-	// 	shape: Shape.Sphere,
-	// 	material: Material.Brick,
-	// 	role: Role.Rush,
-	// 	x: worldCenter,
-	// 	y: worldCenter + 100,
-	// 	z: worldCenter - 100,
-	// 	size: 15,
-	// 	vx: 3,
-	// 	vz: -2,
-	// });
-
-	// // Phase 2 cube: spawned above terrain, falls under gravity and settles
-	// // on the first solid voxel beneath it. Spheres that roll into it will
-	// // bounce off (cube treated as infinite mass).
+	// Phase 2 cube: spawned above terrain, falls under gravity and settles
+	// on the first solid voxel beneath it. Spheres that roll into it will
+	// bounce off (cube treated as infinite mass).
 	entityManager.spawn({
 		shape: Shape.Cube,
 		material: Material.DarkMarble,
@@ -638,8 +595,10 @@ async function main(): Promise<void> {
 	// TODO: re-enable water once it supports chunked worlds
 
 	let depthTexture: GPUTexture;
+	let depthTextureView: GPUTextureView;
 	let depthTextureSampleCount = 0;
 	let msaaColorTexture: GPUTexture | undefined;
+	let msaaColorView: GPUTextureView | undefined;
 	let msaaColorTextureSampleCount = 0;
 
 	function ensureDepthTexture(
@@ -660,6 +619,7 @@ async function main(): Promise<void> {
 				sampleCount,
 				usage: GPUTextureUsage.RENDER_ATTACHMENT,
 			});
+			depthTextureView = depthTexture.createView();
 			depthTextureSampleCount = sampleCount;
 		}
 	}
@@ -667,6 +627,7 @@ async function main(): Promise<void> {
 	function releaseMsaaColorTexture(): void {
 		msaaColorTexture?.destroy();
 		msaaColorTexture = undefined;
+		msaaColorView = undefined;
 		msaaColorTextureSampleCount = 0;
 	}
 
@@ -677,6 +638,7 @@ async function main(): Promise<void> {
 	): GPUTextureView {
 		if (
 			!msaaColorTexture ||
+			!msaaColorView ||
 			msaaColorTexture.width !== width ||
 			msaaColorTexture.height !== height ||
 			msaaColorTextureSampleCount !== sampleCount
@@ -689,9 +651,10 @@ async function main(): Promise<void> {
 				sampleCount,
 				usage: GPUTextureUsage.RENDER_ATTACHMENT,
 			});
+			msaaColorView = msaaColorTexture.createView();
 			msaaColorTextureSampleCount = sampleCount;
 		}
-		return msaaColorTexture.createView();
+		return msaaColorView;
 	}
 
 	function clampCanvasDimension(size: number): number {
@@ -858,7 +821,77 @@ async function main(): Promise<void> {
 		requestAnimationFrame(tick);
 	}
 
-	BuildDebug(render);
+	const chunkExtent = CHUNK_SIZE * BLOCK_SIZE;
+	const halfChunk = chunkExtent / 2;
+	const worldWrapWidth = WORLD_WIDTH_CHUNKS * CHUNK_SIZE * BLOCK_SIZE;
+	const halfWrapWidth = worldWrapWidth / 2;
+	const shadowWrapSelector = createShadowWrapSelector(
+		chunkExtent,
+		worldWrapWidth,
+	);
+	// Scratch reused for every per-chunk offset upload. Wrap slots past the
+	// selected count carry stale values from earlier chunks; the shadow draw's
+	// instance count gates them so they are never read.
+	const offsetData = new Float32Array(CHUNK_OFFSET_UNIFORM_FLOATS);
+
+	const smoothStep01 = (value: number): number => {
+		const t = Math.max(0, Math.min(1, value));
+		return t * t * (3 - 2 * t);
+	};
+
+	function chunkShadowCasterAlpha(
+		chunkRender: ChunkRenderData,
+		offsetX: number,
+		offsetZ: number,
+	): number {
+		const minX = chunkRender.cx * chunkExtent + offsetX;
+		const maxX = minX + chunkExtent;
+		const minY = chunkRender.cy * chunkExtent;
+		const maxY = minY + chunkExtent;
+		const minZ = chunkRender.cz * chunkExtent + offsetZ;
+		const maxZ = minZ + chunkExtent;
+
+		const dx =
+			cameraPos[0] < minX
+				? minX - cameraPos[0]
+				: cameraPos[0] > maxX
+					? cameraPos[0] - maxX
+					: 0;
+		const dy =
+			cameraPos[1] < minY
+				? minY - cameraPos[1]
+				: cameraPos[1] > maxY
+					? cameraPos[1] - maxY
+					: 0;
+		const dz =
+			cameraPos[2] < minZ
+				? minZ - cameraPos[2]
+				: cameraPos[2] > maxZ
+					? cameraPos[2] - maxZ
+					: 0;
+
+		const distance = Math.hypot(dx, dy, dz);
+		const fogRange = Math.max(
+			debuggerParams.fogEnd - debuggerParams.fogStart,
+			1,
+		);
+		const fogAlpha = smoothStep01(
+			(debuggerParams.fogEnd - distance) / fogRange,
+		);
+
+		// Vertical chunks stream before the default fog band. Fade shadow
+		// casters over the outer two vertical chunk bands so load/unload
+		// changes do not appear as hard shadow pops on nearby receivers.
+		const streamFadeEnd = VERTICAL_RADIUS * chunkExtent;
+		const streamFadeStart = Math.max(0, streamFadeEnd - chunkExtent * 2);
+		const streamAlpha = smoothStep01(
+			(streamFadeEnd - dy) / (streamFadeEnd - streamFadeStart),
+		);
+
+		return Math.min(fogAlpha, streamAlpha);
+	}
+
+	BuildDebug();
 	function render(): void {
 		stats.begin();
 		renderRequestId = 0;
@@ -907,7 +940,7 @@ async function main(): Promise<void> {
 			label: 'main pass',
 			colorAttachments: [colorAttachment],
 			depthStencilAttachment: {
-				view: depthTexture.createView(),
+				view: depthTextureView,
 				depthClearValue: 1.0,
 				depthLoadOp: 'clear',
 				depthStoreOp: 'store',
@@ -929,10 +962,8 @@ async function main(): Promise<void> {
 		);
 		// Compute the view projection matrix
 		const viewProjectionMatrix = mat4.multiply(projection, viewMatrix);
-		const lightViewProjectionMatrix = computeLightViewProjection(
-			cameraPos,
-			SHADOW_HALF_EXTENT,
-		);
+		const lightViewProjectionMatrix = computeLightViewProjection(cameraPos);
+		shadowWrapSelector.update(cameraPos);
 
 		// Upload uniforms: VP matrix + eye position + reflection params
 		uniformValues.set(viewProjectionMatrix);
@@ -954,110 +985,73 @@ async function main(): Promise<void> {
 		uniformValues[47] = debuggerParams.skyIntensity;
 		device.queue.writeBuffer(uniformBuffer, 0, uniformValues);
 
-		const chunkExtent = CHUNK_SIZE * BLOCK_SIZE;
-		const smoothStep01 = (value: number): number => {
-			const t = Math.max(0, Math.min(1, value));
-			return t * t * (3 - 2 * t);
-		};
-
-		function chunkDistanceOutsideCameraAABB(
-			chunkRender: ChunkRenderData,
-		): [number, number, number] {
-			const minX = chunkRender.cx * chunkExtent + chunkRender.offsetX;
-			const maxX = minX + chunkExtent;
-			const minY = chunkRender.cy * chunkExtent;
-			const maxY = minY + chunkExtent;
-			const minZ = chunkRender.cz * chunkExtent + chunkRender.offsetZ;
-			const maxZ = minZ + chunkExtent;
-
-			const dx =
-				cameraPos[0] < minX
-					? minX - cameraPos[0]
-					: cameraPos[0] > maxX
-						? cameraPos[0] - maxX
-						: 0;
-			const dy =
-				cameraPos[1] < minY
-					? minY - cameraPos[1]
-					: cameraPos[1] > maxY
-						? cameraPos[1] - maxY
-						: 0;
-			const dz =
-				cameraPos[2] < minZ
-					? minZ - cameraPos[2]
-					: cameraPos[2] > maxZ
-						? cameraPos[2] - maxZ
-						: 0;
-
-			return [dx, dy, dz];
-		}
-
-		function chunkShadowCasterAlpha(chunkRender: ChunkRenderData): number {
-			const [dx, dy, dz] = chunkDistanceOutsideCameraAABB(chunkRender);
-			const distance = Math.hypot(dx, dy, dz);
-			const fogRange = Math.max(
-				debuggerParams.fogEnd - debuggerParams.fogStart,
-				1,
-			);
-			const fogAlpha = smoothStep01(
-				(debuggerParams.fogEnd - distance) / fogRange,
-			);
-
-			// Vertical chunks stream before the default fog band. Fade shadow
-			// casters over the outer two vertical chunk bands so load/unload
-			// changes do not appear as hard shadow pops on nearby receivers.
-			const streamFadeEnd = VERTICAL_RADIUS * chunkExtent;
-			const streamFadeStart = Math.max(
-				0,
-				streamFadeEnd - chunkExtent * 2,
-			);
-			const streamAlpha = smoothStep01(
-				(streamFadeEnd - dy) / (streamFadeEnd - streamFadeStart),
-			);
-
-			return Math.min(fogAlpha, streamAlpha);
-		}
-
-		// Compute and upload per-chunk wrap offsets plus shadow caster fade.
-		const ww = world.widthChunks * CHUNK_SIZE * BLOCK_SIZE;
-		const hw = ww / 2;
-		const offsetData = new Float32Array(4);
-		const halfChunk = chunkExtent / 2;
+		// Compute and upload per-chunk wrap offsets, shadow caster fade, and
+		// shadow wrap-image selection.
 		for (const chunkRender of chunkRenderMap.values()) {
 			const dx = chunkRender.cx * chunkExtent + halfChunk - cameraPos[0];
 			const dz = chunkRender.cz * chunkExtent + halfChunk - cameraPos[2];
+			const offsetX =
+				dx > halfWrapWidth
+					? -worldWrapWidth
+					: dx < -halfWrapWidth
+						? worldWrapWidth
+						: 0;
+			const offsetZ =
+				dz > halfWrapWidth
+					? -worldWrapWidth
+					: dz < -halfWrapWidth
+						? worldWrapWidth
+						: 0;
+			chunkRender.shadowCasterAlpha = chunkShadowCasterAlpha(
+				chunkRender,
+				offsetX,
+				offsetZ,
+			);
+			chunkRender.shadowWrapCount =
+				debuggerParams.shadows && chunkRender.shadowCasterAlpha > 0
+					? shadowWrapSelector.select(
+							chunkRender.cx * chunkExtent + halfChunk + offsetX,
+							chunkRender.cy * chunkExtent + halfChunk,
+							chunkRender.cz * chunkExtent + halfChunk + offsetZ,
+							offsetData,
+							4,
+						)
+					: 0;
 
-			offsetData[0] = dx > hw ? -ww : dx < -hw ? ww : 0;
-			offsetData[2] = dz > hw ? -ww : dz < -hw ? ww : 0;
-			chunkRender.offsetX = offsetData[0];
-			chunkRender.offsetZ = offsetData[2];
-			chunkRender.shadowCasterAlpha = chunkShadowCasterAlpha(chunkRender);
+			offsetData[0] = offsetX;
+			offsetData[2] = offsetZ;
 			offsetData[3] = chunkRender.shadowCasterAlpha;
-
 			device.queue.writeBuffer(chunkRender.offsetBuffer, 0, offsetData);
 		}
 
 		const encoder = device.createCommandEncoder();
-		const shadowPass = encoder.beginRenderPass({
-			label: 'terrain shadow pass',
-			colorAttachments: [],
-			depthStencilAttachment: {
-				view: terrainShadows.view,
-				depthClearValue: 1,
-				depthLoadOp: 'clear',
-				depthStoreOp: 'store',
-			},
-		});
+		// Skipped entirely when shadows are off; the stale map never reaches
+		// the image because shadowsEnabled zeroes the mix in the shaders.
+		if (debuggerParams.shadows) {
+			const shadowPass = encoder.beginRenderPass({
+				label: 'terrain shadow pass',
+				colorAttachments: [],
+				depthStencilAttachment: {
+					view: terrainShadows.view,
+					depthClearValue: 1,
+					depthLoadOp: 'clear',
+					depthStoreOp: 'store',
+				},
+			});
 
-		shadowPass.setPipeline(terrainShadows.pipeline);
-		shadowPass.setBindGroup(0, terrainShadows.bindGroup);
-		for (const chunkRender of chunkRenderMap.values()) {
-			if (chunkRender.shadowCasterAlpha <= 0) continue;
-			shadowPass.setBindGroup(1, chunkRender.offsetBindGroup);
-			shadowPass.setVertexBuffer(0, chunkRender.vertexBuffer);
-			shadowPass.draw(chunkRender.numVertices, 9);
+			shadowPass.setPipeline(terrainShadows.pipeline);
+			shadowPass.setBindGroup(0, terrainShadows.bindGroup);
+			for (const chunkRender of chunkRenderMap.values()) {
+				if (chunkRender.shadowWrapCount === 0) continue;
+				shadowPass.setBindGroup(1, chunkRender.offsetBindGroup);
+				shadowPass.setVertexBuffer(0, chunkRender.vertexBuffer);
+				shadowPass.draw(
+					chunkRender.numVertices,
+					chunkRender.shadowWrapCount,
+				);
+			}
+			shadowPass.end();
 		}
-		shadowPass.end();
 
 		const pass = encoder.beginRenderPass(renderPassDescriptor);
 
@@ -1107,9 +1101,6 @@ async function main(): Promise<void> {
 				viewMatrix,
 				projection,
 				sampleCount,
-				TONEMAP_MODE[debuggerParams.tonemap],
-				debuggerParams.exposure,
-				debuggerParams.skyIntensity,
 			);
 		}
 

@@ -27,13 +27,10 @@
  * same answer every time, so chunks regenerated after unloading match.
  */
 
-import { CHUNK_SIZE } from '../chunk';
+import { CHUNK_SIZE, WORLD_WIDTH_CHUNKS } from '../chunk';
 import { DARK_MARBLE, MARBLE } from '../block';
 
-// Must match `WORLD_WIDTH * CHUNK_SIZE` from main.ts. Hardcoded because
-// generators don't get a World reference; if world width changes there,
-// update this too or pillars won't seam at the wrap boundary.
-const WORLD_WIDTH_BLOCKS = 320;
+const WORLD_WIDTH_BLOCKS = WORLD_WIDTH_CHUNKS * CHUNK_SIZE;
 
 // Pillar footprint thickness range (NxN on the seed plane).
 const N_MIN = 4;

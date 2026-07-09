@@ -1,37 +1,28 @@
 import { SUN_DIRECTION_WGSL } from '../lighting';
 import { SHADOW_MAP_SIZE } from '../shadow';
-import { buildMaterialLUT, buildTonemapWGSL } from './shared';
+import {
+	buildMaterialLUT,
+	GAMMA_WGSL,
+	RENDER_MODE_WGSL,
+	SHARED_UNIFORMS_WGSL,
+	SKY_SAMPLE_WGSL,
+	TONEMAP_WGSL,
+} from './shared';
 
 const SHADOW_TEXEL_SIZE = (1 / SHADOW_MAP_SIZE).toFixed(12);
 
 const VoxelShader = /*wgsl*/ `
 	${buildMaterialLUT()}
-	${buildTonemapWGSL()}
+	${TONEMAP_WGSL}
+	${SKY_SAMPLE_WGSL}
+	${GAMMA_WGSL}
+	${RENDER_MODE_WGSL}
 	${SUN_DIRECTION_WGSL}
 	const SHADOW_TEXEL_SIZE = vec2f(${SHADOW_TEXEL_SIZE}, ${SHADOW_TEXEL_SIZE});
-	const RENDER_MODE_ALBEDO: f32 = 1.0;
-	const RENDER_MODE_LIGHTING: f32 = 2.0;
-	const RENDER_MODE_AO: f32 = 3.0;
 	const AO_SHADOW_COLOR: vec3f = vec3f(0.1, 0.1, 0.1);
-	const GAMMA: f32 = 2.2;
+	const AO_SHADOW_COLOR_LINEAR: vec3f = pow(AO_SHADOW_COLOR, vec3f(GAMMA));
 
-	struct Uniforms {
-		matrix: mat4x4f,
-		eyePosition: vec3f,
-		shininess: f32,
-		specularStrength: f32,
-		fogStart: f32,
-		fogEnd: f32,
-		lightMatrix: mat4x4f,
-		shadowStrength: f32,
-		shadowBias: f32,
-		shadowsEnabled: f32,
-		shadowNormalBias: f32,
-		renderMode: f32,
-		tonemapMode: f32,
-		exposure: f32,
-		skyIntensity: f32,
-	}
+	${SHARED_UNIFORMS_WGSL}
 
 	struct Vertex {
 		@location(0) position: vec4f,
@@ -54,7 +45,6 @@ const VoxelShader = /*wgsl*/ `
 	struct TerrainLighting {
 		shadedBrightness: f32,
 		aoLighting: vec3f,
-		aoShadowColor: vec3f,
 		specular: vec3f,
 		directLight: f32,
 		fogFactor: f32,
@@ -89,8 +79,11 @@ const VoxelShader = /*wgsl*/ `
 	// automatic derivative-based selection would pick. -1.0 is nice.
 	const MIP_LOD_BIAS: f32 = -1.0;
 
+	// textureSampleCompareLevel: no derivative-based LOD, so the taps are
+	// legal behind shadowVisibility's non-uniform early-out; the shadow map
+	// has a single mip, so level 0 is what implicit LOD sampled anyway.
 	fn shadowCompare(uv: vec2f, depth: f32, offset: vec2f) -> f32 {
-		return textureSampleCompare(
+		return textureSampleCompareLevel(
 			shadowTexture,
 			shadowSampler,
 			uv + offset * SHADOW_TEXEL_SIZE,
@@ -100,8 +93,13 @@ const VoxelShader = /*wgsl*/ `
 
 	fn shadowVisibility(shadowPos: vec4f, normal: vec3f) -> f32 {
 		let proj = shadowPos.xyz / shadowPos.w;
+		let inBounds = proj.x >= -1.0 && proj.x <= 1.0 && proj.y >= -1.0 && proj.y <= 1.0 && proj.z >= 0.0 && proj.z <= 1.0;
+		let facing = dot(normal, LIGHT_DIR);
+		// Sun-averted or out-of-map fragments are fully lit; skip the PCF taps.
+		if (!inBounds || facing <= 0.0) {
+			return 1.0;
+		}
 		let uv = vec2f(proj.x * 0.5 + 0.5, 0.5 - proj.y * 0.5);
-		let facing = max(dot(normal, LIGHT_DIR), 0.0);
 		let slopeBias = uni.shadowBias * (1.0 - facing) * 2.0;
 		let depth = proj.z - uni.shadowBias - slopeBias;
 		let visibility = (
@@ -115,19 +113,13 @@ const VoxelShader = /*wgsl*/ `
 			shadowCompare(uv, depth, vec2f(0.0, 1.0)) * 2.0 +
 			shadowCompare(uv, depth, vec2f(1.0, 1.0))
 		) / 16.0;
-		let inBounds = proj.x >= -1.0 && proj.x <= 1.0 && proj.y >= -1.0 && proj.y <= 1.0 && proj.z >= 0.0 && proj.z <= 1.0;
-		let sunFacing = dot(normal, LIGHT_DIR) > 0.0;
 		let edgeDistance = min(
 			min(proj.x + 1.0, 1.0 - proj.x),
 			min(proj.y + 1.0, 1.0 - proj.y),
 		);
 		let edgeFade = clamp(edgeDistance / 0.08, 0.0, 1.0);
 		let fadedVisibility = mix(1.0, visibility, edgeFade);
-		return select(
-			1.0,
-			mix(1.0, fadedVisibility, uni.shadowsEnabled),
-			inBounds && sunFacing,
-		);
+		return mix(1.0, fadedVisibility, uni.shadowsEnabled);
 	}
 	fn terrainFaceBrightness(normal: vec3f) -> f32 {
 		// Per-face shading aligned with LIGHT_DIR (sun is up / south / west).
@@ -155,11 +147,7 @@ const VoxelShader = /*wgsl*/ `
 	fn terrainSpecular(vsOut: VSOutput, normal: vec3f) -> vec3f {
 		let eyeToSurface = normalize(vsOut.worldPos - uni.eyePosition);
 		let reflected = reflect(eyeToSurface, normal);
-		// skyIntensity treats the LDR-authored cubemap as emission so the sky's
-		// light level can be tuned independently of the authored texels. It
-		// must scale every sky read (dome, fog, specular) identically or the
-		// fog band stops matching the horizon.
-		let skyColor = textureSample(skyTexture, skySampler, reflected * vec3f(1, 1, -1)) * uni.skyIntensity;
+		let skyColor = sampleSky(skyTexture, skySampler, reflected, uni.skyIntensity);
 
 		let matShin = MATERIAL_SHININESS[vsOut.texLayer];
 		let matSpec = MATERIAL_SPEC_STRENGTH[vsOut.texLayer];
@@ -169,7 +157,7 @@ const VoxelShader = /*wgsl*/ `
 		let V = normalize(uni.eyePosition - vsOut.worldPos);
 		let H = normalize(LIGHT_DIR + V);
 		let spec = pow(max(dot(normal, H), 0.0), effShin);
-		return effSpec * spec * skyColor.rgb;
+		return effSpec * spec * skyColor;
 	}
 
 	fn computeTerrainLighting(vsOut: VSOutput, normal: vec3f) -> TerrainLighting {
@@ -185,24 +173,17 @@ const VoxelShader = /*wgsl*/ `
 		let ambientBrightness = 0.5;
 		let faceBrightness = terrainFaceBrightness(normal);
 		let directBrightness = max(faceBrightness - ambientBrightness, 0.0);
-		// Perceptual→linear compensation (PINNED: retune alongside the
-		// tonemap experiment). The brightness table and AO endpoint predate
-		// the linear pipeline and are tuned in gamma-era units, where a flat
-		// surface displayed as linear_tex * brightness^2.2; the pow keeps
-		// those values meaning what they meant. Retuning the constants in
-		// linear units deletes these pows.
+		// PINNED perceptual→linear pow — rationale on GAMMA in shader/shared.ts.
 		let shadedBrightness = pow(ambientBrightness + directBrightness * directLight, GAMMA);
-		let aoShadowColor = pow(AO_SHADOW_COLOR, vec3f(GAMMA));
 
-		let aoLighting = mix(aoShadowColor, vec3f(shadedBrightness), vsOut.ao);
+		let aoLighting = mix(AO_SHADOW_COLOR_LINEAR, vec3f(shadedBrightness), vsOut.ao);
 
 		let eyeToSurface = normalize(vsOut.worldPos - uni.eyePosition);
-		let fogColor = textureSample(skyTexture, skySampler, eyeToSurface * vec3f(1, 1, -1)).rgb * uni.skyIntensity;
+		let fogColor = sampleSky(skyTexture, skySampler, eyeToSurface, uni.skyIntensity);
 
 		return TerrainLighting(
 			shadedBrightness,
 			aoLighting,
-			aoShadowColor,
 			terrainSpecular(vsOut, normal),
 			directLight,
 			fogFactor,
@@ -225,10 +206,10 @@ const VoxelShader = /*wgsl*/ `
 			return vec4f(lighting.aoLighting, 1.0);
 		}
 
-		let base = mix(lighting.aoShadowColor, texColor.rgb * lighting.shadedBrightness, vsOut.ao);
+		let base = mix(AO_SHADOW_COLOR_LINEAR, texColor.rgb * lighting.shadedBrightness, vsOut.ao);
 		let final_color = base + lighting.specular * lighting.directLight;
 		let fogged = mix(lighting.fogColor, final_color, lighting.fogFactor);
-		let mapped = applyTonemap(fogged * uni.exposure, uni.tonemapMode);
+		let mapped = applyTonemap(fogged, uni.exposure, uni.tonemapMode);
 		return vec4f(mapped, texColor.a);
 	}
 `;

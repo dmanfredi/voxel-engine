@@ -20,9 +20,9 @@ export const debuggerParams = {
 	fogStart: 1300,
 	fogEnd: 1400,
 	tonemap: 'ACES' as TonemapMode,
-	// Fitted ACES lifts middle gray (~0.18 → ~0.27); 0.7 re-anchors the
+	// Fitted ACES lifts middle gray (~0.18 → ~0.27); 0.8 re-anchors the
 	// scene's mids to their pre-tonemap brightness, tuned by eye.
-	exposure: 0.7,
+	exposure: 0.8,
 	skyIntensity: 1.0,
 	shadows: true,
 	shadowStrength: 0.45,

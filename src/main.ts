@@ -15,6 +15,7 @@ import {
 	stats,
 	RENDER_MODE,
 	MSAA_MODE,
+	TONEMAP_MODE,
 } from './debug';
 import { greedyMesh } from './greedy-mesh';
 import { FREECAM, physicsTick, createPlayerState } from './movement';
@@ -108,10 +109,28 @@ async function main(): Promise<void> {
 	const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
 	const device = await adapter.requestDevice();
 
+	// The pipeline is linear: textures are created as -srgb (decode on
+	// sample) and rendering goes through an -srgb view of the canvas
+	// (encode on write), so all shader math runs in linear light. WebGPU
+	// forbids configuring a canvas with an -srgb format directly; rendering
+	// through an -srgb view via viewFormats is the spec-blessed route.
+	function srgbVariantOf(format: GPUTextureFormat): GPUTextureFormat {
+		switch (format) {
+			case 'rgba8unorm':
+				return 'rgba8unorm-srgb';
+			case 'bgra8unorm':
+				return 'bgra8unorm-srgb';
+			default:
+				throw new Error(`No sRGB variant for canvas format ${format}`);
+		}
+	}
+	const renderTargetFormat = srgbVariantOf(presentationFormat);
+
 	context.configure({
 		device,
 		format: presentationFormat,
 		alphaMode: 'premultiplied',
+		viewFormats: [renderTargetFormat],
 	});
 
 	const module = device.createShaderModule({
@@ -222,7 +241,7 @@ async function main(): Promise<void> {
 			fragment: {
 				module,
 				entryPoint: 'fs',
-				targets: [{ format: presentationFormat }],
+				targets: [{ format: renderTargetFormat }],
 			},
 			primitive: {
 				cullMode: 'back',
@@ -254,7 +273,7 @@ async function main(): Promise<void> {
 				entryPoint: 'fsBarycentricCoordinateBasedLines',
 				targets: [
 					{
-						format: presentationFormat,
+						format: renderTargetFormat,
 						blend: {
 							color: {
 								srcFactor: 'one',
@@ -298,7 +317,9 @@ async function main(): Promise<void> {
 	const blockTextureArray = device.createTexture({
 		label: 'block texture array',
 		size: [TEXTURE_SIZE, TEXTURE_SIZE, numLayers],
-		format: 'rgba8unorm',
+		// Native -srgb: PNG bytes are sRGB-encoded, so sampling decodes to
+		// linear and mip generation averages in linear light.
+		format: 'rgba8unorm-srgb',
 		mipLevelCount: numMipLevels(TEXTURE_SIZE, TEXTURE_SIZE),
 		usage:
 			GPUTextureUsage.TEXTURE_BINDING |
@@ -347,7 +368,10 @@ async function main(): Promise<void> {
 	// mat4x4f  = 64 bytes (offset 96)  lightViewProjection
 	// f32 x 4  = 16 bytes (offset 160) shadow strength/bias/enabled/normal bias
 	// f32      = 4 bytes  (offset 176) renderMode
-	// Total: 192 bytes (padded to uniform struct alignment)
+	// f32      = 4 bytes  (offset 180) tonemapMode
+	// f32      = 4 bytes  (offset 184) exposure
+	// f32      = 4 bytes  (offset 188) skyIntensity
+	// Total: 192 bytes (buffer exactly full)
 	const uniformBufferSize = 192;
 	const uniformBuffer = device.createBuffer({
 		label: 'uniforms',
@@ -530,7 +554,7 @@ async function main(): Promise<void> {
 	// Initialize skybox
 	const skybox: SkyboxResources = await initSkybox(
 		device,
-		presentationFormat,
+		renderTargetFormat,
 	);
 
 	// Bind group for main shader
@@ -554,7 +578,7 @@ async function main(): Promise<void> {
 	// Entity system (enemies, etc.)
 	const entityRenderer = initEntityRenderer(
 		device,
-		presentationFormat,
+		renderTargetFormat,
 		mainGroup0BGL,
 		bindGroup,
 	);
@@ -661,7 +685,7 @@ async function main(): Promise<void> {
 			msaaColorTexture = device.createTexture({
 				label: 'MSAA color target',
 				size: [width, height],
-				format: presentationFormat,
+				format: renderTargetFormat,
 				sampleCount,
 				usage: GPUTextureUsage.RENDER_ATTACHMENT,
 			});
@@ -847,7 +871,9 @@ async function main(): Promise<void> {
 		if (!canvasTexture) throw new Error('No canvasTexture found!');
 
 		const sampleCount = MSAA_MODE[debuggerParams.msaa];
-		const canvasView = canvasTexture.createView();
+		const canvasView = canvasTexture.createView({
+			format: renderTargetFormat,
+		});
 		ensureDepthTexture(
 			canvasTexture.width,
 			canvasTexture.height,
@@ -923,6 +949,9 @@ async function main(): Promise<void> {
 		uniformValues[42] = debuggerParams.shadows ? 1 : 0;
 		uniformValues[43] = debuggerParams.shadowNormalBias;
 		uniformValues[44] = RENDER_MODE[debuggerParams.renderMode];
+		uniformValues[45] = TONEMAP_MODE[debuggerParams.tonemap];
+		uniformValues[46] = debuggerParams.exposure;
+		uniformValues[47] = debuggerParams.skyIntensity;
 		device.queue.writeBuffer(uniformBuffer, 0, uniformValues);
 
 		const chunkExtent = CHUNK_SIZE * BLOCK_SIZE;
@@ -1078,6 +1107,9 @@ async function main(): Promise<void> {
 				viewMatrix,
 				projection,
 				sampleCount,
+				TONEMAP_MODE[debuggerParams.tonemap],
+				debuggerParams.exposure,
+				debuggerParams.skyIntensity,
 			);
 		}
 

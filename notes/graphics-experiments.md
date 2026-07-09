@@ -23,3 +23,30 @@ Suggested early order:
 2. Try DPR-aware canvas sizing before MSAA.
 3. Add optional MSAA once the canvas sizing path is explicit.
 4. Do the sRGB/linear audit as its own branch because it may require material retuning.
+
+Status (July 2026):
+
+- Done: #1 (sRGB/linear), #2 (DPR sizing), #3 (MSAA toggle).
+- Added: tonemap curve (Off / Reinhard / ACES / AgX / AgX Punchy) with
+  exposure and sky intensity in the debug panel. Tuned defaults (July
+  2026): ACES at exposure 0.7, sky intensity 1.0. AgX Punchy softened to
+  power 1.15 / saturation 1.2. Re-run the curve decision once, after
+  lighting gains real HDR headroom (hemisphere ambient / emissive) — that
+  is the scene AgX is built for. Off is bit-identical to the pre-tonemap
+  pipeline (hardware clamp), so the A/B is fair. Sky intensity treats the
+  LDR-authored skybox as tunable emission and must scale all sky reads
+  (dome, fog, specular) identically. The pinned pow retune below should
+  happen with ACES enabled — tune against the final display transform.
+- The pipeline is now linear-only. It was first built as a Gamma/Linear
+  debug toggle to validate the plumbing and see the genuine differences
+  (fog blending, MSAA resolve, AO gradient shape, specular accumulation —
+  dark marble changed the most); the toggle was then removed because the
+  A/B compares tuned-gamma against untuned-linear and can never show the
+  thing we would ship.
+- PINNED: the shaders carry a perceptual→linear `pow(x, 2.2)` compensation
+  (see `computeTerrainLighting` in `src/shader/voxel.ts` and the entity
+  fragment shader) so brightness constants keep their gamma-era tuned
+  meanings. Address soon — natural moment is the tonemap experiment, which
+  forces a brightness retune anyway. Material `shininess`/`specularStrength`
+  values are the most gamma-tuned numbers left (Phong exponents typically
+  need raising after a linear migration).

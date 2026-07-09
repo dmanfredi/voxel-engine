@@ -85,5 +85,5 @@ blockRegistry.register(DARK_MARBLE, {
 	textureScale: 6,
 	restitution: 0.4,
 	shininess: 5,
-	specularStrength: 0.5,
+	specularStrength: 0.1,
 });

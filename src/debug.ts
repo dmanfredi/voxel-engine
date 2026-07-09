@@ -17,6 +17,16 @@ export const MSAA_MODE = {
 
 export type MSAAMode = keyof typeof MSAA_MODE;
 
+export const TONEMAP_MODE = {
+	Off: 0,
+	Reinhard: 1,
+	ACES: 2,
+	AgX: 3,
+	'AgX Punchy': 4,
+} as const;
+
+export type TonemapMode = keyof typeof TONEMAP_MODE;
+
 export const stats = new Stats();
 stats.showPanel(0); // 0: fps, 1: ms, 2: mb, 3+: custom
 document.body.appendChild(stats.dom);
@@ -34,6 +44,11 @@ export const debuggerParams = {
 	specularStrength: 0,
 	fogStart: 1300,
 	fogEnd: 1400,
+	tonemap: 'ACES' as TonemapMode,
+	// Fitted ACES lifts middle gray (~0.18 → ~0.27); 0.7 re-anchors the
+	// scene's mids to their pre-tonemap brightness, tuned by eye.
+	exposure: 0.7,
+	skyIntensity: 1.0,
 	shadows: true,
 	shadowStrength: 0.45,
 	shadowBias: 0.0,
@@ -144,6 +159,31 @@ export function BuildDebug(render: () => void): void {
 		min: 0,
 		max: 2000,
 		step: 10,
+	});
+
+	const tonemapFolder = pane.addFolder({ title: 'Tonemap' });
+	const tonemapBinding = tonemapFolder.addBinding(debuggerParams, 'tonemap', {
+		label: 'Curve',
+		options: {
+			Off: 'Off',
+			Reinhard: 'Reinhard',
+			ACES: 'ACES',
+			AgX: 'AgX',
+			'AgX Punchy': 'AgX Punchy',
+		},
+	});
+	tonemapBinding.on('change', requestDebugRender);
+	tonemapFolder.addBinding(debuggerParams, 'exposure', {
+		label: 'Exposure',
+		min: 0.1,
+		max: 4,
+		step: 0.05,
+	});
+	tonemapFolder.addBinding(debuggerParams, 'skyIntensity', {
+		label: 'Sky Intensity',
+		min: 0.1,
+		max: 4,
+		step: 0.05,
 	});
 
 	const shadowFolder = pane.addFolder({ title: 'Shadows' });

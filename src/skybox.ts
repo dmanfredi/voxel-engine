@@ -1,5 +1,6 @@
 import { mat4, type Mat4 } from 'wgpu-matrix';
 import { generateMips, numMipLevels } from './mipmap';
+import { buildTonemapWGSL } from './shader/shared';
 import skyPx from '../assets/skybox-sunny/px.png';
 import skyNx from '../assets/skybox-sunny/nx.png';
 import skyPy from '../assets/skybox-sunny/py.png';
@@ -22,8 +23,13 @@ interface TextureOptions {
 }
 
 const SKYBOX_SHADER = /* wgsl */ `
+	${buildTonemapWGSL()}
+
 	struct Uniforms {
 		viewDirectionProjectionInverse: mat4x4f,
+		tonemapMode: f32,
+		exposure: f32,
+		skyIntensity: f32,
 	};
 
 	struct VSOutput {
@@ -49,7 +55,12 @@ const SKYBOX_SHADER = /* wgsl */ `
 
 	@fragment fn fs(vsOut: VSOutput) -> @location(0) vec4f {
 		let t = uni.viewDirectionProjectionInverse * vsOut.pos;
-		return textureSample(ourTexture, ourSampler, normalize(t.xyz / t.w) * vec3f(1, 1, -1));
+		let sky = textureSample(ourTexture, ourSampler, normalize(t.xyz / t.w) * vec3f(1, 1, -1));
+		// The cubemap is LDR-authored art; skyIntensity re-scales it as linear
+		// emission so it survives exposure + tonemap at a tunable brightness.
+		// Must match the skyIntensity applied to fog/specular sky reads.
+		let mapped = applyTonemap(sky.rgb * uni.skyIntensity * uni.exposure, uni.tonemapMode);
+		return vec4f(mapped, 1.0);
 	}
 `;
 
@@ -71,7 +82,9 @@ async function loadCubemapTexture(
 	}
 
 	const texture = device.createTexture({
-		format: 'rgba8unorm',
+		// Native -srgb: PNG bytes are sRGB-encoded, so sampling decodes to
+		// linear and mip generation averages in linear light.
+		format: 'rgba8unorm-srgb',
 		mipLevelCount: options.mips
 			? numMipLevels(source.width, source.height)
 			: 1,
@@ -99,7 +112,7 @@ async function loadCubemapTexture(
 
 export async function initSkybox(
 	device: GPUDevice,
-	presentationFormat: GPUTextureFormat,
+	targetFormat: GPUTextureFormat,
 ): Promise<SkyboxResources> {
 	const module = device.createShaderModule({
 		label: 'skybox shader',
@@ -137,7 +150,7 @@ export async function initSkybox(
 			vertex: { module },
 			fragment: {
 				module,
-				targets: [{ format: presentationFormat }],
+				targets: [{ format: targetFormat }],
 			},
 			depthStencil: {
 				depthWriteEnabled: false,
@@ -160,14 +173,17 @@ export async function initSkybox(
 		mipmapFilter: 'linear',
 	});
 
-	const uniformBufferSize = 16 * 4; // mat4x4
+	// mat4x4 (64) + tonemapMode/exposure/skyIntensity + pad (16) = 80 bytes
+	const uniformBufferSize = 80;
 	const uniformBuffer = device.createBuffer({
 		label: 'skybox uniforms',
 		size: uniformBufferSize,
 		usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 	});
-	const uniformValues = new Float32Array(16);
+	const uniformValues = new Float32Array(uniformBufferSize / 4);
 
+	// Decode on sample, re-encode on write — identity for the sky itself,
+	// but the MSAA resolve and any blending against it happen in linear.
 	const bindGroup = device.createBindGroup({
 		label: 'skybox bind group',
 		layout: bindGroupLayout,
@@ -198,6 +214,9 @@ export function drawSkybox(
 	viewMatrix: Mat4,
 	projectionMatrix: Mat4,
 	sampleCount: number,
+	tonemapMode: number,
+	exposure: number,
+	skyIntensity: number,
 ): void {
 	// Create view matrix with translation removed (rotation only)
 	const viewRotationOnly = mat4.clone(viewMatrix);
@@ -217,6 +236,9 @@ export function drawSkybox(
 
 	// Upload to GPU
 	resources.uniformValues.set(viewDirectionProjectionInverse);
+	resources.uniformValues[16] = tonemapMode;
+	resources.uniformValues[17] = exposure;
+	resources.uniformValues[18] = skyIntensity;
 	device.queue.writeBuffer(
 		resources.uniformBuffer,
 		0,

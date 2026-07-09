@@ -6,12 +6,13 @@
  * Group 1 is per-entity: model matrix + texture layer.
  */
 
-import { buildMaterialLUT } from './shader/shared';
+import { buildMaterialLUT, buildTonemapWGSL } from './shader/shared';
 
 const ENTITY_UNIFORM_SIZE = 80; // mat4x4f(64) + u32 texLayer(4) + f32 texScale(4) + padding(8) = 80
 
 const entityShader = /*wgsl*/ `
 	${buildMaterialLUT()}
+	${buildTonemapWGSL()}
 	const RENDER_MODE_ALBEDO: f32 = 1.0;
 	const RENDER_MODE_LIGHTING: f32 = 2.0;
 	const RENDER_MODE_AO: f32 = 3.0;
@@ -29,6 +30,9 @@ const entityShader = /*wgsl*/ `
 		shadowsEnabled: f32,
 		shadowNormalBias: f32,
 		renderMode: f32,
+		tonemapMode: f32,
+		exposure: f32,
+		skyIntensity: f32,
 	}
 
 	struct EntityUniforms {
@@ -84,15 +88,19 @@ const entityShader = /*wgsl*/ `
 		let n = normalize(inp.normal);
 		let diffuse = max(dot(n, LIGHT_DIR), 0.0);
 		let ambient = 0.5;
-		let brightness = ambient + (1.0 - ambient) * diffuse;
+		// Perceptual→linear compensation (PINNED: retune alongside the
+		// tonemap experiment) — see the matching pow in the voxel shader.
+		let brightness = pow(ambient + (1.0 - ambient) * diffuse, 2.2);
 		if (uni.renderMode == RENDER_MODE_LIGHTING) {
 			return vec4f(vec3f(brightness), 1.0);
 		}
 
-		// Sky-tinted specular (matches voxel shader)
+		// Sky-tinted specular (matches voxel shader, including skyIntensity —
+		// every sky read must scale identically or reflections stop matching
+		// the drawn sky dome)
 		let eyeToSurface = normalize(inp.worldPos - uni.eyePosition);
 		let reflected = reflect(eyeToSurface, n);
-		let skyColor = textureSample(skyTexture, skySampler, reflected * vec3f(1, 1, -1));
+		let skyColor = textureSample(skyTexture, skySampler, reflected * vec3f(1, 1, -1)) * uni.skyIntensity;
 
 		// Per-material reflection params (LUT), additively boosted by global tweakpane values
 		let matShin = MATERIAL_SHININESS[entity.texLayer];
@@ -110,10 +118,11 @@ const entityShader = /*wgsl*/ `
 		// Distance fog matching voxel shader
 		let dist = length(inp.worldPos - uni.eyePosition);
 		let fogFactor = clamp((uni.fogEnd - dist) / (uni.fogEnd - uni.fogStart), 0.0, 1.0);
-		let fogColor = textureSample(skyTexture, skySampler, eyeToSurface * vec3f(1, 1, -1)).rgb;
+		let fogColor = textureSample(skyTexture, skySampler, eyeToSurface * vec3f(1, 1, -1)).rgb * uni.skyIntensity;
 		let fogged = mix(fogColor, final_color, fogFactor);
 
-		return vec4f(fogged, texColor.a);
+		let mapped = applyTonemap(fogged * uni.exposure, uni.tonemapMode);
+		return vec4f(mapped, texColor.a);
 	}
 `;
 
@@ -134,7 +143,7 @@ export interface EntityRenderData {
 
 export function initEntityRenderer(
 	device: GPUDevice,
-	presentationFormat: GPUTextureFormat,
+	targetFormat: GPUTextureFormat,
 	mainGroup0BGL: GPUBindGroupLayout,
 	sharedBindGroup0: GPUBindGroup,
 ): EntityRenderer {
@@ -188,7 +197,7 @@ export function initEntityRenderer(
 			fragment: {
 				module,
 				entryPoint: 'fs',
-				targets: [{ format: presentationFormat }],
+				targets: [{ format: targetFormat }],
 			},
 			primitive: { cullMode: 'back' },
 			depthStencil: {

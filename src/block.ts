@@ -10,10 +10,12 @@ export interface BlockProperties {
 	solid: boolean;
 	textureScale: number;
 	restitution: number;
-	/** Phong exponent for this material (higher = tighter highlight). */
+	/** Sun-glint Blinn-Phong exponent (higher = tighter highlight). */
 	shininess: number;
-	/** Specular highlight intensity multiplier. */
+	/** Sun-glint intensity multiplier. */
 	specularStrength: number;
+	/** 0..1 scale on the Fresnel-weighted sky reflection (0 = matte). */
+	reflectivity: number;
 }
 
 export class BlockRegistry {
@@ -62,6 +64,7 @@ blockRegistry.register(AIR, {
 	restitution: 0,
 	shininess: 0,
 	specularStrength: 0,
+	reflectivity: 0,
 });
 blockRegistry.register(MARBLE, {
 	name: 'marble',
@@ -70,6 +73,7 @@ blockRegistry.register(MARBLE, {
 	restitution: 0.4,
 	shininess: 8,
 	specularStrength: 0.17,
+	reflectivity: 0.2,
 });
 blockRegistry.register(BRICK, {
 	name: 'brick',
@@ -78,6 +82,7 @@ blockRegistry.register(BRICK, {
 	restitution: 0.2,
 	shininess: 20,
 	specularStrength: 0.105,
+	reflectivity: 0,
 });
 blockRegistry.register(DARK_MARBLE, {
 	name: 'darkMarble',
@@ -86,4 +91,5 @@ blockRegistry.register(DARK_MARBLE, {
 	restitution: 0.4,
 	shininess: 5,
 	specularStrength: 0.1,
+	reflectivity: 1.0,
 });

@@ -22,15 +22,18 @@ export function wgslVec3(v: ArrayLike<number>): string {
 export function buildMaterialLUT(): string {
 	const shin: string[] = [];
 	const spec: string[] = [];
+	const refl: string[] = [];
 	for (let id = 0; id < blockRegistry.count; id++) {
 		const props = blockRegistry.get(id);
 		shin.push(f32Literal(props?.shininess ?? 0));
 		spec.push(f32Literal(props?.specularStrength ?? 0));
+		refl.push(f32Literal(props?.reflectivity ?? 0));
 	}
 	const n = String(shin.length);
 	return `
 		const MATERIAL_SHININESS = array<f32, ${n}>(${shin.join(', ')});
 		const MATERIAL_SPEC_STRENGTH = array<f32, ${n}>(${spec.join(', ')});
+		const MATERIAL_REFLECTIVITY = array<f32, ${n}>(${refl.join(', ')});
 	`;
 }
 
@@ -61,6 +64,7 @@ export const SHARED_UNIFORMS_WGSL = /* wgsl */ `
 		specularStrength: f32,
 		fogStart: f32,
 		fogEnd: f32,
+		reflectivity: f32,
 		lightMatrix: mat4x4f,
 		shadowStrength: f32,
 		shadowBias: f32,
@@ -94,6 +98,43 @@ export const GAMMA_WGSL = /* wgsl */ `
 export const SKY_SAMPLE_WGSL = /* wgsl */ `
 	fn sampleSky(t: texture_cube<f32>, s: sampler, dir: vec3f, intensity: f32) -> vec3f {
 		return textureSample(t, s, dir * vec3f(1, 1, -1)).rgb * intensity;
+	}
+`;
+
+/**
+ * Split specular model: a Blinn-Phong sun glint plus a Fresnel-weighted
+ * mirror reflection of the sky. Kept separate because they answer different
+ * questions — the glint is "am I near the sun's mirror direction?" (gate it
+ * by shadow visibility at the call site: no sun, no glint) while the
+ * reflection is "what does the sky look like in this surface?" and exists
+ * from every view direction, shadowed or not — the sky stays visible from
+ * inside a sun shadow. Multiplying the two was the old hack that made
+ * reflections vanish whenever the view left the sun's highlight cone.
+ *
+ * Interpolate after SKY_SAMPLE_WGSL and SUN_DIRECTION_WGSL.
+ * PINNED: roughness via cubemap mip — sample the reflection at a
+ * material-driven LOD for satin vs polished (experiment #7).
+ */
+export const SPECULAR_WGSL = /* wgsl */ `
+	// Dielectric head-on reflectance (~4% for stone/glass). Materials scale
+	// the whole curve by their reflectivity instead of owning an F0, so one
+	// 0..1 knob spans matte -> polished.
+	const FRESNEL_F0: f32 = 0.04;
+
+	fn fresnelSchlick(NdotV: f32) -> f32 {
+		let m = 1.0 - NdotV;
+		let m2 = m * m;
+		return FRESNEL_F0 + (1.0 - FRESNEL_F0) * m2 * m2 * m;
+	}
+
+	fn sunGlint(normal: vec3f, viewDir: vec3f, exponent: f32) -> f32 {
+		let halfway = normalize(LIGHT_DIR + viewDir);
+		return pow(max(dot(normal, halfway), 0.0), exponent);
+	}
+
+	fn skyReflection(t: texture_cube<f32>, s: sampler, normal: vec3f, viewDir: vec3f, intensity: f32) -> vec3f {
+		let mirrored = reflect(-viewDir, normal);
+		return sampleSky(t, s, mirrored, intensity) * fresnelSchlick(max(dot(normal, viewDir), 0.0));
 	}
 `;
 

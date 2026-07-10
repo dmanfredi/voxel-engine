@@ -356,6 +356,7 @@ async function main(): Promise<void> {
 	// f32      = 4 bytes  (offset 80)  specularStrength
 	// f32      = 4 bytes  (offset 84)  fogStart
 	// f32      = 4 bytes  (offset 88)  fogEnd
+	// f32      = 4 bytes  (offset 92)  reflectivity
 	// mat4x4f  = 64 bytes (offset 96)  lightViewProjection
 	// f32 x 4  = 16 bytes (offset 160) shadow strength/bias/enabled/normal bias
 	// f32      = 4 bytes  (offset 176) renderMode
@@ -974,6 +975,7 @@ async function main(): Promise<void> {
 		uniformValues[20] = debuggerParams.specularStrength; // specularStrength
 		uniformValues[21] = debuggerParams.fogStart; // fogStart
 		uniformValues[22] = debuggerParams.fogEnd; // fogEnd
+		uniformValues[23] = debuggerParams.reflectivity; // reflectivity
 		uniformValues.set(lightViewProjectionMatrix, 24);
 		uniformValues[40] = debuggerParams.shadowStrength;
 		uniformValues[41] = debuggerParams.shadowBias;

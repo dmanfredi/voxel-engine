@@ -6,6 +6,7 @@ import {
 	RENDER_MODE_WGSL,
 	SHARED_UNIFORMS_WGSL,
 	SKY_SAMPLE_WGSL,
+	SPECULAR_WGSL,
 	TONEMAP_WGSL,
 } from './shared';
 
@@ -18,6 +19,7 @@ const VoxelShader = /*wgsl*/ `
 	${GAMMA_WGSL}
 	${RENDER_MODE_WGSL}
 	${SUN_DIRECTION_WGSL}
+	${SPECULAR_WGSL}
 	const SHADOW_TEXEL_SIZE = vec2f(${SHADOW_TEXEL_SIZE}, ${SHADOW_TEXEL_SIZE});
 	const AO_SHADOW_COLOR: vec3f = vec3f(0.1, 0.1, 0.1);
 	const AO_SHADOW_COLOR_LINEAR: vec3f = pow(AO_SHADOW_COLOR, vec3f(GAMMA));
@@ -46,7 +48,6 @@ const VoxelShader = /*wgsl*/ `
 		shadedBrightness: f32,
 		aoLighting: vec3f,
 		specular: vec3f,
-		directLight: f32,
 		fogFactor: f32,
 		fogColor: vec3f,
 	}
@@ -144,20 +145,18 @@ const VoxelShader = /*wgsl*/ `
 		return clamp((uni.fogEnd - dist) / (uni.fogEnd - uni.fogStart), 0.0, 1.0);
 	}
 
-	fn terrainSpecular(vsOut: VSOutput, normal: vec3f) -> vec3f {
-		let eyeToSurface = normalize(vsOut.worldPos - uni.eyePosition);
-		let reflected = reflect(eyeToSurface, normal);
-		let skyColor = sampleSky(skyTexture, skySampler, reflected, uni.skyIntensity);
+	fn terrainSpecular(vsOut: VSOutput, normal: vec3f, directLight: f32) -> vec3f {
+		let viewDir = normalize(uni.eyePosition - vsOut.worldPos);
+		// Tweakpane values boost the per-material numbers additively; clamps
+		// keep the negative slider ranges from flipping pow/light signs.
+		let glintExponent = max(MATERIAL_SHININESS[vsOut.texLayer] + uni.shininess, 1.0);
+		let glintStrength = max(MATERIAL_SPEC_STRENGTH[vsOut.texLayer] + uni.specularStrength, 0.0);
+		let reflectivity = clamp(MATERIAL_REFLECTIVITY[vsOut.texLayer] + uni.reflectivity, 0.0, 1.0);
 
-		let matShin = MATERIAL_SHININESS[vsOut.texLayer];
-		let matSpec = MATERIAL_SPEC_STRENGTH[vsOut.texLayer];
-		let effShin = matShin + uni.shininess;
-		let effSpec = matSpec + uni.specularStrength;
-
-		let V = normalize(uni.eyePosition - vsOut.worldPos);
-		let H = normalize(LIGHT_DIR + V);
-		let spec = pow(max(dot(normal, H), 0.0), effShin);
-		return effSpec * spec * skyColor;
+		let glint = sunGlint(normal, viewDir, glintExponent) * glintStrength * directLight;
+		let reflection = skyReflection(skyTexture, skySampler, normal, viewDir, uni.skyIntensity) * reflectivity;
+		// AO gates both terms: crevices see less sun and less sky.
+		return (vec3f(glint) + reflection) * vsOut.ao;
 	}
 
 	fn computeTerrainLighting(vsOut: VSOutput, normal: vec3f) -> TerrainLighting {
@@ -184,8 +183,7 @@ const VoxelShader = /*wgsl*/ `
 		return TerrainLighting(
 			shadedBrightness,
 			aoLighting,
-			terrainSpecular(vsOut, normal),
-			directLight,
+			terrainSpecular(vsOut, normal, directLight),
 			fogFactor,
 			fogColor,
 		);
@@ -207,7 +205,7 @@ const VoxelShader = /*wgsl*/ `
 		}
 
 		let base = mix(AO_SHADOW_COLOR_LINEAR, texColor.rgb * lighting.shadedBrightness, vsOut.ao);
-		let final_color = base + lighting.specular * lighting.directLight;
+		let final_color = base + lighting.specular;
 		let fogged = mix(lighting.fogColor, final_color, lighting.fogFactor);
 		let mapped = applyTonemap(fogged, uni.exposure, uni.tonemapMode);
 		return vec4f(mapped, texColor.a);

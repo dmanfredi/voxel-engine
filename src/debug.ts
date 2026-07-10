@@ -14,9 +14,10 @@ export const debuggerParams = {
 	vertices: 0,
 	targetBlock: 'none',
 	playerPos: '0, 0, 0',
-	// Additive boost on top of per-material values from BlockRegistry
+	// Additive boosts on top of per-material values from BlockRegistry
 	shininess: 0,
 	specularStrength: 0,
+	reflectivity: 0,
 	fogStart: 1300,
 	fogEnd: 1400,
 	tonemap: 'ACES' as TonemapMode,
@@ -87,7 +88,13 @@ export function BuildDebug(): void {
 		step: 1,
 	});
 	reflFolder.addBinding(debuggerParams, 'specularStrength', {
-		label: 'Spec Strength',
+		label: 'Glint Strength',
+		min: -1,
+		max: 1,
+		step: 0.05,
+	});
+	reflFolder.addBinding(debuggerParams, 'reflectivity', {
+		label: 'Reflectivity',
 		min: -1,
 		max: 1,
 		step: 0.05,

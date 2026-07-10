@@ -12,6 +12,7 @@ import {
 	RENDER_MODE_WGSL,
 	SHARED_UNIFORMS_WGSL,
 	SKY_SAMPLE_WGSL,
+	SPECULAR_WGSL,
 	TONEMAP_WGSL,
 } from './shader/shared';
 import { SUN_DIRECTION_WGSL } from './lighting';
@@ -26,6 +27,7 @@ const entityShader = /*wgsl*/ `
 	${GAMMA_WGSL}
 	${RENDER_MODE_WGSL}
 	${SUN_DIRECTION_WGSL}
+	${SPECULAR_WGSL}
 
 	${SHARED_UNIFORMS_WGSL}
 
@@ -86,28 +88,23 @@ const entityShader = /*wgsl*/ `
 			return vec4f(vec3f(brightness), 1.0);
 		}
 
-		// Sky-tinted specular (matches voxel shader)
-		let eyeToSurface = normalize(inp.worldPos - uni.eyePosition);
-		let reflected = reflect(eyeToSurface, n);
-		let skyColor = sampleSky(skyTexture, skySampler, reflected, uni.skyIntensity);
-
-		// Per-material reflection params (LUT), additively boosted by global tweakpane values
-		let matShin = MATERIAL_SHININESS[entity.texLayer];
-		let matSpec = MATERIAL_SPEC_STRENGTH[entity.texLayer];
-		let effShin = matShin + uni.shininess;
-		let effSpec = matSpec + uni.specularStrength;
-
-		let V = normalize(uni.eyePosition - inp.worldPos);
-		let H = normalize(LIGHT_DIR + V);
-		let spec = pow(max(dot(n, H), 0.0), effShin);
-		let specular = effSpec * spec * skyColor;
+		// Split specular matching the voxel shader: white sun glint +
+		// Fresnel-weighted sky mirror. Entities don't sample the shadow map,
+		// so the glint goes ungated by shadow.
+		let viewDir = normalize(uni.eyePosition - inp.worldPos);
+		let glintExponent = max(MATERIAL_SHININESS[entity.texLayer] + uni.shininess, 1.0);
+		let glintStrength = max(MATERIAL_SPEC_STRENGTH[entity.texLayer] + uni.specularStrength, 0.0);
+		let reflectivity = clamp(MATERIAL_REFLECTIVITY[entity.texLayer] + uni.reflectivity, 0.0, 1.0);
+		let glint = sunGlint(n, viewDir, glintExponent) * glintStrength;
+		let reflection = skyReflection(skyTexture, skySampler, n, viewDir, uni.skyIntensity) * reflectivity;
+		let specular = vec3f(glint) + reflection;
 
 		let final_color = texColor.rgb * brightness + specular;
 
 		// Distance fog matching voxel shader
 		let dist = length(inp.worldPos - uni.eyePosition);
 		let fogFactor = clamp((uni.fogEnd - dist) / (uni.fogEnd - uni.fogStart), 0.0, 1.0);
-		let fogColor = sampleSky(skyTexture, skySampler, eyeToSurface, uni.skyIntensity);
+		let fogColor = sampleSky(skyTexture, skySampler, -viewDir, uni.skyIntensity);
 		let fogged = mix(fogColor, final_color, fogFactor);
 
 		let mapped = applyTonemap(fogged, uni.exposure, uni.tonemapMode);

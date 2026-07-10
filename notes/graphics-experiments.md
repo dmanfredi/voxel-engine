@@ -43,6 +43,21 @@ Status (July 2026):
   dark marble changed the most); the toggle was then removed because the
   A/B compares tuned-gamma against untuned-linear and can never show the
   thing we would ship.
+- Specular split + Fresnel (July 2026): the old sky-tinted Blinn-Phong hack
+  multiplied the sun-glint lobe into the sky reflection, so the mirror look
+  vanished whenever the view left the sun's highlight cone (most visible as
+  dark marble losing all shadow contrast from sun-averted views). Specular
+  is now two terms (`SPECULAR_WGSL` in `src/shader/shared.ts`): a white sun
+  glint (Blinn-Phong, shadow-gated) plus a Fresnel-weighted sky mirror
+  (fixed F0 = 0.04 Schlick, present from every view direction, not
+  shadow-gated, AO-gated on terrain). New per-material `reflectivity`
+  (0..1) scales the Fresnel curve; global additive boost in the Specular
+  debug folder. Material glint values kept their old numbers and need a
+  re-tune by eye against the new model.
+- PINNED: roughness-aware reflections (#7) — sample the sky mirror at a
+  material-driven cubemap mip (`textureSampleLevel`) for satin vs polished.
+- PINNED: hemisphere ambient (#4) — the diffuse twin of the sky-mirror
+  term; next natural lighting experiment after the specular re-tune.
 - PINNED: the shaders carry a perceptual→linear `pow(x, 2.2)` compensation
   (see `computeTerrainLighting` in `src/shader/voxel.ts` and the entity
   fragment shader) so brightness constants keep their gamma-era tuned

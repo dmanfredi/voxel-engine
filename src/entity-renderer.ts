@@ -95,8 +95,9 @@ const entityShader = /*wgsl*/ `
 		let glintExponent = max(MATERIAL_SHININESS[entity.texLayer] + uni.shininess, 1.0);
 		let glintStrength = max(MATERIAL_SPEC_STRENGTH[entity.texLayer] + uni.specularStrength, 0.0);
 		let reflectivity = clamp(MATERIAL_REFLECTIVITY[entity.texLayer] + uni.reflectivity, 0.0, 1.0);
+		let roughness = clamp(MATERIAL_ROUGHNESS[entity.texLayer] + uni.roughness, 0.0, 1.0);
 		let glint = sunGlint(n, viewDir, glintExponent) * glintStrength;
-		let reflection = skyReflection(skyTexture, skySampler, n, viewDir, uni.skyIntensity) * reflectivity;
+		let reflection = skyReflection(skyTexture, skySampler, n, viewDir, uni.skyIntensity, roughness) * reflectivity;
 		let specular = vec3f(glint) + reflection;
 
 		let final_color = texColor.rgb * brightness + specular;

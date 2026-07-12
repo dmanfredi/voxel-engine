@@ -363,9 +363,10 @@ async function main(): Promise<void> {
 	// f32      = 4 bytes  (offset 180) tonemapMode
 	// f32      = 4 bytes  (offset 184) exposure
 	// f32      = 4 bytes  (offset 188) skyIntensity
-	// Total: 192 bytes (buffer exactly full)
+	// f32      = 4 bytes  (offset 192) roughness
+	// Total: 208 bytes (struct rounds up to 16-byte alignment; 12B tail pad)
 	// Must match SHARED_UNIFORMS_WGSL in shader/shared.ts.
-	const uniformBufferSize = 192;
+	const uniformBufferSize = 208;
 	const uniformBuffer = device.createBuffer({
 		label: 'uniforms',
 		size: uniformBufferSize,
@@ -985,6 +986,7 @@ async function main(): Promise<void> {
 		uniformValues[45] = TONEMAP_MODE[debuggerParams.tonemap];
 		uniformValues[46] = debuggerParams.exposure;
 		uniformValues[47] = debuggerParams.skyIntensity;
+		uniformValues[48] = debuggerParams.roughness;
 		device.queue.writeBuffer(uniformBuffer, 0, uniformValues);
 
 		// Compute and upload per-chunk wrap offsets, shadow caster fade, and

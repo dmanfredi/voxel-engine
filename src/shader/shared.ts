@@ -23,17 +23,20 @@ export function buildMaterialLUT(): string {
 	const shin: string[] = [];
 	const spec: string[] = [];
 	const refl: string[] = [];
+	const rough: string[] = [];
 	for (let id = 0; id < blockRegistry.count; id++) {
 		const props = blockRegistry.get(id);
 		shin.push(f32Literal(props?.shininess ?? 0));
 		spec.push(f32Literal(props?.specularStrength ?? 0));
 		refl.push(f32Literal(props?.reflectivity ?? 0));
+		rough.push(f32Literal(props?.roughness ?? 0));
 	}
 	const n = String(shin.length);
 	return `
 		const MATERIAL_SHININESS = array<f32, ${n}>(${shin.join(', ')});
 		const MATERIAL_SPEC_STRENGTH = array<f32, ${n}>(${spec.join(', ')});
 		const MATERIAL_REFLECTIVITY = array<f32, ${n}>(${refl.join(', ')});
+		const MATERIAL_ROUGHNESS = array<f32, ${n}>(${rough.join(', ')});
 	`;
 }
 
@@ -74,6 +77,7 @@ export const SHARED_UNIFORMS_WGSL = /* wgsl */ `
 		tonemapMode: f32,
 		exposure: f32,
 		skyIntensity: f32,
+		roughness: f32,
 	}
 `;
 
@@ -99,6 +103,12 @@ export const SKY_SAMPLE_WGSL = /* wgsl */ `
 	fn sampleSky(t: texture_cube<f32>, s: sampler, dir: vec3f, intensity: f32) -> vec3f {
 		return textureSample(t, s, dir * vec3f(1, 1, -1)).rgb * intensity;
 	}
+
+	// Explicit-LOD variant for reads that pick their own mip (roughness
+	// blur). Same emission scaling and z-flip contract as sampleSky.
+	fn sampleSkyLevel(t: texture_cube<f32>, s: sampler, dir: vec3f, intensity: f32, lod: f32) -> vec3f {
+		return textureSampleLevel(t, s, dir * vec3f(1, 1, -1), lod).rgb * intensity;
+	}
 `;
 
 /**
@@ -112,8 +122,6 @@ export const SKY_SAMPLE_WGSL = /* wgsl */ `
  * reflections vanish whenever the view left the sun's highlight cone.
  *
  * Interpolate after SKY_SAMPLE_WGSL and SUN_DIRECTION_WGSL.
- * PINNED: roughness via cubemap mip — sample the reflection at a
- * material-driven LOD for satin vs polished (experiment #7).
  */
 export const SPECULAR_WGSL = /* wgsl */ `
 	// Dielectric head-on reflectance (~4% for stone/glass). Materials scale
@@ -132,9 +140,14 @@ export const SPECULAR_WGSL = /* wgsl */ `
 		return pow(max(dot(normal, halfway), 0.0), exponent);
 	}
 
-	fn skyReflection(t: texture_cube<f32>, s: sampler, normal: vec3f, viewDir: vec3f, intensity: f32) -> vec3f {
+	// Roughness maps linearly onto the cubemap mip chain: 0 = mip 0
+	// (mirror), 1 = last mip (whole-sky average, the diffuse limit). Box
+	// mips are not GGX-prefiltered — this is a look, not a simulation; the
+	// linear mapping is the tuning surface if mid-roughness reads wrong.
+	fn skyReflection(t: texture_cube<f32>, s: sampler, normal: vec3f, viewDir: vec3f, intensity: f32, roughness: f32) -> vec3f {
 		let mirrored = reflect(-viewDir, normal);
-		return sampleSky(t, s, mirrored, intensity) * fresnelSchlick(max(dot(normal, viewDir), 0.0));
+		let lod = roughness * f32(textureNumLevels(t) - 1u);
+		return sampleSkyLevel(t, s, mirrored, intensity, lod) * fresnelSchlick(max(dot(normal, viewDir), 0.0));
 	}
 `;
 

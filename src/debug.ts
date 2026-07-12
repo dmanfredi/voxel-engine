@@ -18,6 +18,7 @@ export const debuggerParams = {
 	shininess: 0,
 	specularStrength: 0,
 	reflectivity: 0,
+	roughness: 0,
 	fogStart: 1300,
 	fogEnd: 1400,
 	tonemap: 'ACES' as TonemapMode,
@@ -95,6 +96,12 @@ export function BuildDebug(): void {
 	});
 	reflFolder.addBinding(debuggerParams, 'reflectivity', {
 		label: 'Reflectivity',
+		min: -1,
+		max: 1,
+		step: 0.01,
+	});
+	reflFolder.addBinding(debuggerParams, 'roughness', {
+		label: 'Roughness',
 		min: -1,
 		max: 1,
 		step: 0.01,

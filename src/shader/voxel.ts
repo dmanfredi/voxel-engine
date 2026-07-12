@@ -152,9 +152,10 @@ const VoxelShader = /*wgsl*/ `
 		let glintExponent = max(MATERIAL_SHININESS[vsOut.texLayer] + uni.shininess, 1.0);
 		let glintStrength = max(MATERIAL_SPEC_STRENGTH[vsOut.texLayer] + uni.specularStrength, 0.0);
 		let reflectivity = clamp(MATERIAL_REFLECTIVITY[vsOut.texLayer] + uni.reflectivity, 0.0, 1.0);
+		let roughness = clamp(MATERIAL_ROUGHNESS[vsOut.texLayer] + uni.roughness, 0.0, 1.0);
 
 		let glint = sunGlint(normal, viewDir, glintExponent) * glintStrength * directLight;
-		let reflection = skyReflection(skyTexture, skySampler, normal, viewDir, uni.skyIntensity) * reflectivity;
+		let reflection = skyReflection(skyTexture, skySampler, normal, viewDir, uni.skyIntensity, roughness) * reflectivity;
 		// AO gates both terms: crevices see less sun and less sky.
 		return (vec3f(glint) + reflection) * vsOut.ao;
 	}

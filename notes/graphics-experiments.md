@@ -54,10 +54,18 @@ Status (July 2026):
   (0..1) scales the Fresnel curve; global additive boost in the Specular
   debug folder. Material glint values kept their old numbers and need a
   re-tune by eye against the new model.
-- PINNED: roughness-aware reflections (#7) — sample the sky mirror at a
-  material-driven cubemap mip (`textureSampleLevel`) for satin vs polished.
+- Roughness-aware reflections (#7, July 2026): the sky mirror samples the
+  cubemap at `lod = roughness * maxMip` (`skyReflection` in
+  `src/shader/shared.ts`). Per-material `roughness` 0..1 in block.ts
+  (dark marble 0.05, marble 0.3, brick 0.9) + additive debug boost. Box
+  mips, not GGX-prefiltered — a look, not a simulation; the linear
+  roughness→mip mapping is the knob if mid-roughness reads wrong. At max
+  roughness the mirror converges toward the whole-sky average — the same
+  quantity hemisphere ambient wants, from the other end.
 - PINNED: hemisphere ambient (#4) — the diffuse twin of the sky-mirror
-  term; next natural lighting experiment after the specular re-tune.
+  term. Do it bundled with the pow retune and the AO-on-ambient rework
+  (#5): all three rewrite the same brightness constants, so the scene
+  only gets retuned once.
 - PINNED: the shaders carry a perceptual→linear `pow(x, 2.2)` compensation
   (see `computeTerrainLighting` in `src/shader/voxel.ts` and the entity
   fragment shader) so brightness constants keep their gamma-era tuned

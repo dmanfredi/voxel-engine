@@ -16,6 +16,8 @@ export interface BlockProperties {
 	specularStrength: number;
 	/** 0..1 scale on the Fresnel-weighted sky reflection (0 = matte). */
 	reflectivity: number;
+	/** 0..1 blur of the sky reflection (0 = mirror, 1 = fully diffuse). */
+	roughness: number;
 }
 
 export class BlockRegistry {
@@ -65,6 +67,7 @@ blockRegistry.register(AIR, {
 	shininess: 0,
 	specularStrength: 0,
 	reflectivity: 0,
+	roughness: 0,
 });
 blockRegistry.register(MARBLE, {
 	name: 'marble',
@@ -74,6 +77,7 @@ blockRegistry.register(MARBLE, {
 	shininess: 8,
 	specularStrength: 0.17,
 	reflectivity: 0.3,
+	roughness: 0.3,
 });
 blockRegistry.register(BRICK, {
 	name: 'brick',
@@ -83,6 +87,7 @@ blockRegistry.register(BRICK, {
 	shininess: 20,
 	specularStrength: 0.105,
 	reflectivity: 0,
+	roughness: 0.9,
 });
 blockRegistry.register(DARK_MARBLE, {
 	name: 'darkMarble',
@@ -92,4 +97,5 @@ blockRegistry.register(DARK_MARBLE, {
 	shininess: 3,
 	specularStrength: 0.05,
 	reflectivity: 0.4,
+	roughness: 0.15,
 });

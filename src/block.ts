@@ -73,7 +73,7 @@ blockRegistry.register(MARBLE, {
 	restitution: 0.4,
 	shininess: 8,
 	specularStrength: 0.17,
-	reflectivity: 0.2,
+	reflectivity: 0.3,
 });
 blockRegistry.register(BRICK, {
 	name: 'brick',
@@ -89,7 +89,7 @@ blockRegistry.register(DARK_MARBLE, {
 	solid: true,
 	textureScale: 6,
 	restitution: 0.4,
-	shininess: 5,
-	specularStrength: 0.1,
-	reflectivity: 1.0,
+	shininess: 3,
+	specularStrength: 0.05,
+	reflectivity: 0.4,
 });

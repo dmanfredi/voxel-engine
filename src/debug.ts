@@ -8,7 +8,7 @@ document.body.appendChild(stats.dom);
 
 export const debuggerParams = {
 	renderMode: 'Final' as RenderMode,
-	msaa: 'Off' as MSAAMode,
+	msaa: '4x' as MSAAMode,
 	wireframe: false,
 	freecam: false,
 	vertices: 0,
@@ -91,13 +91,13 @@ export function BuildDebug(): void {
 		label: 'Glint Strength',
 		min: -1,
 		max: 1,
-		step: 0.05,
+		step: 0.01,
 	});
 	reflFolder.addBinding(debuggerParams, 'reflectivity', {
 		label: 'Reflectivity',
 		min: -1,
 		max: 1,
-		step: 0.05,
+		step: 0.01,
 	});
 
 	const hideStyle = document.createElement('style');

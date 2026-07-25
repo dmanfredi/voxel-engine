@@ -62,14 +62,34 @@ Status (July 2026):
   roughness→mip mapping is the knob if mid-roughness reads wrong. At max
   roughness the mirror converges toward the whole-sky average — the same
   quantity hemisphere ambient wants, from the other end.
-- PINNED: hemisphere ambient (#4) — the diffuse twin of the sky-mirror
-  term. Do it bundled with the pow retune and the AO-on-ambient rework
-  (#5): all three rewrite the same brightness constants, so the scene
-  only gets retuned once.
-- PINNED: the shaders carry a perceptual→linear `pow(x, 2.2)` compensation
-  (see `computeTerrainLighting` in `src/shader/voxel.ts` and the entity
-  fragment shader) so brightness constants keep their gamma-era tuned
-  meanings. Address soon — natural moment is the tonemap experiment, which
-  forces a brightness retune anyway. Material `shininess`/`specularStrength`
-  values are the most gamma-tuned numbers left (Phong exponents typically
-  need raising after a linear migration).
+- Terrain lighting rework (#4 + #5 + pow retune, July 2026): landed as
+  the ambient/sun/face-table model after a full hemisphere-lighting
+  detour. Hemisphere ambient (`mix(ground, sky, n.y*0.5+0.5)` + real
+  `NdotL` sun) was built first — including cubemap-derived colors and a
+  circumsolar azimuth tilt — and abandoned: on a 6-normal voxel world
+  its physically-parameterized knobs are all coupled (every slider moves
+  every face), which turned tuning into whack-a-mole, while its walls
+  were *less* distinct than the old hand table (sun-averted corners
+  rendered as one flat plane). What survived the detour: linear-space
+  authoring (both pows and `GAMMA` are gone from the terrain shader),
+  AO-on-ambient instead of the fixed `AO_SHADOW_COLOR` mix (deleted),
+  shadow gating only the sun term, and color as a first-class control.
+  The model (`computeTerrainLighting` in `src/shader/voxel.ts`):
+  `ambient = ambientColor·ambientLevel·AO`; `direct = sunColor·
+  sunIntensity·faceTable[normal]·directLight·mix(1, AO, aoDirect)`.
+  The face table is six hand-authored values (Lighting debug folder),
+  evaluated via squared-normal blending (`FACE_LIGHT_WGSL` — HL2
+  "ambient cube" basis): exact table lookup on axis-aligned voxel
+  faces, smooth blend on arbitrary normals so deferred entity adoption
+  (resting cubes matching terrain exactly, tipping without popping)
+  needs no new machinery. Defaults reproduce the old gamma-era look
+  (verified by A/B screenshot); east/north get small nonzero sun
+  (0.12/0.06) — bounce light pretending to be sun, so sun-averted
+  corners read. Known trade: face differences live in the shadow-gated
+  term, so deep shadow (strength → 1) flattens them; AO + texture carry
+  it there, same as Minecraft.
+- Entity lighting is still the gamma-era model (`pow(x, GAMMA)` +
+  `ambient 0.5 + 0.5·NdotL`) — deferred deliberately; `GAMMA_WGSL`
+  survives only for it. When entities adopt the terrain model, use
+  `faceLight` + the same ambient/sun colors, and delete GAMMA. Material
+  `shininess`/`specularStrength` remain gamma-tuned numbers.

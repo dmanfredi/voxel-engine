@@ -78,19 +78,40 @@ export const SHARED_UNIFORMS_WGSL = /* wgsl */ `
 		exposure: f32,
 		skyIntensity: f32,
 		roughness: f32,
+		ambientLight: vec3f,
+		aoDirect: f32,
+		sunLight: vec3f,
+		faceTablePos: vec3f,
+		faceTableNeg: vec3f,
 	}
 `;
 
 /**
- * Perceptual→linear compensation exponent (PINNED: retune alongside the
- * tonemap). Brightness constants in the voxel and entity shaders predate the
- * linear pipeline and are tuned in gamma-era units, where a flat surface
- * displayed as linear_tex * brightness^2.2; pow(x, GAMMA) keeps those values
- * meaning what they meant. Retuning the constants in linear units deletes
- * this and the pows that use it.
+ * Perceptual→linear compensation exponent. Only the entity shader still uses
+ * this (entity lighting rework is deferred): its ambient/diffuse constants
+ * are tuned in gamma-era units, and pow(x, GAMMA) keeps them meaning what
+ * they meant. The terrain shader now authors linear values directly (the
+ * ambient/sun/face-table model) — retuning entities the same way deletes this.
  */
 export const GAMMA_WGSL = /* wgsl */ `
 	const GAMMA: f32 = 2.2;
+`;
+
+/**
+ * Hand-authored directional light: one value per axis direction, blended by
+ * squared-normal weights (Valve's HL2 "ambient cube" basis — the weights sum
+ * to 1 for unit normals). On axis-aligned voxel faces this returns the exact
+ * table entry, so it is a per-face lookup with no branches; on arbitrary
+ * normals (entities — deferred) it blends smoothly, meaning a resting cube
+ * would match adjacent terrain bit-for-bit and a tipping one wouldn't pop.
+ * tablePos = (+X east, +Y top, +Z south); tableNeg = (-X west, -Y bottom,
+ * -Z north).
+ */
+export const FACE_LIGHT_WGSL = /* wgsl */ `
+	fn faceLight(normal: vec3f, tablePos: vec3f, tableNeg: vec3f) -> f32 {
+		let w = normal * normal;
+		return dot(w, select(tableNeg, tablePos, normal >= vec3f(0.0)));
+	}
 `;
 
 /**

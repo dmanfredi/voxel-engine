@@ -364,9 +364,15 @@ async function main(): Promise<void> {
 	// f32      = 4 bytes  (offset 184) exposure
 	// f32      = 4 bytes  (offset 188) skyIntensity
 	// f32      = 4 bytes  (offset 192) roughness
-	// Total: 208 bytes (struct rounds up to 16-byte alignment; 12B tail pad)
+	// (12 bytes pad — vec3f below needs 16-byte alignment)
+	// vec3f    = 12 bytes (offset 208) ambientLight (ambientColor × ambientLevel)
+	// f32      = 4 bytes  (offset 220) aoDirect
+	// vec3f    = 12 bytes (offset 224) sunLight (sunColor × sunIntensity)
+	// vec3f    = 12 bytes (offset 240) faceTablePos (+X east, +Y top, +Z south)
+	// vec3f    = 12 bytes (offset 256) faceTableNeg (−X west, −Y bottom, −Z north)
+	// Total: 272 bytes (struct rounds up to 16-byte alignment; 4B tail pad)
 	// Must match SHARED_UNIFORMS_WGSL in shader/shared.ts.
-	const uniformBufferSize = 208;
+	const uniformBufferSize = 272;
 	const uniformBuffer = device.createBuffer({
 		label: 'uniforms',
 		size: uniformBufferSize,
@@ -987,6 +993,25 @@ async function main(): Promise<void> {
 		uniformValues[46] = debuggerParams.exposure;
 		uniformValues[47] = debuggerParams.skyIntensity;
 		uniformValues[48] = debuggerParams.roughness;
+		uniformValues[52] =
+			debuggerParams.ambientColor.r * debuggerParams.ambientLevel;
+		uniformValues[53] =
+			debuggerParams.ambientColor.g * debuggerParams.ambientLevel;
+		uniformValues[54] =
+			debuggerParams.ambientColor.b * debuggerParams.ambientLevel;
+		uniformValues[55] = debuggerParams.aoDirect;
+		uniformValues[56] =
+			debuggerParams.sunColor.r * debuggerParams.sunIntensity;
+		uniformValues[57] =
+			debuggerParams.sunColor.g * debuggerParams.sunIntensity;
+		uniformValues[58] =
+			debuggerParams.sunColor.b * debuggerParams.sunIntensity;
+		uniformValues[60] = debuggerParams.faceEast;
+		uniformValues[61] = debuggerParams.faceTop;
+		uniformValues[62] = debuggerParams.faceSouth;
+		uniformValues[64] = debuggerParams.faceWest;
+		uniformValues[65] = debuggerParams.faceBottom;
+		uniformValues[66] = debuggerParams.faceNorth;
 		device.queue.writeBuffer(uniformBuffer, 0, uniformValues);
 
 		// Compute and upload per-chunk wrap offsets, shadow caster fade, and

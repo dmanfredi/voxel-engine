@@ -2,7 +2,7 @@ import { SUN_DIRECTION_WGSL } from '../lighting';
 import { SHADOW_MAP_SIZE } from '../shadow';
 import {
 	buildMaterialLUT,
-	GAMMA_WGSL,
+	FACE_LIGHT_WGSL,
 	RENDER_MODE_WGSL,
 	SHARED_UNIFORMS_WGSL,
 	SKY_SAMPLE_WGSL,
@@ -16,13 +16,11 @@ const VoxelShader = /*wgsl*/ `
 	${buildMaterialLUT()}
 	${TONEMAP_WGSL}
 	${SKY_SAMPLE_WGSL}
-	${GAMMA_WGSL}
+	${FACE_LIGHT_WGSL}
 	${RENDER_MODE_WGSL}
 	${SUN_DIRECTION_WGSL}
 	${SPECULAR_WGSL}
 	const SHADOW_TEXEL_SIZE = vec2f(${SHADOW_TEXEL_SIZE}, ${SHADOW_TEXEL_SIZE});
-	const AO_SHADOW_COLOR: vec3f = vec3f(0.1, 0.1, 0.1);
-	const AO_SHADOW_COLOR_LINEAR: vec3f = pow(AO_SHADOW_COLOR, vec3f(GAMMA));
 
 	${SHARED_UNIFORMS_WGSL}
 
@@ -45,8 +43,7 @@ const VoxelShader = /*wgsl*/ `
 	}
 
 	struct TerrainLighting {
-		shadedBrightness: f32,
-		aoLighting: vec3f,
+		light: vec3f,
 		specular: vec3f,
 		fogFactor: f32,
 		fogColor: vec3f,
@@ -122,24 +119,6 @@ const VoxelShader = /*wgsl*/ `
 		let fadedVisibility = mix(1.0, visibility, edgeFade);
 		return mix(1.0, fadedVisibility, uni.shadowsEnabled);
 	}
-	fn terrainFaceBrightness(normal: vec3f) -> f32 {
-		// Per-face shading aligned with LIGHT_DIR (sun is up / south / west).
-		// Lit sides brighter than shadowed sides; values roughly track
-		// dot(n, LIGHT_DIR) mapped into [0.5, 1.0].
-		if (normal.y > 0.5) {
-			return 1.0; // top (+Y, sun overhead)
-		} else if (normal.y < -0.5) {
-			return 0.5; // bottom (-Y, away from sun)
-		} else if (normal.z > 0.5) {
-			return 0.9; // south (+Z, lit)
-		} else if (normal.x < -0.5) {
-			return 0.8; // west (-X, lit)
-		} else if (normal.x > 0.5) {
-			return 0.6; // east (+X, shadowed)
-		}
-		return 0.55; // north (-Z, shadowed)
-	}
-
 	fn terrainFogFactor(worldPos: vec3f) -> f32 {
 		let dist = length(worldPos - uni.eyePosition);
 		return clamp((uni.fogEnd - dist) / (uni.fogEnd - uni.fogStart), 0.0, 1.0);
@@ -170,20 +149,21 @@ const VoxelShader = /*wgsl*/ `
 			shadowFogFade,
 		);
 
-		let ambientBrightness = 0.5;
-		let faceBrightness = terrainFaceBrightness(normal);
-		let directBrightness = max(faceBrightness - ambientBrightness, 0.0);
-		// PINNED perceptual→linear pow — rationale on GAMMA in shader/shared.ts.
-		let shadedBrightness = pow(ambientBrightness + directBrightness * directLight, GAMMA);
-
-		let aoLighting = mix(AO_SHADOW_COLOR_LINEAR, vec3f(shadedBrightness), vsOut.ao);
+		// AO fully gates ambient (crevices see less sky) but gates direct sun
+		// only by the aoDirect knob — the shadow map already occludes the sun,
+		// so full AO there would double-count; a partial re-darkening reads as
+		// micro-shadowing the shadow map can't resolve.
+		let ambient = uni.ambientLight * vsOut.ao;
+		let direct = uni.sunLight
+			* faceLight(normal, uni.faceTablePos, uni.faceTableNeg)
+			* directLight
+			* mix(1.0, vsOut.ao, uni.aoDirect);
 
 		let eyeToSurface = normalize(vsOut.worldPos - uni.eyePosition);
 		let fogColor = sampleSky(skyTexture, skySampler, eyeToSurface, uni.skyIntensity);
 
 		return TerrainLighting(
-			shadedBrightness,
-			aoLighting,
+			ambient + direct,
 			terrainSpecular(vsOut, normal, directLight),
 			fogFactor,
 			fogColor,
@@ -202,11 +182,10 @@ const VoxelShader = /*wgsl*/ `
 		let n = vsOut.normal;
 		let lighting = computeTerrainLighting(vsOut, n);
 		if (uni.renderMode == RENDER_MODE_LIGHTING) {
-			return vec4f(lighting.aoLighting, 1.0);
+			return vec4f(lighting.light, 1.0);
 		}
 
-		let base = mix(AO_SHADOW_COLOR_LINEAR, texColor.rgb * lighting.shadedBrightness, vsOut.ao);
-		let final_color = base + lighting.specular;
+		let final_color = texColor.rgb * lighting.light + lighting.specular;
 		let fogged = mix(lighting.fogColor, final_color, lighting.fogFactor);
 		let mapped = applyTonemap(fogged, uni.exposure, uni.tonemapMode);
 		return vec4f(mapped, texColor.a);

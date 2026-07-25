@@ -19,6 +19,22 @@ export const debuggerParams = {
 	specularStrength: 0,
 	reflectivity: 0,
 	roughness: 0,
+	// Terrain lighting: flat ambient (color × level) + hand-authored per-face
+	// sun table tinted by sun color (FACE_LIGHT_WGSL). All values linear;
+	// defaults approximate the old gamma-era face table's displayed
+	// brightness (lit top ≈ 1.0, floor ≈ 0.22). East/north get small nonzero
+	// sun — bounce light pretending to be sun, so sun-averted corners read.
+	ambientColor: { r: 0.53, g: 0.61, b: 0.82 },
+	ambientLevel: 0.35,
+	sunColor: { r: 1.0, g: 0.96, b: 0.9 },
+	sunIntensity: 1.0,
+	aoDirect: 0.3,
+	faceTop: 0.8,
+	faceBottom: 0.0,
+	faceSouth: 0.6,
+	faceNorth: 0.06,
+	faceWest: 0.4,
+	faceEast: 0.12,
 	fogStart: 1300,
 	fogEnd: 1400,
 	tonemap: 'ACES' as TonemapMode,
@@ -106,6 +122,50 @@ export function BuildDebug(): void {
 		max: 1,
 		step: 0.01,
 	});
+
+	const lightingFolder = pane.addFolder({ title: 'Lighting' });
+	lightingFolder.addBinding(debuggerParams, 'ambientColor', {
+		label: 'Ambient Color',
+		color: { type: 'float' },
+	});
+	lightingFolder.addBinding(debuggerParams, 'ambientLevel', {
+		label: 'Ambient Level',
+		min: 0,
+		max: 1,
+		step: 0.01,
+	});
+	lightingFolder.addBinding(debuggerParams, 'sunColor', {
+		label: 'Sun Color',
+		color: { type: 'float' },
+	});
+	lightingFolder.addBinding(debuggerParams, 'sunIntensity', {
+		label: 'Sun Intensity',
+		min: 0,
+		max: 3,
+		step: 0.01,
+	});
+	lightingFolder.addBinding(debuggerParams, 'aoDirect', {
+		label: 'AO on Direct',
+		min: 0,
+		max: 1,
+		step: 0.01,
+	});
+	const faceBindings = [
+		['faceTop', 'Top +Y'],
+		['faceBottom', 'Bottom −Y'],
+		['faceSouth', 'South +Z'],
+		['faceNorth', 'North −Z'],
+		['faceWest', 'West −X'],
+		['faceEast', 'East +X'],
+	] as const;
+	for (const [key, label] of faceBindings) {
+		lightingFolder.addBinding(debuggerParams, key, {
+			label,
+			min: 0,
+			max: 1.5,
+			step: 0.01,
+		});
+	}
 
 	const hideStyle = document.createElement('style');
 	hideStyle.textContent =

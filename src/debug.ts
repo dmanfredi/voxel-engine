@@ -58,7 +58,29 @@ export function refreshDebug(): void {
 // frame, so pane edits take effect next tick without manual invalidation.
 export function BuildDebug(): void {
 	pane = new Pane({ title: 'Debug' });
-	const renderDebugFolder = pane.addFolder({ title: 'Render Debug' });
+
+	const playerFolder = pane.addFolder({ title: 'Player' });
+	playerFolder.addBinding(debuggerParams, 'freecam', {
+		label: 'Freecam (f)',
+	});
+	playerFolder.addBinding(debuggerParams, 'vertices', {
+		readonly: true,
+		label: 'Vertices',
+		format: (v) => v.toFixed(0),
+	});
+	playerFolder.addBinding(debuggerParams, 'targetBlock', {
+		readonly: true,
+		label: 'Target',
+	});
+	playerFolder.addBinding(debuggerParams, 'playerPos', {
+		readonly: true,
+		label: 'Location',
+	});
+
+	const renderDebugFolder = pane.addFolder({
+		title: 'Render',
+		expanded: false,
+	});
 	renderDebugFolder.addBinding(debuggerParams, 'renderMode', {
 		label: 'View Mode',
 		options: {
@@ -79,25 +101,7 @@ export function BuildDebug(): void {
 		label: 'Wireframe',
 	});
 
-	const playerFolder = pane.addFolder({ title: 'Player' });
-	playerFolder.addBinding(debuggerParams, 'freecam', {
-		label: 'Freecam',
-	});
-	playerFolder.addBinding(debuggerParams, 'vertices', {
-		readonly: true,
-		label: 'Vertices',
-		format: (v) => v.toFixed(0),
-	});
-	playerFolder.addBinding(debuggerParams, 'targetBlock', {
-		readonly: true,
-		label: 'Target',
-	});
-	playerFolder.addBinding(debuggerParams, 'playerPos', {
-		readonly: true,
-		label: 'Location',
-	});
-
-	const reflFolder = pane.addFolder({ title: 'Specular' });
+	const reflFolder = pane.addFolder({ title: 'Specular', expanded: false });
 	reflFolder.addBinding(debuggerParams, 'shininess', {
 		label: 'Shininess',
 		min: -100,
@@ -123,7 +127,10 @@ export function BuildDebug(): void {
 		step: 0.01,
 	});
 
-	const lightingFolder = pane.addFolder({ title: 'Lighting' });
+	const lightingFolder = pane.addFolder({
+		title: 'Lighting',
+		expanded: false,
+	});
 	lightingFolder.addBinding(debuggerParams, 'ambientColor', {
 		label: 'Ambient Color',
 		color: { type: 'float' },
@@ -182,7 +189,7 @@ export function BuildDebug(): void {
 		}
 	});
 
-	const fogFolder = pane.addFolder({ title: 'Fog' });
+	const fogFolder = pane.addFolder({ title: 'Fog', expanded: false });
 	fogFolder.addBinding(debuggerParams, 'fogStart', {
 		label: 'Fog Start',
 		min: 0,
@@ -196,7 +203,7 @@ export function BuildDebug(): void {
 		step: 10,
 	});
 
-	const tonemapFolder = pane.addFolder({ title: 'Tonemap' });
+	const tonemapFolder = pane.addFolder({ title: 'Tonemap', expanded: false });
 	tonemapFolder.addBinding(debuggerParams, 'tonemap', {
 		label: 'Curve',
 		options: {
@@ -220,7 +227,7 @@ export function BuildDebug(): void {
 		step: 0.05,
 	});
 
-	const shadowFolder = pane.addFolder({ title: 'Shadows' });
+	const shadowFolder = pane.addFolder({ title: 'Shadows', expanded: false });
 	shadowFolder.addBinding(debuggerParams, 'shadows', {
 		label: 'Enabled',
 	});

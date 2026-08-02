@@ -22,6 +22,7 @@ import {
 	EntityManager,
 	Shape,
 	Role,
+	Trait,
 	materialFromBlockId,
 	materialSupportsShape,
 } from './entity';
@@ -44,6 +45,8 @@ const SPAWN_VERTICAL_SPAN_BLOCKS = 24;
 // Constant-pace knobs (the Director's whole tuning surface for now).
 const SPAWN_CADENCE_SECONDS = 0.5; // min seconds between spawn attempts
 const SPAWN_MAX_ACTIVE = 32; // population cap
+// Breachers are an occasional anti-tunneling pressure tool, not the default cube.
+const BREACHER_CUBE_CHANCE = 0.1;
 
 // Candidate sites sampled per attempt before giving up for this cadence.
 // Barren terrain yielding nothing is a feature — sparse worlds stay calm.
@@ -267,9 +270,15 @@ export class Spawner {
 		);
 		this.entityManager.invalidateFlowField();
 
+		const traits =
+			entry.shape === Shape.Cube && Math.random() < BREACHER_CUBE_CHANCE
+				? [Trait.Breacher]
+				: [];
+
 		this.entityManager.spawn({
 			shape: entry.shape,
 			role: entry.role,
+			traits,
 			material,
 			size: entry.size,
 			x: site.centerX,

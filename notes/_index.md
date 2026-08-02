@@ -14,7 +14,7 @@ Project-wide docs and loose notes that do not need a narrower home yet.
 
 Durable subsystem references and implementation design notes. These are the first stop when changing code in a specific area.
 
-- `cube-enemy.md` - cube enemy design, tipping, climbing, Crush/Zone role notes.
+- `cube-enemy.md` - cube enemy design, tipping, climbing, Breacher trait, and Crush/Zone role notes.
 - `entity-physics-and-ai.md` - entity physics model, AI dispatch, deferred decisions.
 - `entity-system.md` - entity taxonomy, mesh generation, render pipeline, lifecycle.
 - `flow-field.md` - shared BFS pursuit field and invalidation model.
@@ -56,4 +56,3 @@ Copied research, learning notes, snippets, and external-formula material.
 
 - `TECHNICAL-ROADMAP.md` still says cube enemy behavior is unimplemented, but cube behavior and Crush are now partly live.
 - `systems/spawning-and-despawning.md` says "No code yet", but `src/spawner.ts` is now implemented and wired in.
-- `systems/cube-enemy.md` contains one stale phrase saying the beam visual is pending, while a later section says the beam telegraph is done.

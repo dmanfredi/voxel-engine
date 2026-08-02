@@ -48,6 +48,18 @@ export type Shape = (typeof Shape)[keyof typeof Shape];
 export const Role = { Rush: 0, Zone: 1, Crush: 2 } as const;
 export type Role = (typeof Role)[keyof typeof Role];
 
+export const Trait = { Breacher: 0 } as const;
+export type Trait = (typeof Trait)[keyof typeof Trait];
+
+const traitShapes: Record<Trait, readonly Shape[]> = {
+	[Trait.Breacher]: [Shape.Cube],
+};
+
+/** Authoring guard shared by spawn paths and debug tools. */
+export function traitSupportsShape(trait: Trait, shape: Shape): boolean {
+	return traitShapes[trait].includes(shape);
+}
+
 export const Material = { Marble: 0, Brick: 1, DarkMarble: 2 } as const;
 export type Material = (typeof Material)[keyof typeof Material];
 
@@ -251,6 +263,7 @@ export interface Entity {
 	shape: Shape;
 	material: Material;
 	role: Role;
+	traits: readonly Trait[];
 	renderData: EntityRenderData;
 	// Non-null only while a Cube is mid-tip. Physics + pair collision skip
 	// entities with an active tip; uploadTransform switches to the tip
@@ -344,6 +357,7 @@ export interface SpawnConfig {
 	shape: Shape;
 	material: Material;
 	role: Role;
+	traits?: readonly Trait[];
 	x: number;
 	y: number;
 	z: number;
@@ -378,6 +392,18 @@ const DESPAWN_LIFESPAN_SECONDS = 60;
 const SPHERE_DEATH_REF_SIZE = 5;
 const SPHERE_DEATH_BASE_SECONDS = 1;
 const SPHERE_DEATH_TINT_MAX = 0.8;
+const SPHERE_DEATH_TINT_R = 0.7;
+const SPHERE_DEATH_TINT_G = 0.08;
+const SPHERE_DEATH_TINT_B = 0.08;
+
+// Breacher identity cue: a restrained orange wash whose slow pulse remains
+// readable without pretending to be final fire/particle art.
+const BREACHER_TINT_R = 0.95;
+const BREACHER_TINT_G = 0.32;
+const BREACHER_TINT_B = 0.03;
+const BREACHER_TINT_MIN = 0.18;
+const BREACHER_TINT_RANGE = 0.08;
+const BREACHER_TINT_HZ = 1.25;
 
 // Blast-bubble radius (blocks) around the player: an enemy sphere arms its
 // self-destruct when it overlaps this bubble.
@@ -484,6 +510,17 @@ export class EntityManager {
 	}
 
 	spawn(config: SpawnConfig): number {
+		// Normalize once at spawn so hot-path trait checks stay simple.
+		const traits: Trait[] = [...new Set(config.traits ?? [])];
+		const unsupportedTrait = traits.find(
+			(trait) => !traitSupportsShape(trait, config.shape),
+		);
+		if (unsupportedTrait !== undefined) {
+			throw new Error(
+				`Trait ${String(unsupportedTrait)} is not valid for shape ${String(config.shape)}`,
+			);
+		}
+
 		// Cubes must span a whole number of voxels. Keeps Phase 4 navigation
 		// (tip destinations, scaffold footprints) grid-aligned — no fractional
 		// cell reasoning. Throws at authoring time so the constraint can't
@@ -603,6 +640,7 @@ export class EntityManager {
 			shape: config.shape,
 			material: config.material,
 			role: config.role,
+			traits,
 			renderData,
 			tip: null,
 			tipCooldown,
@@ -617,7 +655,7 @@ export class EntityManager {
 		});
 
 		// Initial upload with zero offset — next update() will apply proper wrap
-		this.uploadTransform(this.entities[this.entities.length - 1], 0, 0, 0);
+		this.uploadTransform(this.entities[this.entities.length - 1], 0, 0);
 		return id;
 	}
 
@@ -884,9 +922,7 @@ export class EntityManager {
 			const dz = entity.z - pz;
 			const offsetX = dx > hw ? -ww : dx < -hw ? ww : 0;
 			const offsetZ = dz > hw ? -ww : dz < -hw ? ww : 0;
-			const deathTint =
-				entity.death !== null ? sphereDeathTint(entity.death) : 0;
-			this.uploadTransform(entity, offsetX, offsetZ, deathTint);
+			this.uploadTransform(entity, offsetX, offsetZ);
 		}
 	}
 
@@ -899,7 +935,9 @@ export class EntityManager {
 	 * create it.
 	 *
 	 * Scaffold policy — same formula handles horizontal walks AND climbs:
-	 *   - Destination AABB must be fully air.
+	 *   - Destination AABB must be fully air unless the cube is a Breacher.
+	 *     Breachers clear solid destination cells and, on climbs, the overhead
+	 *     volume swept at the midpoint of the 180-degree rotation.
 	 *   - N³ region directly beneath the destination: any air cells become
 	 *     the cube's material. Cells already solid are left alone — we never
 	 *     overwrite existing terrain. For horizontal tips, this region is
@@ -912,15 +950,13 @@ export class EntityManager {
 	 *     simplification per the Phase 4 spec. Deep pits and tall walls get
 	 *     fully filled.
 	 *
-	 * Returns true if the tip started (scaffold may or may not have been
-	 * needed). Returns false and console.warns on any blocker.
+	 * Returns true if the tip started (carve/scaffold work may be empty).
+	 * Returns false and console.warns on any blocker.
 	 *
-	 * `onRegionChanged` fires once with the scaffold's block-coord bbox if
-	 * any cells were placed (skipped if scaffold was a no-op). One call
-	 * regardless of N³ — much cheaper than per-cell notify, which would
-	 * pummel the scheduler with redundant work that all dedups to the same
-	 * 1-2 chunks. Always called before the tip starts so the first frame
-	 * of the animation already sees the new terrain.
+	 * `onRegionChanged` fires once for the combined destination/scaffold bbox
+	 * if any blocks changed. One call regardless of N³ keeps remesh work
+	 * deduplicated. It fires before the tip starts so the first animation frame
+	 * already sees the committed terrain.
 	 */
 	tryTipCube(
 		entity: Entity,
@@ -942,6 +978,7 @@ export class EntityManager {
 		const s = entity.scale;
 		const edge = 2 * s;
 		const nVox = Math.round(edge / blockSize);
+		const isBreacher = entity.traits.includes(Trait.Breacher);
 
 		const destX = entity.x + dx * edge;
 		const destY = entity.y + dy * edge;
@@ -950,21 +987,22 @@ export class EntityManager {
 		const dMinBY = Math.floor((destY - s) / blockSize);
 		const dMinBZ = Math.floor((destZ - s) / blockSize);
 
-		// Pre-flight: destination cells must all be air. Checked here (not
-		// just in startCubeTip) so we don't start scaffolding for a tip that
-		// can't happen anyway.
+		// Ordinary cubes require air. Breachers treat solid destination cells
+		// as carve work, so the greedy scorer can route straight through terrain.
+		const carveCells: [number, number, number][] = [];
 		for (let ix = 0; ix < nVox; ix++) {
 			for (let iy = 0; iy < nVox; iy++) {
 				for (let iz = 0; iz < nVox; iz++) {
-					if (
-						this.world.isSolid(
-							dMinBX + ix,
-							dMinBY + iy,
-							dMinBZ + iz,
-						)
-					) {
+					const bx = dMinBX + ix;
+					const by = dMinBY + iy;
+					const bz = dMinBZ + iz;
+					if (this.world.isSolid(bx, by, bz)) {
+						if (isBreacher) {
+							carveCells.push([bx, by, bz]);
+							continue;
+						}
 						console.warn(
-							`cube tip blocked: destination cell (${String(dMinBX + ix)}, ${String(dMinBY + iy)}, ${String(dMinBZ + iz)}) is solid`,
+							`cube tip blocked: destination cell (${String(bx)}, ${String(by)}, ${String(bz)}) is solid`,
 						);
 						return false;
 					}
@@ -973,6 +1011,26 @@ export class EntityManager {
 		}
 
 		// Collect scaffold work: cells in the N³ directly below destination
+		// A climb's 180-degree handspring is centered directly above the source
+		// cube at its midpoint. Clear that second N³ volume so a Breacher cannot
+		// visually sweep through a ceiling while boring up a staircase.
+		if (isBreacher && dy === 1) {
+			const sourceMinBX = Math.floor((entity.x - s) / blockSize);
+			const sourceMinBZ = Math.floor((entity.z - s) / blockSize);
+			for (let ix = 0; ix < nVox; ix++) {
+				for (let iy = 0; iy < nVox; iy++) {
+					for (let iz = 0; iz < nVox; iz++) {
+						const bx = sourceMinBX + ix;
+						const by = dMinBY + iy;
+						const bz = sourceMinBZ + iz;
+						if (this.world.isSolid(bx, by, bz)) {
+							carveCells.push([bx, by, bz]);
+						}
+					}
+				}
+			}
+		}
+
 		// that are currently air. Two-phase commit — we validate everything
 		// first (no entity overlaps), then mutate + remesh together. If any
 		// cell fails the entity check, nothing is placed.
@@ -1000,32 +1058,40 @@ export class EntityManager {
 		}
 
 		// Commit phase — mutate world, then a single region notify covering
-		// the full scaffold bbox. Use the cube's own material for placed
+		// the full changed bbox. Use the cube's own material for placed
 		// blocks (marble cube → MARBLE, brick → BRICK, dark-marble →
 		// DARK_MARBLE) so scaffolded terrain reads as the cube's trail.
 		const blockId = materials[entity.material].base.texLayer;
+		for (const [bx, by, bz] of carveCells) {
+			this.world.setBlock(bx, by, bz, AIR);
+		}
 		for (const [bx, by, bz] of scaffoldCells) {
 			this.world.setBlock(bx, by, bz, blockId);
 		}
-		// Region bbox = full theoretical scaffold extent (validation loop
-		// bounds). Slightly over-broad if some cells were already solid, but
-		// those chunks would be in the slab anyway — same chunk set, one call.
-		if (scaffoldCells.length > 0) {
-			onRegionChanged(
-				dMinBX,
-				dMinBY - nVox,
-				dMinBZ,
-				dMinBX + nVox - 1,
-				dMinBY - 1,
-				dMinBZ + nVox - 1,
-			);
+		const changedCells = [...carveCells, ...scaffoldCells];
+		if (changedCells.length > 0) {
+			let minBX = Infinity;
+			let minBY = Infinity;
+			let minBZ = Infinity;
+			let maxBX = -Infinity;
+			let maxBY = -Infinity;
+			let maxBZ = -Infinity;
+			for (const [bx, by, bz] of changedCells) {
+				minBX = Math.min(minBX, bx);
+				minBY = Math.min(minBY, by);
+				minBZ = Math.min(minBZ, bz);
+				maxBX = Math.max(maxBX, bx);
+				maxBY = Math.max(maxBY, by);
+				maxBZ = Math.max(maxBZ, bz);
+			}
+			onRegionChanged(minBX, minBY, minBZ, maxBX, maxBY, maxBZ);
 			this.markFlowFieldDirty();
 		}
 
-		// startCubeTip re-checks destination + ground. After scaffold,
-		// ground-layer check will now pass. If something unexpected fails,
-		// it returns false and console.warns — blocks are already placed
-		// but nothing catastrophic: the scaffold just becomes inert terrain.
+		// startCubeTip re-checks destination + ground after the commit. If an
+		// unexpected check fails, it returns false and warns; the carve/scaffold
+		// mutations remain as an inert terrain edit rather than leaving partial
+		// bookkeeping behind.
 		return startCubeTip(entity, this.world, direction);
 	}
 
@@ -1430,7 +1496,6 @@ export class EntityManager {
 		entity: Entity,
 		offsetX: number,
 		offsetZ: number,
-		deathTint: number,
 	): void {
 		let model: Float32Array<ArrayBuffer>;
 		if (entity.tip !== null) {
@@ -1470,11 +1535,32 @@ export class EntityManager {
 				model,
 			);
 		}
+		let effectR = 0;
+		let effectG = 0;
+		let effectB = 0;
+		let effectStrength = 0;
+		if (entity.death !== null) {
+			effectR = SPHERE_DEATH_TINT_R;
+			effectG = SPHERE_DEATH_TINT_G;
+			effectB = SPHERE_DEATH_TINT_B;
+			effectStrength = sphereDeathTint(entity.death);
+		} else if (entity.traits.includes(Trait.Breacher)) {
+			effectR = BREACHER_TINT_R;
+			effectG = BREACHER_TINT_G;
+			effectB = BREACHER_TINT_B;
+			const pulse =
+				0.5 +
+				0.5 * Math.sin(2 * Math.PI * BREACHER_TINT_HZ * entity.age);
+			effectStrength = BREACHER_TINT_MIN + BREACHER_TINT_RANGE * pulse;
+		}
 		updateEntityTransform(
 			this.device.queue,
 			entity.renderData,
 			model,
-			deathTint,
+			effectR,
+			effectG,
+			effectB,
+			effectStrength,
 		);
 	}
 

@@ -111,7 +111,7 @@ Entities are defined by composable axes:
 - **Material** — texture + physical stats. Indexed into a static `materials` table holding `texLayer`, `textureScale`, `density`, `baseSpeed`, `hardness`, `restitution`.
 - **Role** — AI strategy from the shape's palette (`Rush`, `Zone`, `Crush`). Interpreted by `entity-ai.ts` via dispatch.
 - **Size** — scaling multiplier (stored as `scale` on the entity). Uniform; affects rendered size, collision radius, and eventually mass.
-- **Traits** — bolt-on behavioral modifiers. Currently an unused `number[]`; reserved for future features like "splitter" (spawns copies on death), "bomber" (explodes on contact), etc.
+- **Traits** — typed bolt-on behavioral modifiers carried by `Entity` and `SpawnConfig`. `Breacher` is the first live trait: cube destinations may carve solid terrain before a tip. `traitShapes` is the central shape-compatibility registry used by spawn validation and debug spawning. Future modifiers can add similarly narrow behavior without changing Shape or Role.
 
 ### Entity interface
 

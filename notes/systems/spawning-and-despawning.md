@@ -109,8 +109,8 @@ Each frame, for each entity, walk an **ordered** list of conditions; the first
 that matches removes the entity (order = priority). Conditions are mostly
 universal and live globally on the despawn pass — they are *not* a new per-entity
 data axis. Traits may *append* a condition (a "bomber" trait adds a
-contact → explode trigger); that's the one opt-in seam, and Traits is already the
-reserved axis for bolt-on modifiers.
+contact → explode trigger); that's the one opt-in seam. Traits are now a live
+axis for bolt-on modifiers, beginning with the cube-only Breacher trait.
 
 Firm conditions:
 

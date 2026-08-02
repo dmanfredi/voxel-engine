@@ -17,7 +17,7 @@ import { autoClimb } from './auto-climb';
 import { ChunkLoader } from './chunk-loader';
 import { MeshScheduler } from './mesh-scheduler';
 import { initEntityRenderer } from './entity-renderer';
-import { EntityManager, Shape, Role } from './entity';
+import { EntityManager, Shape, Role, traitSupportsShape } from './entity';
 import { Spawner } from './spawner';
 import { tryPlaceBlock } from './placement';
 import { generateMips, numMipLevels } from './mipmap';
@@ -1118,7 +1118,7 @@ async function main(): Promise<void> {
 	}
 
 	BuildDebug(render, {
-		onSpawnEnemy: (shape, material, size) => {
+		onSpawnEnemy: (shape, material, size, traits) => {
 			const hit = raycast(
 				cameraPos,
 				cameraFront,
@@ -1145,6 +1145,9 @@ async function main(): Promise<void> {
 				shape,
 				material,
 				role: shape === Shape.Cube ? Role.Crush : Role.Rush,
+				traits: traits.filter((trait) =>
+					traitSupportsShape(trait, shape),
+				),
 				size,
 				x,
 				y,

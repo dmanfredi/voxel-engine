@@ -108,7 +108,7 @@ Ordering inside `EntityManager.update` Pass 1: AI fires first (may start a tip),
 
 `Role.Zone` and `Role.Crush` are **targeting strategies** layered on the same movement primitive — they don't reimplement movement. `cubeTarget` branches on role; locomotion is untouched.
 
-- **Crush — implemented (beam visual pending).** `cubeTarget` aims a fixed height above the player, so the existing climb locomotion towers up over them with no new pathing. On reaching the perch the AI calls `beginCrush`; EntityManager then runs a telegraph → carve → plummet sequence (`CrushState`):
+- **Crush — implemented.** `cubeTarget` aims a fixed height above the player, so the existing climb locomotion towers up over them with no new pathing. On reaching the perch the AI calls `beginCrush`; EntityManager then runs a telegraph → carve → plummet sequence (`CrushState`):
     1. **Telegraph** — the cube freezes and the locked N×N column is held for a hold window (the player's dodge). The lane is locked at this instant so the carve matches exactly what the telegraph advertised.
     2. **Carve + hit** — the column is carved straight down to a deep shaft in one batched remesh, **top-down** so a future beam-blocker block can halt it and spare what's beneath. A player standing in the column (wrap-aware, below the cube) takes a BP hit of `CRUSH_BP_PER_BLOCK · width` plus the standard build lockout.
     3. **Plummet** — the cube drops the now-empty shaft at a tunable speed (collision-free; pair/player resolution skip crushing cubes) and the despawn pass reaps it at the bottom. No petrify — it fell to the void.
@@ -121,6 +121,16 @@ Ordering inside `EntityManager.update` Pass 1: AI fires first (may start a tip),
 
     **Still deferred:** coupling the carve depth to the rising-void floor, and the beam-blocker counterplay block (the carve already loops top-down to make halting it cheap).
 - **Zone — not started.** Pick cells around the player to wall them in.
+
+### Trait — Breacher
+
+Implemented. `Trait.Breacher` changes locomotion feasibility without changing the cube's Role or target. When the greedy scorer selects a tip whose destination volume contains solid blocks, `tryTipCube` collects those cells as carve work. A climb also collects the cube-sized volume directly above the source—the space occupied at the midpoint of its 180-degree handspring. It clears the combined carve set to air in the same commit as any scaffold placement, sends one combined region-change notification, and starts the ordinary tip. There is no wind-up or separate smash state: terrain is traversable to this trait just like air, so the best-scoring destructive move may win even when a less-direct clear move exists.
+
+This lets a Breacher + Crush cube climb toward its normal perch, bore into pillars or enclosed terrain when that route scores best, then execute the existing telegraph → carve → plummet payload unchanged. The trait is assigned only occasionally by the terrain-born spawner and can be forced through the enemy debug spawner.
+
+**Prototype telegraph.** The entity shader now accepts a generic RGB tint plus blend strength instead of a red-only death scalar. Breachers carry a mild orange wash with a slow pulse; sphere deaths continue to use the same channel with their existing red ramp. This is intentionally identification-grade prototype art, not the final fiery treatment.
+
+**Current scope:** all scored tip candidates may carve their cube-sized destination volume; climbs additionally carve the overhead midpoint volume. No block hardness or protected-block rule exists yet. The mutation remains two-phase with scaffold validation, and remeshing/flow-field invalidation stays batched once per move.
 
 ## Open questions (resolve per-phase, not up front)
 

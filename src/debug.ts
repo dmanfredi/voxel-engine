@@ -1,6 +1,6 @@
 import Stats from 'stats.js';
 import { Pane } from 'tweakpane';
-import { Shape, Material } from './entity';
+import { Shape, Material, Trait } from './entity';
 
 export const stats = new Stats();
 stats.showPanel(0); // 0: fps, 1: ms, 2: mb, 3+: custom
@@ -30,7 +30,12 @@ export const debuggerParams = {
 /** Hooks the enemy pane calls back into — implemented in main.ts. */
 export interface DebugHooks {
 	/** Spawn an enemy on the first surface under the camera crosshair. */
-	onSpawnEnemy: (shape: Shape, material: Material, size: number) => void;
+	onSpawnEnemy: (
+		shape: Shape,
+		material: Material,
+		size: number,
+		traits: readonly Trait[],
+	) => void;
 }
 
 let pane: Pane | null = null;
@@ -145,9 +150,12 @@ export function BuildDebug(render: () => void, hooks: DebugHooks): void {
 		label: 'Enemy Spawning',
 	});
 	enemyPane.addBinding(debuggerParams, 'enemyXray', { label: 'X-Ray' });
-
 	// Spawn controls — selections live here; the button raycasts + spawns.
-	const spawnParams: { shape: Shape; material: Material; size: number } = {
+	const spawnParams: {
+		shape: Shape;
+		material: Material;
+		size: number;
+	} = {
 		shape: Shape.Sphere,
 		material: Material.Marble,
 		size: 10,
@@ -174,11 +182,26 @@ export function BuildDebug(render: () => void, hooks: DebugHooks): void {
 		max: 30,
 		step: 5,
 	});
+	const traitToggles: { label: string; trait: Trait; selected: boolean }[] = [
+		{ label: 'Breacher', trait: Trait.Breacher, selected: false },
+	];
+	const traitsFolder = spawnFolder.addFolder({
+		title: 'Traits',
+		expanded: true,
+	});
+	for (const toggle of traitToggles) {
+		traitsFolder.addBinding(toggle, 'selected', { label: toggle.label });
+	}
 	spawnFolder.addButton({ title: 'Spawn at crosshair' }).on('click', () => {
+		const traits = traitToggles
+			.filter((toggle) => toggle.selected)
+			.map((toggle) => toggle.trait);
+
 		hooks.onSpawnEnemy(
 			spawnParams.shape,
 			spawnParams.material,
 			spawnParams.size,
+			traits,
 		);
 	});
 }

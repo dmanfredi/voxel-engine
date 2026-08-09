@@ -13,7 +13,8 @@ Projectiles carry a back-reference to their `sourceTool` so the break callback c
 
 ## Files
 
-- **`src/tool.ts`** — `Tool` + `BuildProfile` types, `defineTool()` factory, `canFire`, `tickToolCooldowns`, concrete tool instances (currently `pickaxeTool`)
+- **`src/tool.ts`** — `Tool` + `BuildProfile` types, `defineTool()` factory, `canFire`, `tickToolCooldowns`, and concrete tool instances
+- **`src/timing.ts`** — normalized monotonic timing-function catalog, sampled custom-function validation, and CSS-style `cubicBezier(...)`
 - **`src/projectile.ts`** — `Hitbox` interface, `obbHitbox()` SAT factory, `orientationFromDirection()`, `Projectile` + `ProjectileProfile` types
 - **`src/projectile-manager.ts`** — runtime: spawn, per-tick move/collide/break, render-time wrap, dispose
 - **`src/projectile-renderer.ts`** — dedicated pipeline + shader, render-data lifecycle
@@ -83,8 +84,14 @@ Camera-local axes `[right, up, forward]` in world units. The fire function compu
 
 ### Profile vs instance
 
-- **`ProjectileProfile`** is design data, frozen and shared across spawns: `strength`, `speed`, `hitbox`, `maxLifetime`, `visualSize`.
+- **`ProjectileProfile`** is design data, frozen and shared across spawns: `strength`, `speed`, `timing`, `hitbox`, `maxLifetime`, `visualSize`.
 - **`Projectile`** is the live instance: `position`, `velocity`, `orientation`, mutable `strength`, `age`, `sourceTool`, plus a reference back to the profile.
+
+### Timing functions
+
+`ProjectileProfile.timing` maps normalized lifetime `[0, 1]` to normalized completed distance `[0, 1]`. Each update evaluates the curve at the frame's previous and next ages and moves by the difference. This is frame-rate independent, preserves total open-air range at `speed × maxLifetime`, and keeps lifetime as the clock rather than letting the curve decide when the projectile despawns. The final partial frame reaches the curve endpoint, processes collision, then disposes.
+
+`timingFunctions` provides `linear`, CSS-style `ease`/`easeIn`/`easeOut`/`easeInOut`, and quadratic, cubic, and exponential in/out/in-out families. `cubicBezier(x1, y1, x2, y2)` supports custom CSS-style curves while restricting control points to monotonic, non-overshooting projectile motion. A plain custom `TimingFunction` is also accepted; `defineTool()` samples it at startup to reject invalid endpoints, non-finite values, range escapes, and practical reversals.
 
 ### Hitbox abstraction
 
@@ -117,7 +124,7 @@ The manager mutates only the exact solid cells reported by the hitbox, while acc
 
 ### Distance-based sub-stepping
 
-Each frame's linear displacement is divided into samples no farther apart than half a block. Every sample runs the existing hitbox query and complete-overlap break, so fast projectiles cannot skip entire voxel cells between rendered frames and arbitrary compound hitboxes require no special sweep implementation. Strength exhaustion stops the remaining sub-steps, while block bounds and BP count accumulate into the frame's single downstream callback.
+Each frame's timing-derived displacement is divided into samples no farther apart than half a block. Every sample runs the existing hitbox query and complete-overlap break, so fast projectiles cannot skip entire voxel cells between rendered frames and arbitrary compound hitboxes require no special sweep implementation. Strength exhaustion stops the remaining sub-steps, while block bounds and BP count accumulate into the frame's single downstream callback.
 
 Projectile coordinates remain unwrapped during the sub-step loop and canonicalize afterward. A frame that crosses the horizontal world seam therefore reports compact raw bounds across that seam instead of conservatively spanning almost the entire world. Only the final transform is uploaded; intermediate collision samples are not rendered.
 
@@ -223,8 +230,9 @@ The interesting tuning surface is the Tool itself — each field is a knob with 
 | Field | What it tunes |
 |---|---|
 | `projectile.strength` | Mining budget. Determines penetration depth — how many blocks a single shot clears before the killing blow. |
-| `projectile.speed` | World units / sec the projectile travels. |
-| `projectile.maxLifetime` | Despawn fallback. Should comfortably exceed `speed × max-engagement-range`. |
+| `projectile.speed` | Average world units / sec across the complete normalized timing curve. |
+| `projectile.timing` | How total travel distance is distributed over the lifetime; monotonic `[0,1] → [0,1]`. |
+| `projectile.maxLifetime` | Seconds over which the timing curve unfolds before disposal. Open-air range is `speed × maxLifetime`. |
 | `projectile.visualSize` | Edge length of the rendered cube. **Must** match the OBB hitbox half-extent (`visualSize × 0.5`). |
 | `lmbCooldown` / `rmbCooldown` | Seconds between successive fires while held. Independent. |
 | `lmbCost` | BP debited per LMB fire. 0 = firing is free; positive = consumable shot. |
@@ -232,4 +240,4 @@ The interesting tuning surface is the Tool itself — each field is a knob with 
 | `buildProfile.costPerBlock` | BP debited per cell placed by RMB. |
 | `spawnOffset` | Camera-local emission point `[right, up, forward]`. Hip-fire nudge keeps the projectile out of the camera frustum on emit. |
 
-`defineTool()` asserts the invariants the type system can't: positive cooldowns, non-negative costs. Add new invariants there.
+`defineTool()` asserts the invariants the type system can't: positive cooldowns/lifetime, finite non-negative speed, non-negative costs, and a sampled monotonic timing curve. Add new invariants there.

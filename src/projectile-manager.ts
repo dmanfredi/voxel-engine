@@ -162,17 +162,20 @@ export class ProjectileManager {
 		for (let i = this.projectiles.length - 1; i >= 0; i--) {
 			const p = this.projectiles[i];
 
-			// Lifetime first — bounded work per projectile even if it never
-			// touches anything (e.g., fires into open sky).
-			p.age += dt;
-			if (p.age >= p.profile.maxLifetime) {
-				this.disposeAt(i);
-				continue;
-			}
-
-			// Linear motion today. Timing functions can replace this with an
-			// equivalent curved-motion interval without changing the sub-step loop.
-			const motionTime = dt;
+			// Timing maps normalized lifetime to normalized distance. Differencing
+			// the curve at this frame's endpoints is frame-rate independent; scaling
+			// by maxLifetime preserves total range at speed * maxLifetime.
+			const maxLifetime = p.profile.maxLifetime;
+			const previousAge = p.age;
+			const nextAge = Math.min(previousAge + dt, maxLifetime);
+			const previousProgress = previousAge / maxLifetime;
+			const nextProgress = nextAge / maxLifetime;
+			const motionTime =
+				maxLifetime *
+				(p.profile.timing(nextProgress) -
+					p.profile.timing(previousProgress));
+			p.age = nextAge;
+			const lifetimeExpired = nextAge >= maxLifetime;
 			const maxStepDistance = bs * MAX_SUBSTEP_BLOCKS;
 			const travelDistance = Math.abs(p.profile.speed * motionTime);
 			const substepCount = Math.max(
@@ -241,7 +244,7 @@ export class ProjectileManager {
 					p.sourceTool,
 				);
 			}
-			if (p.strength <= 0) {
+			if (p.strength <= 0 || lifetimeExpired) {
 				this.disposeAt(i);
 				continue;
 			}

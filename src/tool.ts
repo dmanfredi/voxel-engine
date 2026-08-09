@@ -21,6 +21,7 @@ import {
 	type VoxelCoord,
 } from './projectile';
 import type { RaycastHit } from './raycast';
+import { assertMonotonicTiming, timingFunctions } from './timing';
 
 /**
  * Side-effect-free description of "if RMB fires while looking at this
@@ -183,6 +184,23 @@ export function defineTool(
 			`Tool "${spec.name}": rmbCooldown must be > 0 (got ${String(spec.rmbCooldown)})`,
 		);
 	}
+	if (
+		!Number.isFinite(spec.projectile.maxLifetime) ||
+		spec.projectile.maxLifetime <= 0
+	) {
+		throw new Error(
+			`Tool "${spec.name}": projectile.maxLifetime must be finite and > 0 (got ${String(spec.projectile.maxLifetime)})`,
+		);
+	}
+	if (!Number.isFinite(spec.projectile.speed) || spec.projectile.speed < 0) {
+		throw new Error(
+			`Tool "${spec.name}": projectile.speed must be finite and >= 0 (got ${String(spec.projectile.speed)})`,
+		);
+	}
+	assertMonotonicTiming(
+		`Tool "${spec.name}": projectile.timing`,
+		spec.projectile.timing,
+	);
 	if (spec.lmbCost < 0) {
 		throw new Error(
 			`Tool "${spec.name}": lmbCost must be >= 0 (got ${String(spec.lmbCost)})`,
@@ -266,8 +284,9 @@ export function tickToolCooldowns(
  */
 const PICKAXE_VISUAL = 6;
 const pickaxeProjectile: ProjectileProfile = {
-	strength: 1000,
-	speed: 2000,
+	strength: 10,
+	speed: 300,
+	timing: timingFunctions.linear,
 	hitbox: obbHitbox(PICKAXE_VISUAL * 0.5),
 	maxLifetime: 5,
 	visualSize: [PICKAXE_VISUAL, PICKAXE_VISUAL, PICKAXE_VISUAL],
@@ -301,13 +320,14 @@ const BORE_THICKNESS = 10;
 const boreProjectile: ProjectileProfile = {
 	strength: 90,
 	speed: 140,
+	timing: timingFunctions.quadOut,
 	hitbox: compoundHitbox([
 		{
 			offset: [0, 0, 0],
 			half: [BORE_WIDTH / 2, BORE_WIDTH / 2, BORE_THICKNESS / 2],
 		},
 	]),
-	maxLifetime: 5,
+	maxLifetime: 1,
 	visualSize: [BORE_WIDTH, BORE_WIDTH, BORE_THICKNESS],
 };
 

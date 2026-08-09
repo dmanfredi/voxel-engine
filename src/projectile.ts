@@ -17,6 +17,7 @@
  */
 
 import type { Tool } from './tool';
+import type { TimingFunction } from './timing';
 
 export type VoxelCoord = readonly [number, number, number];
 
@@ -703,8 +704,10 @@ export function orientationFromDirection(
 export interface ProjectileProfile {
 	/** Initial strength; decrements by `block.hardness` on each break. */
 	strength: number;
-	/** Travel speed in world units per second. */
+	/** Average travel speed across a complete normalized timing curve. */
 	speed: number;
+	/** Normalized age → normalized distance; must be monotonic from 0 to 1. */
+	timing: TimingFunction;
 	/** Collision shape. Stateless and shareable across instances. */
 	hitbox: Hitbox;
 	/** Seconds before the projectile disposes if nothing kills it first. */

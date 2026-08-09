@@ -852,18 +852,27 @@ async function main(): Promise<void> {
 	}
 
 	// Projectile system. Constructed here (rather than next to entityManager)
-	// so its onBlockBroken callback can close over gameState + updateBPDisplay.
-	// onBlockChanged is a hoisted function declaration so referencing it from
+	// so its onBlocksBroken callback can close over gameState + updateBPDisplay.
+	// onRegionChanged is a hoisted function declaration so referencing it from
 	// the callback is safe even though it's defined further down.
 	const projectileManager = new ProjectileManager(
 		world,
 		{
-			onBlockBroken: (bx, by, bz, sourceTool) => {
-				onBlockChanged(bx, by, bz);
+			onBlocksBroken: (
+				minBX,
+				minBY,
+				minBZ,
+				maxBX,
+				maxBY,
+				maxBZ,
+				count,
+				sourceTool,
+			) => {
+				onRegionChanged(minBX, minBY, minBZ, maxBX, maxBY, maxBZ);
 				entityManager.invalidateFlowField();
 				// Carve still lands during lockout; the BP earning is what's frozen.
 				if (gameState.lockoutRemaining <= 0) {
-					gameState.bp += sourceTool.bpPerBreak;
+					gameState.bp += count * sourceTool.bpPerBreak;
 					updateBPDisplay();
 				}
 			},

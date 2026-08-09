@@ -90,34 +90,34 @@ Camera-local axes `[right, up, forward]` in world units. The fire function compu
 
 ```ts
 interface Hitbox {
-  cellsAt(position, orientation, blockSize): VoxelCoord[]
+  cellsAt(position, orientation, blockSize, out): number
 }
 ```
 
-Stateless and shareable across instances. Returns the voxel cells the shape overlaps, sorted leading-edge first along the projectile's forward direction (`orientation` column 2).
+Stateless and shareable across instances. It writes the voxel cells the shape overlaps into a caller-owned scratch buffer and returns the count. Cells are unordered because the consumer breaks the entire overlap.
 
-The shipped implementation is `obbHitbox(halfSize)` — oriented bounding box vs axis-aligned voxel cell via SAT (15 axes: 3 OBB local + 3 world + 9 cross products). Candidate cells are enumerated from the OBB's world-AABB; each is tested in constant time.
+The shipped implementation is `compoundHitbox(boxes)` — a deduplicated union of oriented boxes tested against axis-aligned voxel cells via SAT (15 axes: 3 box-local + 3 world + 9 cross products). `obbHitbox(halfSize)` remains the single-centered-box convenience. Candidate cells are enumerated from each box's world AABB and tested in constant time.
 
-### Iterate-until-solid
+### Whole-overlap sweep
 
-Consumers walk the returned list and process the **first solid cell**, skipping over air. Wide hitboxes can have many cells with tied forward projection; taking only `cells[0]` and giving up if it's air would lose contact when (e.g.) the leading-edge cell is the just-broken air pocket and the side cells are clipping into a wall. The leading-edge order only ranks meaningfully along the travel direction.
+Consumers walk the full returned cell set and break every solid cell. Wide and compound hitboxes therefore clear a complete cross-section in one update rather than piecemeal across frames.
 
 ### Hardness rule: every contact breaks
 
 - Every block a projectile contacts **breaks** — it never stops without destroying something.
 - `strength` decrements by the block's `hardness` on every break.
-- The projectile disposes once `strength ≤ 0`, so the killing blow still lands a break: the leftover strength is spent on it rather than evaporating against a wall it can't afford.
-- Disposes on: `strength ≤ 0` after a break, or `age ≥ maxLifetime`.
+- The whole overlap breaks before checking `strength ≤ 0`, so strength is a soft cap that rounds up to the final complete sweep rather than leaving part of a shape behind.
+- Disposes on: `strength ≤ 0` after a sweep, or `age ≥ maxLifetime`.
 
 Strength gates **penetration depth**, not whether a given block breaks. A weak projectile still clears one block per shot against an arbitrarily hard wall (the killing blow breaks regardless of hardness) — so there's no such thing as an indestructible block. Add a `hardness === Infinity` guard if one is ever wanted.
 
-### One-impact-one-block per tick
+### One downstream batch per sweep
 
-Each update tick processes at most one break per projectile, even if the hitbox overlaps multiple solid cells. Subsequent solid cells remain reachable on later ticks while the hitbox still overlaps them. Avoids the explosion case where a fast wide projectile clears a 6-cell line in one frame.
+The manager mutates only the exact solid cells reported by the hitbox, while accumulating their count and bounding region. After the sweep it emits one `onBlocksBroken(...)` callback. `main.ts` uses the conservative bounds to remesh affected chunks once, invalidates the flow field once, and awards the batch's BP in one HUD update. Non-convex holes remain unchanged; the bounds affect notification only, not destruction.
 
 ### sourceTool back-reference
 
-`Projectile.sourceTool: Tool` is opaque to the manager — it's stamped at spawn and threaded to `onBlockBroken(bx, by, bz, sourceTool)`. The callback (set up in `main.ts`) dispatches BP off `sourceTool.bpPerBreak` and could grow per-tool particle / sound dispatch the same way.
+`Projectile.sourceTool: Tool` is opaque to the manager — it's stamped at spawn and threaded to the batched `onBlocksBroken(...)` callback. The callback (set up in `main.ts`) dispatches BP off `sourceTool.bpPerBreak` and could grow per-tool particle / sound dispatch the same way.
 
 Pattern note: this matches `BlockRegistry` (data identifies type, behavior dispatches) rather than a closure-attached `onBreak` field. No closure-as-behavior pattern exists elsewhere in the codebase.
 
@@ -212,7 +212,7 @@ No cap. Cooldowns indirectly bound spawn rate, and current tuning leaves headroo
 
 ### Sub-stepping
 
-`ProjectileManager` integrates once per tick. Current projectile speeds stay well under the per-tick tunneling threshold (~½ block). Add sub-stepping when a faster profile actually tunnels.
+`ProjectileManager` integrates once per tick and queries collision only at the new position. Sufficiently fast profiles can tunnel; add sub-stepping or a swept query when projectile motion is revisited.
 
 ## Constants
 

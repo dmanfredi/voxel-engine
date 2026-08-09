@@ -2,8 +2,8 @@
  * ProjectileManager — runtime for the projectile mining system.
  *
  * Owns the live projectile list, runs the per-tick move + collide loop,
- * applies the first-contact-freebie hardness rule, and disposes
- * projectiles on strength exhaustion, hard-block stop, or lifetime expiry.
+ * applies sweep-break hardness, and disposes projectiles on strength
+ * exhaustion or lifetime expiry.
  *
  * Deliberately parallel to EntityManager rather than folded into it:
  * projectiles have a different per-tick shape (no AI, no pair resolution),
@@ -11,9 +11,9 @@
  * bouncing), different material semantics (strength + hitbox vs.
  * density + restitution), and a higher spawn rate.
  *
- * Sub-stepping deliberately omitted — current speeds stay well below
- * the per-tick tunneling threshold (~½ block). Add it when a faster
- * profile actually tunnels.
+ * Sub-stepping is deliberately omitted. Collision samples only the new
+ * position each tick, so sufficiently fast profiles can tunnel; address that
+ * separately when projectile motion is revisited.
  */
 
 import { mat4 } from 'wgpu-matrix';
@@ -40,14 +40,25 @@ import {
 
 export interface ProjectileManagerCallbacks {
 	/**
-	 * Fired after the manager has set the voxel to AIR. The caller is
+	 * Fired once after a projectile sweep has set every reported voxel to AIR.
+	 * Bounds conservatively enclose the exact, potentially non-convex changed
+	 * cells; `count` is the number actually broken. The caller is
 	 * responsible for all downstream effects: schedule chunk remesh,
 	 * invalidate any AI caches (flow field), award BP, update HUD.
 	 * `sourceTool` is the tool that fired the projectile — callbacks
 	 * dispatch per-tool payouts/FX off it. Keeps the manager decoupled
 	 * from game-state and rendering concerns.
 	 */
-	onBlockBroken(bx: number, by: number, bz: number, sourceTool: Tool): void;
+	onBlocksBroken(
+		minBX: number,
+		minBY: number,
+		minBZ: number,
+		maxBX: number,
+		maxBY: number,
+		maxBZ: number,
+		count: number,
+		sourceTool: Tool,
+	): void;
 }
 
 export class ProjectileManager {
@@ -172,6 +183,13 @@ export class ProjectileManager {
 			// cap that rounds up to the last complete sweep rather than
 			// leaving a slice half-cleared (which would read as piecemeal).
 			let disposed = false;
+			let brokenCount = 0;
+			let minBX = Infinity;
+			let minBY = Infinity;
+			let minBZ = Infinity;
+			let maxBX = -Infinity;
+			let maxBY = -Infinity;
+			let maxBZ = -Infinity;
 			const cellCount = p.profile.hitbox.cellsAt(
 				p.position,
 				p.orientation,
@@ -187,8 +205,26 @@ export class ProjectileManager {
 				const props = blockRegistry.get(id);
 				if (!props) continue;
 				this.world.setBlock(bx, by, bz, AIR);
-				this.callbacks.onBlockBroken(bx, by, bz, p.sourceTool);
+				brokenCount++;
+				if (bx < minBX) minBX = bx;
+				if (by < minBY) minBY = by;
+				if (bz < minBZ) minBZ = bz;
+				if (bx > maxBX) maxBX = bx;
+				if (by > maxBY) maxBY = by;
+				if (bz > maxBZ) maxBZ = bz;
 				p.strength -= props.hardness;
+			}
+			if (brokenCount > 0) {
+				this.callbacks.onBlocksBroken(
+					minBX,
+					minBY,
+					minBZ,
+					maxBX,
+					maxBY,
+					maxBZ,
+					brokenCount,
+					p.sourceTool,
+				);
 			}
 			if (p.strength <= 0) {
 				this.disposeAt(i);

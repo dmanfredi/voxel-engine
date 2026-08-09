@@ -449,7 +449,7 @@ const SPHERE_BP_PENALTY = 200;
 // ── Crush payload tuning ──
 // The perched cube holds a red telegraph for this long, then carves the column
 // and plummets down it. The hold is the player's window to leave the lane.
-const CRUSH_TELEGRAPH_SECONDS = 2;
+const CRUSH_TELEGRAPH_SECONDS = 1;
 // Shaft depth (blocks) carved straight down from under the cube. A deep fixed
 // shaft reads the same as "to the void" for now; coupling it to the actual
 // rising-void floor is a clean follow-up.

@@ -55,9 +55,7 @@ const CANDIDATES: readonly (readonly [number, number, number])[] = [
 ];
 
 // Crush role tuning. The cube climbs to perch this high above the player.
-// Arrival carries slack on both axes because the discrete tip stride rarely lands the cube dead-center over the target.
 const CRUSH_PERCH_BLOCKS = 32;
-const CRUSH_ARRIVE_RADIUS_BLOCKS = 1;
 
 /**
  * Tick cooldown; on expiry, attempt a tip if grounded. Cooldown ticks
@@ -116,9 +114,9 @@ function cubeTarget(
 }
 
 /**
- * True when a Crush cube is perched above the player: horizontally within the
- * slack radius of the player's column (wrap-aware) and climbed to within that
- * same slack of the perch height.
+ * True when a Crush cube is perched above the player. Horizontal arrival uses
+ * the cube's footprint rather than center distance; vertical slack scales with
+ * its half-size because each tip advances by a full cube edge.
  */
 function crushReachedPerch(
 	entity: Entity,
@@ -134,12 +132,13 @@ function crushReachedPerch(
 	else if (dx < -hw) dx += ww;
 	if (dz > hw) dz -= ww;
 	else if (dz < -hw) dz += ww;
-	const slack = CRUSH_ARRIVE_RADIUS_BLOCKS * blockSize;
-	const horizSq = dx * dx + dz * dz;
+	const horizontallyOverPlayer =
+		Math.abs(dx) <= entity.scale && Math.abs(dz) <= entity.scale;
+	const verticalSlack = entity.scale + blockSize;
 	const aboveBy = entity.y - py;
 	return (
-		horizSq <= slack * slack &&
-		aboveBy >= CRUSH_PERCH_BLOCKS * blockSize - slack
+		horizontallyOverPlayer &&
+		aboveBy >= CRUSH_PERCH_BLOCKS * blockSize - verticalSlack
 	);
 }
 

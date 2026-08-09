@@ -109,6 +109,7 @@ Ordering inside `EntityManager.update` Pass 1: AI fires first (may start a tip),
 `Role.Zone` and `Role.Crush` are **targeting strategies** layered on the same movement primitive — they don't reimplement movement. `cubeTarget` branches on role; locomotion is untouched.
 
 - **Crush — implemented.** `cubeTarget` aims a fixed height above the player, so the existing climb locomotion towers up over them with no new pathing. On reaching the perch the AI calls `beginCrush`; EntityManager then runs a telegraph → carve → plummet sequence (`CrushState`):
+    Arrival is size-aware: the player's column must lie beneath the cube's footprint, and the vertical tolerance includes the cube's half-size plus one block so the size-scaled tip stride cannot stop just short of the exact perch point.
     1. **Telegraph** — the cube freezes and the locked N×N column is held for a hold window (the player's dodge). The lane is locked at this instant so the carve matches exactly what the telegraph advertised.
     2. **Carve + hit** — the column is carved straight down to a deep shaft in one batched remesh, **top-down** so a future beam-blocker block can halt it and spare what's beneath. A player standing in the column (wrap-aware, below the cube) takes a BP hit of `CRUSH_BP_PER_BLOCK · width` plus the standard build lockout.
     3. **Plummet** — the cube drops the now-empty shaft at a tunable speed (collision-free; pair/player resolution skip crushing cubes) and the despawn pass reaps it at the bottom. No petrify — it fell to the void.

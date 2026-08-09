@@ -11,9 +11,9 @@
  * bouncing), different material semantics (strength + hitbox vs.
  * density + restitution), and a higher spawn rate.
  *
- * Sub-stepping is deliberately omitted. Collision samples only the new
- * position each tick, so sufficiently fast profiles can tunnel; address that
- * separately when projectile motion is revisited.
+ * Movement is collision-sampled in half-block sub-steps. This reuses every
+ * Hitbox implementation unchanged while preventing ordinary fast projectiles
+ * from skipping entire voxel cells between rendered frames.
  */
 
 import { mat4 } from 'wgpu-matrix';
@@ -37,6 +37,8 @@ import {
 	type Projectile,
 	type ProjectileProfile,
 } from './projectile';
+
+const MAX_SUBSTEP_BLOCKS = 0.5;
 
 export interface ProjectileManagerCallbacks {
 	/**
@@ -145,10 +147,10 @@ export class ProjectileManager {
 
 	/**
 	 * Per-tick update. Iterates backward so swap-pop dispose doesn't skip
-	 * elements. Order within a tick: age check → move → wrap → sweep-break
-	 * overlapped cells → render-time wrap-offset upload. `playerPos` drives
-	 * the render-side wrap so projectiles on the far side of the seam draw at
-	 * their nearer copy.
+	 * elements. Order within a tick: age check → sub-step move + sweep-break →
+	 * canonical wrap → one downstream block batch → render transform upload.
+	 * `playerPos` drives the render-side wrap so projectiles on the far side of
+	 * the seam draw at their nearer copy.
 	 */
 	update(dt: number, playerPos: Float32Array): void {
 		const bs = this.world.blockSize;
@@ -168,21 +170,20 @@ export class ProjectileManager {
 				continue;
 			}
 
-			// Integrate
-			p.position[0] += p.velocity[0] * dt;
-			p.position[1] += p.velocity[1] * dt;
-			p.position[2] += p.velocity[2] * dt;
+			// Linear motion today. Timing functions can replace this with an
+			// equivalent curved-motion interval without changing the sub-step loop.
+			const motionTime = dt;
+			const maxStepDistance = bs * MAX_SUBSTEP_BLOCKS;
+			const travelDistance = Math.abs(p.profile.speed * motionTime);
+			const substepCount = Math.max(
+				1,
+				Math.ceil(travelDistance / maxStepDistance),
+			);
+			const substepTime = motionTime / substepCount;
 
-			// Wrap X/Z — Y is open (no vertical wrap)
-			p.position[0] = ((p.position[0] % ww) + ww) % ww;
-			p.position[2] = ((p.position[2] % ww) + ww) % ww;
-
-			// Sweep-break: destroy every solid cell the hitbox overlaps this
-			// tick, charging strength by each block's hardness. The whole
-			// overlap breaks before the strength check, so strength is a soft
-			// cap that rounds up to the last complete sweep rather than
-			// leaving a slice half-cleared (which would read as piecemeal).
-			let disposed = false;
+			// Accumulate one notification across every sub-step. Each individual
+			// overlap breaks completely before strength is checked, preserving the
+			// soft-cap rule without letting an exhausted projectile travel farther.
 			let brokenCount = 0;
 			let minBX = Infinity;
 			let minBY = Infinity;
@@ -190,30 +191,44 @@ export class ProjectileManager {
 			let maxBX = -Infinity;
 			let maxBY = -Infinity;
 			let maxBZ = -Infinity;
-			const cellCount = p.profile.hitbox.cellsAt(
-				p.position,
-				p.orientation,
-				bs,
-				this.cellScratch,
-			);
-			for (let c = 0; c < cellCount; c++) {
-				const bx = this.cellScratch[3 * c];
-				const by = this.cellScratch[3 * c + 1];
-				const bz = this.cellScratch[3 * c + 2];
-				const id = this.world.getBlock(bx, by, bz);
-				if (id === AIR) continue;
-				const props = blockRegistry.get(id);
-				if (!props) continue;
-				this.world.setBlock(bx, by, bz, AIR);
-				brokenCount++;
-				if (bx < minBX) minBX = bx;
-				if (by < minBY) minBY = by;
-				if (bz < minBZ) minBZ = bz;
-				if (bx > maxBX) maxBX = bx;
-				if (by > maxBY) maxBY = by;
-				if (bz > maxBZ) maxBZ = bz;
-				p.strength -= props.hardness;
+			for (let step = 0; step < substepCount; step++) {
+				p.position[0] += p.velocity[0] * substepTime;
+				p.position[1] += p.velocity[1] * substepTime;
+				p.position[2] += p.velocity[2] * substepTime;
+
+				const cellCount = p.profile.hitbox.cellsAt(
+					p.position,
+					p.orientation,
+					bs,
+					this.cellScratch,
+				);
+				for (let c = 0; c < cellCount; c++) {
+					const bx = this.cellScratch[3 * c];
+					const by = this.cellScratch[3 * c + 1];
+					const bz = this.cellScratch[3 * c + 2];
+					const id = this.world.getBlock(bx, by, bz);
+					if (id === AIR) continue;
+					const props = blockRegistry.get(id);
+					if (!props) continue;
+					this.world.setBlock(bx, by, bz, AIR);
+					brokenCount++;
+					if (bx < minBX) minBX = bx;
+					if (by < minBY) minBY = by;
+					if (bz < minBZ) minBZ = bz;
+					if (bx > maxBX) maxBX = bx;
+					if (by > maxBY) maxBY = by;
+					if (bz > maxBZ) maxBZ = bz;
+					p.strength -= props.hardness;
+				}
+
+				if (p.strength <= 0) break;
 			}
+
+			// Keep coordinates unwrapped during sub-stepping so a seam-crossing
+			// batch has compact raw bounds (e.g. 318..321, not 0..319).
+			p.position[0] = ((p.position[0] % ww) + ww) % ww;
+			p.position[2] = ((p.position[2] % ww) + ww) % ww;
+
 			if (brokenCount > 0) {
 				this.callbacks.onBlocksBroken(
 					minBX,
@@ -228,20 +243,18 @@ export class ProjectileManager {
 			}
 			if (p.strength <= 0) {
 				this.disposeAt(i);
-				disposed = true;
+				continue;
 			}
 
-			// Survived this tick — push the new transform to the GPU.
+			// Survived every sub-step — push the final transform to the GPU.
 			// Render-time wrap: if the projectile sits on the far side of
 			// the wrapping world relative to the player, offset it to its
 			// nearer copy. Same trick chunks and entities use.
-			if (!disposed) {
-				const dx = p.position[0] - px;
-				const dz = p.position[2] - pz;
-				const offsetX = dx > hw ? -ww : dx < -hw ? ww : 0;
-				const offsetZ = dz > hw ? -ww : dz < -hw ? ww : 0;
-				this.writeTransform(p, this.renderDatas[i], offsetX, offsetZ);
-			}
+			const dx = p.position[0] - px;
+			const dz = p.position[2] - pz;
+			const offsetX = dx > hw ? -ww : dx < -hw ? ww : 0;
+			const offsetZ = dz > hw ? -ww : dz < -hw ? ww : 0;
+			this.writeTransform(p, this.renderDatas[i], offsetX, offsetZ);
 		}
 	}
 

@@ -115,6 +115,12 @@ Strength gates **penetration depth**, not whether a given block breaks. A weak p
 
 The manager mutates only the exact solid cells reported by the hitbox, while accumulating their count and bounding region. After the sweep it emits one `onBlocksBroken(...)` callback. `main.ts` uses the conservative bounds to remesh affected chunks once, invalidates the flow field once, and awards the batch's BP in one HUD update. Non-convex holes remain unchanged; the bounds affect notification only, not destruction.
 
+### Distance-based sub-stepping
+
+Each frame's linear displacement is divided into samples no farther apart than half a block. Every sample runs the existing hitbox query and complete-overlap break, so fast projectiles cannot skip entire voxel cells between rendered frames and arbitrary compound hitboxes require no special sweep implementation. Strength exhaustion stops the remaining sub-steps, while block bounds and BP count accumulate into the frame's single downstream callback.
+
+Projectile coordinates remain unwrapped during the sub-step loop and canonicalize afterward. A frame that crosses the horizontal world seam therefore reports compact raw bounds across that seam instead of conservatively spanning almost the entire world. Only the final transform is uploaded; intermediate collision samples are not rendered.
+
 ### sourceTool back-reference
 
 `Projectile.sourceTool: Tool` is opaque to the manager — it's stamped at spawn and threaded to the batched `onBlocksBroken(...)` callback. The callback (set up in `main.ts`) dispatches BP off `sourceTool.bpPerBreak` and could grow per-tool particle / sound dispatch the same way.
@@ -209,10 +215,6 @@ No sound, no break particles, no camera kick, no crosshair states. `Tool` has fi
 ### In-flight projectile cap
 
 No cap. Cooldowns indirectly bound spawn rate, and current tuning leaves headroom. Add a cap on the `Tool` when a fast-firing profile actually fills the world.
-
-### Sub-stepping
-
-`ProjectileManager` integrates once per tick and queries collision only at the new position. Sufficiently fast profiles can tunnel; add sub-stepping or a swept query when projectile motion is revisited.
 
 ## Constants
 

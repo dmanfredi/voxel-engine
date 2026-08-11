@@ -55,4 +55,3 @@ Copied research, learning notes, snippets, and external-formula material.
 ## Known Follow-Ups
 
 - `TECHNICAL-ROADMAP.md` still says cube enemy behavior is unimplemented, but cube behavior and Crush are now partly live.
-- `systems/spawning-and-despawning.md` says "No code yet", but `src/spawner.ts` is now implemented and wired in.

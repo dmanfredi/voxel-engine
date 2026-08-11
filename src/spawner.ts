@@ -1,11 +1,11 @@
 /**
  * Enemy spawning — the game's pacing layer. Two cooperating halves live here:
  *
- *   Director — decides PACE: how often to attempt a spawn and the active-enemy
- *     cap. Constant for now (see `desiredPressure`), but the inputs that will
- *     drive a dynamic curve — altitude, section — are already in `update`'s
- *     scope, so growing it needs no signature change. Split into its own module
- *     when that curve lands.
+ *   Director — decides PACE: the target interval between successful spawns and
+ *     the active-enemy cap. Constant for now (see `desiredPressure`), but the
+ *     inputs that will drive a dynamic curve — altitude, section — are already
+ *     in `update`'s scope, so growing it needs no signature change. Split into
+ *     its own module when that curve lands.
  *
  *   Spawner — given "spawn one," finds a uniform solid block cluster near the
  *     player, consumes it to air, and emerges an enemy centered in the cavity.
@@ -43,14 +43,15 @@ const SPAWN_RADIUS_MAX_BLOCKS = 48;
 const SPAWN_VERTICAL_SPAN_BLOCKS = 24;
 
 // Constant-pace knobs (the Director's whole tuning surface for now).
-const SPAWN_CADENCE_SECONDS = 0.5; // min seconds between spawn attempts
+const SPAWN_INTERVAL_SECONDS = 1.5; // target min seconds between successful spawns
 const SPAWN_MAX_ACTIVE = 32; // population cap
 // Breachers are an occasional anti-tunneling pressure tool, not the default cube.
 const BREACHER_CUBE_CHANCE = 0.1;
 
-// Candidate sites sampled per attempt before giving up for this cadence.
-// Barren terrain yielding nothing is a feature — sparse worlds stay calm.
-const SPAWN_ATTEMPTS_PER_TICK = 16;
+// Site search has its own time and work budgets so retries neither depend on
+// frame rate nor turn a difficult search into an unbounded frame-time spike.
+const SPAWN_SEARCH_RETRY_SECONDS = 0.1;
+const SPAWN_COLUMNS_PER_SEARCH = 4;
 
 // ── Spawn table ─────────────────────────────────────────────────────
 //
@@ -102,7 +103,9 @@ export class Spawner {
 	private world: World;
 	private entityManager: EntityManager;
 	private onRegionChanged: RegionChangedFn;
-	private sinceLastAttempt = 0;
+	private sinceLastSpawn = 0;
+	private spawnPending = false;
+	private searchCooldown = 0;
 
 	constructor(
 		world: World,
@@ -115,12 +118,29 @@ export class Spawner {
 	}
 
 	update(dt: number, playerPos: Float32Array): void {
-		const { cadence, maxActive } = this.desiredPressure();
-		this.sinceLastAttempt += dt;
-		if (this.sinceLastAttempt < cadence) return;
-		this.sinceLastAttempt = 0;
-		if (this.entityManager.activeCount >= maxActive) return;
-		this.trySpawn(playerPos);
+		const { interval, maxActive } = this.desiredPressure();
+
+		if (!this.spawnPending) {
+			this.sinceLastSpawn += dt;
+			if (this.sinceLastSpawn < interval) return;
+			this.spawnPending = true;
+			this.searchCooldown = 0;
+		}
+
+		// A full population pauses the one outstanding ticket. It does not build
+		// spawn debt, and the search resumes immediately when a slot opens.
+		if (this.entityManager.activeCount >= maxActive) {
+			this.searchCooldown = 0;
+			return;
+		}
+
+		this.searchCooldown -= dt;
+		if (this.searchCooldown > 0) return;
+		this.searchCooldown = SPAWN_SEARCH_RETRY_SECONDS;
+
+		if (!this.trySpawn(playerPos)) return;
+		this.spawnPending = false;
+		this.sinceLastSpawn = 0;
 	}
 
 	/**
@@ -128,23 +148,27 @@ export class Spawner {
 	 * the active section to scale pace; both are reachable from `update` without
 	 * a signature change. See the Director note up top.
 	 */
-	private desiredPressure(): { cadence: number; maxActive: number } {
-		return { cadence: SPAWN_CADENCE_SECONDS, maxActive: SPAWN_MAX_ACTIVE };
+	private desiredPressure(): { interval: number; maxActive: number } {
+		return {
+			interval: SPAWN_INTERVAL_SECONDS,
+			maxActive: SPAWN_MAX_ACTIVE,
+		};
 	}
 
-	private trySpawn(playerPos: Float32Array): void {
+	private trySpawn(playerPos: Float32Array): boolean {
 		const entry =
 			SPAWN_TABLE[Math.floor(Math.random() * SPAWN_TABLE.length)];
 		const site = this.findSite(playerPos, entry);
-		if (!site) return; // no valid cluster this attempt — terrain-driven calm
+		if (!site) return false;
 		this.emerge(site, entry);
+		return true;
 	}
 
 	/**
-	 * Sample candidate clusters in the spawn shell until one is valid: all
-	 * cells solid + same material, that material hosts the shape, and the
-	 * cluster touches air on at least one face (so the enemy isn't entombed).
-	 * Returns the first hit, or null after the attempt budget.
+	 * Sample horizontal columns in the spawn shell, scanning each column's
+	 * behavior-biased vertical band for exposed terrain. A valid cluster has one
+	 * solid material that hosts the shape and touches air on at least one face.
+	 * Returns the first hit, or null after the bounded column budget.
 	 */
 	private findSite(playerPos: Float32Array, entry: SpawnEntry): Site | null {
 		const blockSize = this.world.blockSize;
@@ -153,7 +177,10 @@ export class Spawner {
 		const playerBY = Math.floor((playerPos[1] ?? 0) / blockSize);
 		const playerBZ = Math.floor((playerPos[2] ?? 0) / blockSize);
 
-		for (let attempt = 0; attempt < SPAWN_ATTEMPTS_PER_TICK; attempt++) {
+		const { minOffset, maxOffset } = verticalRange(entry.shape);
+		const verticalCount = maxOffset - minOffset + 1;
+
+		for (let column = 0; column < SPAWN_COLUMNS_PER_SEARCH; column++) {
 			const angle = Math.random() * Math.PI * 2;
 			const radius =
 				SPAWN_RADIUS_MIN_BLOCKS +
@@ -161,28 +188,37 @@ export class Spawner {
 					(SPAWN_RADIUS_MAX_BLOCKS - SPAWN_RADIUS_MIN_BLOCKS);
 			const bx0 = playerBX + Math.round(Math.cos(angle) * radius);
 			const bz0 = playerBZ + Math.round(Math.sin(angle) * radius);
-			const by0 = playerBY + verticalOffset(entry.shape);
 
-			const material = this.clusterMaterial(
-				bx0,
-				by0,
-				bz0,
-				n,
-				entry.shape,
-			);
-			if (material === null) continue;
-			if (!this.isExposed(bx0, by0, bz0, n)) continue;
+			// Randomize the scan's start and direction so repeated searches do not
+			// favor one altitude while still inspecting the whole vertical band.
+			const verticalStart = Math.floor(Math.random() * verticalCount);
+			const verticalStep = Math.random() < 0.5 ? -1 : 1;
+			for (let scan = 0; scan < verticalCount; scan++) {
+				const verticalIndex =
+					(verticalStart + scan * verticalStep + verticalCount) %
+					verticalCount;
+				const by0 = playerBY + minOffset + verticalIndex;
+				const material = this.clusterMaterial(
+					bx0,
+					by0,
+					bz0,
+					n,
+					entry.shape,
+				);
+				if (material === null) continue;
+				if (!this.isExposed(bx0, by0, bz0, n)) continue;
 
-			return {
-				bx0,
-				by0,
-				bz0,
-				n,
-				material,
-				centerX: (bx0 + n / 2) * blockSize,
-				centerY: (by0 + n / 2) * blockSize,
-				centerZ: (bz0 + n / 2) * blockSize,
-			};
+				return {
+					bx0,
+					by0,
+					bz0,
+					n,
+					material,
+					centerX: (bx0 + n / 2) * blockSize,
+					centerY: (by0 + n / 2) * blockSize,
+					centerZ: (bz0 + n / 2) * blockSize,
+				};
+			}
 		}
 		return null;
 	}
@@ -289,13 +325,19 @@ export class Spawner {
 }
 
 /**
- * Vertical candidate offset (blocks) keyed to shape. Rushers skew below/level
- * so the threat climbs toward you; crushers skew above so they drop onto you.
+ * Vertical search band (blocks) keyed to shape. Rushers search below/level so
+ * the threat climbs toward you; crushers search above so they drop onto you.
  */
-function verticalOffset(shape: Shape): number {
+function verticalRange(shape: Shape): {
+	minOffset: number;
+	maxOffset: number;
+} {
 	if (shape === Shape.Cube) {
-		return Math.round(Math.random() * SPAWN_VERTICAL_SPAN_BLOCKS);
+		return { minOffset: 0, maxOffset: SPAWN_VERTICAL_SPAN_BLOCKS };
 	}
 	// Spheres: mostly below, a little above level.
-	return Math.round((Math.random() - 0.8) * SPAWN_VERTICAL_SPAN_BLOCKS);
+	return {
+		minOffset: -Math.round(0.8 * SPAWN_VERTICAL_SPAN_BLOCKS),
+		maxOffset: Math.round(0.2 * SPAWN_VERTICAL_SPAN_BLOCKS),
+	};
 }

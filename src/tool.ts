@@ -66,8 +66,8 @@ export type AimConstraint = (
 
 /**
  * Fire only when the camera aims within `slackDeg` of one of the six axes,
- * snapping to that exact axis so the bore stays grid-aligned rather than
- * ragged; otherwise reject the shot.
+ * snapping to that exact axis so constrained projectiles stay grid-aligned;
+ * otherwise reject the shot.
  */
 export function cardinalLock(slackDeg: number): AimConstraint {
 	const minDot = Math.cos((slackDeg * Math.PI) / 180);
@@ -285,7 +285,7 @@ export function tickToolCooldowns(
 const PICKAXE_VISUAL = 6;
 const pickaxeProjectile: ProjectileProfile = {
 	strength: 10,
-	speed: 300,
+	speed: 450,
 	timing: timingFunctions.linear,
 	hitbox: obbHitbox(PICKAXE_VISUAL * 0.5),
 	maxLifetime: 5,
@@ -308,9 +308,9 @@ export const pickaxeTool: Tool = defineTool({
 });
 
 /**
- * Cardinal-locked tunneller: fires a grid-aligned slab straight down one of
- * the six axes — wide across the lane, thin along travel, so each sweep-break
- * clears a clean cross-section.
+ * Free-aim tunneller: fires a slab along the resolved crosshair direction —
+ * wide across the lane and thin along travel, so each sweep-break clears a
+ * broad cross-section.
  */
 // Slab edges in world units: BORE_WIDTH across the lane (right/up),
 // BORE_THICKNESS along travel (forward). Thin along travel so each tick
@@ -343,5 +343,5 @@ export const boreTool: Tool = defineTool({
 	rmbCooldown: 0.1,
 	spawnOffset: new Float32Array([0, -5, 5]),
 	chargeTime: null,
-	aimConstraint: cardinalLock(5),
+	aimConstraint: null,
 });

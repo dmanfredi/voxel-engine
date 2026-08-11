@@ -5,16 +5,16 @@ are *born from blocks* and *return to blocks* — so the system sits between the
 generators (which lay the terrain) and the entity manager (which runs the
 lifecycle). This is the pacing layer of the game.
 
-> **Status: design-stage.** No code yet. This captures the converged design and
-> the reasoning behind it so implementation can follow without re-litigating.
-> Filenames below are proposed, not real.
+> **Status: implemented.** The core loop lives in `src/spawner.ts`; dynamic pace
+> and emergence telegraphing remain deferred.
 
 ## The shape of the system
 
 Three cooperating pieces, layered over the existing `EntityManager`:
 
-1. **Director** — decides *pace*: how many enemies should be active and how often
-   to attempt a spawn. Constant for now; built to become section-driven.
+1. **Director** — decides *pace*: how many enemies should be active and the target
+   interval between successful spawns. Constant for now; built to become
+   section-driven.
 2. **Spawner** — given "spawn one," finds a valid block cluster near the player,
    consumes it, and emerges an enemy from it. Unlike the generators, the spawner
    **gets a `World` reference** — it has to query live terrain. This is the
@@ -58,10 +58,13 @@ them from popping on top of you, an outer wall keeps them roughly within reach.
   the climb fantasy); descend-and-crush enemies spawn above. This rides on Role,
   the same way AI dispatch already does — a switch, not a per-archetype table.
 
-Search is sampled and budgeted: try K candidate points in the shell each spawn
-tick; first valid site wins; if none pass, **no spawn this tick**. Barren terrain
-is naturally calm, dense terrain naturally dangerous — the density self-regulates
-with no explicit knob.
+Search is sampled and budgeted: each search pass samples K horizontal columns in
+the shell and scans their behavior-biased vertical bands for exposed clusters.
+The first valid site wins. If none pass, the one untyped spawn request stays
+pending and the next time-based search pass rerolls the spawn table. Requests do
+not accumulate, so a delayed search can produce one spawn but never a catch-up
+burst. Terrain determines which sites, materials, and enemy sizes are available;
+it does not silently consume the director's pacing interval.
 
 ### Cluster rules
 
@@ -91,10 +94,12 @@ the dissolve look, but they're logically already spoken for.
 
 > **The thing that sets the game's pace.** Treat it as the seam, not the value.
 
-Constant pressure to start: attempt a spawn on a fixed cadence, capped at a fixed
-max-active count. Both are constants *today* but live behind a context-taking
-shape — `desiredPressure(ctx) → { cadence, maxActive }` — so the eventual driver
-can swap in without touching the spawner.
+Constant pressure to start: after each successful spawn, wait a fixed interval,
+then hold one untyped spawn request pending until a bounded search succeeds. A
+fixed max-active count pauses that request without accumulating spawn debt. Both
+values are constants *today* but live behind a context-taking shape —
+`desiredPressure(ctx) → { interval, maxActive }` — so the eventual driver can
+swap in without touching the spawner.
 
 The demo-friendly driver is **altitude** (climb higher → more pressure). The
 real end goal is **section-dependent** pace — the Phase 5 section system owns the
@@ -197,9 +202,10 @@ the no-path threshold can shrink toward something that actually means "stuck."
 |---|---|
 | `SPAWN_RADIUS_MIN_BLOCKS` | Inner wall of the spawn shell (start: 24 ≈ flow-field edge). |
 | `SPAWN_RADIUS_MAX_BLOCKS` | Outer wall (start: 64; past the field on purpose). |
-| `SPAWN_CADENCE` | Seconds between spawn attempts (constant-pace v0). |
+| `SPAWN_INTERVAL_SECONDS` | Target minimum seconds between successful spawns. |
 | `SPAWN_MAX_ACTIVE` | Cap on simultaneously-active enemies. |
-| `SPAWN_ATTEMPTS_PER_TICK` | K candidate sites sampled before giving up for the tick. |
+| `SPAWN_SEARCH_RETRY_SECONDS` | Time between search passes while one request is pending. |
+| `SPAWN_COLUMNS_PER_SEARCH` | Horizontal columns scanned per bounded search pass. |
 | `TELEGRAPH_SECONDS` | Visual emergence duration (flair only). |
 | `DESPAWN_NOPATH_SECONDS` | No-path timer threshold — **high** until pathing improves. |
 | `DESPAWN_LIFESPAN_SECONDS` | Absolute age cap (candidate). |

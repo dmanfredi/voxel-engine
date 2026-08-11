@@ -721,8 +721,8 @@ async function main(): Promise<void> {
 			if (!tool.aimConstraint(cameraFront, spawnDirection)) {
 				return false;
 			}
-			// Center the spawn on the block grid along Y so a tall bore carves
-			// whole rows instead of dipping into the floor (the eye sits
+			// Center the spawn on the block grid along Y so a tall constrained
+			// hitbox carves whole rows instead of dipping into the floor (the eye sits
 			// mid-block). Skip vertical lanes, where Y is the travel axis.
 			if (Math.abs(spawnDirection[1]) < 0.5) {
 				spawnOrigin[1] =

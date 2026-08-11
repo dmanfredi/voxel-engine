@@ -35,6 +35,8 @@ interface Tool {
   spawnOffset,     // camera-local [right, up, forward], world units
   // Fire mode
   chargeTime,      // null = autofire on hold
+  // Aim
+  aimConstraint,   // null = ordinary free aim
   // Runtime state
   lmbCooldownRemaining, rmbCooldownRemaining,
 }
@@ -79,6 +81,12 @@ Currently checks cooldown ready + sufficient BP. New gates (target validity, pro
 ### spawnOffset
 
 Camera-local axes `[right, up, forward]` in world units. The fire function computes `cameraRight = normalize(cross(cameraFront, cameraUp))` at emit time and reconstructs the world-space origin as `cameraPos + right·off[0] + up·off[1] + front·off[2]`. The hip-fire nudge keeps the projectile outside the camera frustum so it doesn't briefly occlude the view on emit.
+
+### aimConstraint
+
+`null` routes through ordinary free aim: close shots travel parallel to the camera ray so the hip-fire offset stays visually stable, while farther shots converge on the crosshair hit point. A non-null `AimConstraint` instead writes the projectile's unit travel direction and may reject the shot without spending BP or cooldown.
+
+`cardinalLock(slackDeg)` remains available as a reusable constraint. It selects the camera direction's largest-magnitude component, compares that component with `cos(slackDeg)`, and—when accepted—writes the corresponding signed world axis. The Bore currently leaves `aimConstraint` null, so its slab and matching compound hitbox rotate freely with its resolved shot direction.
 
 ## 2. Projectile (`projectile.ts`)
 

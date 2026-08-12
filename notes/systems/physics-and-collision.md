@@ -63,12 +63,13 @@ Instead, `physicsTick` runs once per frame and receives `dt` (frame delta in sec
 
 **Ground**: high drag (0.546 per tick), high acceleration. You reach top speed quickly and stop quickly. The formula is `vel = vel * drag + accel * direction`.
 
-**Air**: low drag (0.91 per tick), low acceleration (0.26 vs 3.0 on ground). You keep most of your speed but can barely steer. This is why jumping while moving is faster — you build speed on the ground frame, then barely lose it in air.
+**Air**: low drag (0.895 per tick), low acceleration (0.5 vs 2.0 on ground). You keep most of your speed but can barely steer. This is why jumping while moving is faster — you build speed on the ground frame, then barely lose it in air.
 
 ### Jumping
 
-- Sets vertical velocity to `JUMP_VELOCITY` (4.2)
-- 0.5s cooldown when holding Space (auto-jump). Releasing Space resets the cooldown immediately, so tapping gives instant re-jumps
+- Sets vertical velocity to `JUMP_VELOCITY` (6.4), enough to gain roughly one additional block of height over the previous jump
+- Arms auto-climb for one second. During that window, an air block directly beneath the player is filled if placement rules and BP allow it; Shift suppresses placement
+- 0.4s cooldown when holding Space (auto-jump). Releasing Space resets the cooldown immediately, so tapping gives instant re-jumps
 - Jump boost (`SPRINT_JUMP_BOOST`) adds horizontal velocity toward facing, but only when a movement key is held — prevents lurching forward from a stationary jump
 
 ### Vertical physics
@@ -89,14 +90,14 @@ All constants live at the top of `movement.ts`. The base values come from Minecr
 
 | Constant | Value | What it controls |
 |---|---|---|
-| `GROUND_ACCEL` | 3 | How fast you reach top speed on ground |
-| `AIR_ACCEL` | 0.26 | How much you can steer in air |
+| `GROUND_ACCEL` | 2 | How fast you reach top speed on ground |
+| `AIR_ACCEL` | 0.5 | How much you can steer in air |
 | `GROUND_DRAG` | 0.546 | How quickly you stop on ground (lower = snappier) |
-| `AIR_DRAG` | 0.91 | How much speed you keep in air (higher = more momentum) |
-| `JUMP_VELOCITY` | 4.2 | Initial upward velocity on jump |
+| `AIR_DRAG` | 0.895 | How much speed you keep in air (higher = more momentum) |
+| `JUMP_VELOCITY` | 6.4 | Initial upward velocity on jump |
 | `GRAVITY` | 0.8 | Downward acceleration per tick |
 | `VERTICAL_DRAG` | 0.98 | Air resistance on vertical movement |
 | `TERMINAL_VELOCITY` | -39.2 | Max falling speed |
-| `SPRINT_JUMP_BOOST` | 2.8 | Horizontal velocity added when jump-moving |
-| `JUMP_COOLDOWN` | 0.5 | Seconds between auto-jumps when holding Space |
+| `SPRINT_JUMP_BOOST` | 0 | Horizontal velocity added when jump-moving |
+| `JUMP_COOLDOWN` | 0.4 | Seconds between auto-jumps when holding Space |
 | `NEGLIGIBLE_THRESHOLD` | 0.05 | Velocity below this is snapped to zero |

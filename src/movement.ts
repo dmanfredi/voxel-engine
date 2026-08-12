@@ -3,7 +3,7 @@ import type { World } from './world';
 import { moveAndCollide } from './collision';
 
 const MC_TICK = 0.05;
-const JUMP_VELOCITY = 4.8; // worth fine tuning some more
+const JUMP_VELOCITY = 6.4;
 const GRAVITY = 0.8;
 const VERTICAL_DRAG = 0.98;
 const TERMINAL_VELOCITY = -39.2;
@@ -79,7 +79,7 @@ export function physicsTick(
 	halfWidth: number,
 	height: number,
 	dt: number,
-): void {
+): boolean {
 	const t = dt / MC_TICK;
 
 	// Jump cooldown
@@ -164,6 +164,8 @@ export function physicsTick(
 
 	// Update ground state
 	state.onGround = result.onGround;
+
+	return justJumped;
 }
 
 export function FREECAM(

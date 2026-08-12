@@ -56,6 +56,7 @@ const BLOCK_SIZE = 10;
 const WORLD_WIDTH = 10; // horizontal chunk width (X and Z), wrapping
 const VERTICAL_RADIUS = 6; // chunks above/below player to keep loaded
 const SPAWN_CY = 4; // initial player chunk Y
+const AUTO_CLIMB_DURATION = 0.4;
 
 const world = new World(BLOCK_SIZE, WORLD_WIDTH);
 
@@ -592,6 +593,7 @@ async function main(): Promise<void> {
 	// tool cooldown is the rate-limit and the player just keeps holding.
 	let lmbDown = false;
 	let rmbDown = false;
+	let autoClimbRemaining = 0;
 	const playerState = createPlayerState();
 	const playerHeight = BLOCK_SIZE * 2 * 0.9;
 	const playerHalfWidth = BLOCK_SIZE / 4;
@@ -1013,11 +1015,12 @@ async function main(): Promise<void> {
 			0,
 			gameState.lockoutRemaining - dt,
 		);
+		autoClimbRemaining = Math.max(0, autoClimbRemaining - dt);
 
 		if (debuggerParams.freecam) {
 			FREECAM(keysDown, cameraPos, cameraFront, cameraUp, dt * 300);
 		} else {
-			physicsTick(
+			const justJumped = physicsTick(
 				playerState,
 				keysDown,
 				cameraFront,
@@ -1028,6 +1031,7 @@ async function main(): Promise<void> {
 				playerHeight,
 				dt,
 			);
+			if (justJumped) autoClimbRemaining = AUTO_CLIMB_DURATION;
 		}
 
 		// Wrap player position horizontally
@@ -1059,9 +1063,13 @@ async function main(): Promise<void> {
 			voidDeleteFloorCY(voidFloorState, BLOCK_SIZE),
 		);
 
-		// Auto-climb: place a block beneath feet whenever there's air there.
-		// Suppressed when holding Shift or in freecam.
-		if (!debuggerParams.freecam && !keysDown.has('ShiftLeft')) {
+		// Auto-climb is briefly armed by a jump. Shift remains the opt-out for
+		// precision jumps where the player wants to leave the space untouched.
+		if (
+			autoClimbRemaining > 0 &&
+			!debuggerParams.freecam &&
+			!keysDown.has('ShiftLeft')
+		) {
 			const climbed = autoClimb(
 				cameraPos,
 				playerHeight,

@@ -43,7 +43,7 @@ export const debuggerParams = {
 	exposure: 0.8,
 	skyIntensity: 1.0,
 	shadows: true,
-	shadowStrength: 0.45,
+	shadowStrength: 0.65,
 	shadowBias: 0.0,
 	shadowNormalBias: 0.35,
 };

@@ -559,9 +559,6 @@ async function main(): Promise<void> {
 	// projectile manager's onBlockChanged reference.
 	const spawner = new Spawner(world, entityManager, onRegionChanged);
 
-	// Initialize block highlight outline
-	// const highlight = initHighlight(device, presentationFormat);
-
 	// TODO: re-enable water once it supports chunked worlds
 
 	let depthTexture: GPUTexture;

@@ -66,13 +66,14 @@ interface SpawnEntry {
 }
 
 const SPAWN_TABLE: SpawnEntry[] = [
-	{ shape: Shape.Sphere, role: Role.Rush, size: 5 },
-	{ shape: Shape.Sphere, role: Role.Rush, size: 5 },
 	{ shape: Shape.Sphere, role: Role.Rush, size: 9 },
+	{ shape: Shape.Sphere, role: Role.Rush, size: 9 },
+	{ shape: Shape.Sphere, role: Role.Rush, size: 14 },
 	{ shape: Shape.Sphere, role: Role.Rush, size: 19 },
+	{ shape: Shape.Cube, role: Role.Crush, size: 15 },
 	{ shape: Shape.Cube, role: Role.Crush, size: 10 },
-	{ shape: Shape.Cube, role: Role.Crush, size: 5 },
-	{ shape: Shape.Cube, role: Role.Crush, size: 5 },
+	{ shape: Shape.Cube, role: Role.Crush, size: 10 },
+	{ shape: Shape.Cube, role: Role.Crush, size: 20 },
 ];
 
 // ── Types ───────────────────────────────────────────────────────────

@@ -7,13 +7,16 @@ Tools are the player's only interaction with the world — block-breaking and bl
 1. **Tool** — frozen design data (cooldowns, costs, projectile template, build profile) plus mutable cooldown state. One per hotbar slot.
 2. **Projectile** — live entity spawned by a Tool's LMB; flies, collides with voxels, breaks them, disposes.
 
-LMB fires a projectile. RMB resolves the Tool's `BuildProfile` against the raycast target and places cells. Both clocks tick independently and both autofire while their button is held.
+LMB fires a projectile. RMB either launches a *build* projectile — the structure it grows is `growth.ts`'s business, see `growth-and-build-projectiles.md` — or, on tools without one, falls back to stamping a `BuildProfile` onto the raycast target. Both clocks tick independently and both autofire while their button is held.
+
+A projectile's `effect` picks its contact resolution: Mine consumes the whole overlap set and keeps going, Build stops at first contact and reports the impact. Motion is identical either way, which is the seam enemy-fired projectiles will reuse — what's left there is widening the source off `Tool`.
 
 Projectiles carry a back-reference to their `sourceTool` so the break callback can dispatch per-tool effects (BP payout, future FX) without the projectile system having to know about Tools.
 
 ## Files
 
 - **`src/tool.ts`** — `Tool` + `BuildProfile` types, `defineTool()` factory, `canFire`, `tickToolCooldowns`, and concrete tool instances
+- **`src/growth.ts`** — what a build projectile leaves behind; see `growth-and-build-projectiles.md`
 - **`src/timing.ts`** — normalized monotonic timing-function catalog, sampled custom-function validation, and CSS-style `cubicBezier(...)`
 - **`src/projectile.ts`** — `Hitbox` interface, `obbHitbox()` SAT factory, `orientationFromDirection()`, `Projectile` + `ProjectileProfile` types
 - **`src/projectile-manager.ts`** — runtime: spawn, per-tick move/collide/break, render-time wrap, dispose
@@ -58,7 +61,7 @@ interface BuildProfile {
 }
 ```
 
-`targetSelector` is **the single source of truth for "where would this RMB land?"**. The committer calls it and places each returned cell; the (deferred) ghost previewer would call the same function and render each cell as a translucent ghost. Adding the previewer later doesn't change the type — the consumer just doesn't exist yet.
+`targetSelector` answers "where would this RMB land?" for the committer, which places each returned cell. It is the utility path now — one specific cell, plugged deliberately — rather than the main way tools build.
 
 `singleBlockBuild(blockId, costPerBlock)` covers the trivial case (one block on the targeted face). Richer profiles (walls, stairs, scaffolds) become new `BuildProfile` factories.
 
@@ -195,10 +198,6 @@ Carrying a Tool reference on the Projectile and reading fields in a callback mat
 
 All "should this fire?" logic flows through one predicate. New gates land in one file and immediately apply at every call site.
 
-### BuildProfile.targetSelector is the preview/commit single source
-
-Same function the (future) ghost renderer and the committer both call. The preview consumer doesn't exist yet, but the shape is preview-ready — no `BuildProfile` rewrite needed when ghosts land.
-
 ### Render-time wrap is shared across systems
 
 The chunk pass, the entity manager, and the projectile manager all use the same wrap-offset trick: compute distance to player, offset by ±worldWidth when on the far side. Canonical positions stay in `[0, ww)`; only the model matrix sees the offset. Any new world-resident system needs to do this too — see `entity-physics-and-ai.md` for the full discipline.
@@ -207,9 +206,9 @@ The chunk pass, the entity manager, and the projectile manager all use the same 
 
 These have been explicitly put off; new work should respect the boundaries.
 
-### Ghost preview for BuildProfile
+### Ghost preview — abandoned, not deferred
 
-`targetSelector` already returns the cells the previewer would render. Adding the consumer is one new file and zero changes to existing ones.
+Built once and removed; see `../sessions/session-2026-08-18-build-pivot.md` for why. Don't re-derive it from `targetSelector` without reading that first.
 
 ### Non-null chargeTime
 

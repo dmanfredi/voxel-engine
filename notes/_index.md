@@ -18,6 +18,7 @@ Durable subsystem references and implementation design notes. These are the firs
 - `entity-physics-and-ai.md` - entity physics model, AI dispatch, deferred decisions.
 - `entity-system.md` - entity taxonomy, mesh generation, render pipeline, lifecycle.
 - `flow-field.md` - shared BFS pursuit field and invalidation model.
+- `growth-and-build-projectiles.md` - building as a projectile; planners, growth rate, what is deliberately not routed.
 - `physics-and-collision.md` - player movement and AABB-vs-voxel collision.
 - `projectile-and-tool-system.md` - tools, projectiles, hitboxes, rendering, input flow.
 - `skybox-integration.md` - skybox setup notes and commit pointers.
@@ -35,6 +36,7 @@ Dated after-action reports. These are historical context and decision records, n
 - `session-2026-03-28-world-wrapping-chunk-loading.md` - horizontal wrapping and vertical streaming.
 - `session-2026-03-31-worker-meshing.md` - worker meshing and scheduler design.
 - `session-2026-04-05-gc-investigation.md` - GC investigation and profiler lessons.
+- `session-2026-08-18-build-pivot.md` - why building became a projectile; the abandoned build outline.
 
 ## proposals/
 

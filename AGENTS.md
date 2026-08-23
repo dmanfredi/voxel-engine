@@ -4,7 +4,7 @@ This file provides guidance to AI coding agents working in this repository. It i
 
 ## Project Overview
 
-Pillarman is a WebGPU-based voxel engine prototype written in TypeScript. It renders Minecraft-like voxel terrain using 3D Perlin noise generation, greedy mesh optimization, and a skybox cubemap. It requires a WebGPU-capable browser.
+Pillarman is a WebGPU-based voxel engine prototype written in TypeScript. It renders chunked, Minecraft-like terrain from procedural generators, supports player mining and construction tools, and runs shape-specific enemy AI and physics. It requires a WebGPU-capable browser.
 
 ## Commands
 
@@ -21,104 +21,145 @@ No test framework is configured.
 
 ## Architecture
 
-### Render Pipeline (`src/main.ts`)
+### Runtime And Render Pipeline (`src/main.ts`)
 
-The application runs a multi-chunk render loop with four ordered passes on the same `GPURenderPassEncoder`, using different pipelines:
+The `requestAnimationFrame` loop advances player movement, the rising void, auto-climb, spawning, entities, projectiles, growths, tool cooldowns, and held-button autofire. Runtime world mutations notify the chunk remesher and invalidate the shared enemy flow field where appropriate.
 
-1. Main geometry pass: textured voxel mesh with depth write.
-2. Wireframe pass: optional barycentric debug overlay with additive blend.
-3. Entity pass: non-voxel objects. Own pipeline, reuses main bind group 0 for shared view-projection and textures.
-4. Skybox pass: cubemap rendered at depth `1.0` with `less-equal` depth testing.
+Rendering uses one `GPURenderPassEncoder` with different pipelines in this order:
 
-The game loop uses `requestAnimationFrame` for continuous physics, AI, and rendering. Rendering also triggers on resize.
+1. Textured voxel terrain with depth writes.
+2. Optional barycentric wireframe overlay.
+3. Entities.
+4. Projectiles.
+5. Skybox at depth `1.0` with `less-equal` depth testing.
+6. Translucent void-floor planes.
+7. Crush telegraph beams over the scene.
+
+Rendering also runs on resize. The former targeted-block highlight was removed; do not assume an outline or ghost-preview pipeline still exists.
 
 ### Chunk And Mesh Generation
 
-- `src/block-builder.ts` generates a `Uint8Array` block array per chunk. Multiple terrain generators live there.
+- `src/block-builder.ts` selects procedural generators and returns one `Uint8Array` per chunk. The active terrain is composed from the selected generators; Perlin and other alternatives remain available but are not necessarily active.
 - `src/greedy-mesh.ts` is an AO-aware pure greedy mesher. It takes padded block data plus flat property arrays, returns vertex data, and does not depend on `World`.
-- `src/mesh-worker.ts` exposes the mesher through Comlink. It receives `BlockProps` once at init and processes mesh requests with transferred buffers.
-- `src/mesh-scheduler.ts` is a single-worker scheduler with key-based deduplication, revision-checked stale result rejection, and interactive/streaming priority queues.
+- `src/mesh-worker.ts` exposes the mesher through Comlink. It receives `BlockProps` once at initialization and processes mesh requests with transferred buffers.
+- `src/mesh-scheduler.ts` is a single-worker scheduler with key-based deduplication, revision-checked stale-result rejection, and interactive/streaming priority queues.
 
 Important mesher invariants:
 
-- `World.buildPaddedBlocks()` assembles a chunk plus a 1-block border from all neighbors so face and AO lookups stay flat and local.
+- `World.buildPaddedBlocks()` assembles a chunk plus a one-block border from all 26 neighbors so face and AO lookups stay flat and local.
 - AO is packed into mask values, so greedy merges require matching direction and matching AO at all four corners.
 - UVs are world-aligned, not quad-relative. Do not invert V or break axis-specific texture orientation without checking the downstream visual result.
 - Triangulation may flip to reduce AO interpolation artifacts.
 - Vertex format is `pos(3) + normal(3) + uv(2) + ao(1) + texLayer(1 as u32)`, for 10 floats / 40 bytes. The wireframe shader assumes this stride.
 
-### Physics And Collision
+### Player Physics And Collision
 
-- `src/movement.ts` implements Minecraft-like tick-based player physics. It supports physics movement and freecam.
-- `src/collision.ts` resolves AABB-vs-voxel-grid collision axis-by-axis in X, Z, then Y order.
-- The player is intentionally not an entity. See `notes/systems/entity-physics-and-ai.md` before revisiting player-as-entity work.
+- `src/movement.ts` implements Minecraft-like tick-scaled player physics and freecam.
+- `src/collision.ts` resolves the player's AABB against the voxel grid axis-by-axis in X, Z, then Y order.
+- `src/auto-climb.ts` can place a scaffold beneath the player during the post-jump activation window. It is a gameplay placement path and spends BP.
+
+The player is intentionally not an entity. Player-vs-entity interactions are routed explicitly through the entity physics/interaction code. Read `notes/systems/entity-physics-and-ai.md` before revisiting player-as-entity work.
 
 ### Entity System
 
-The entity system is centered on `EntityManager` in `src/entity.ts`. Entities are composed from Shape, Material, Role, Size, and Traits. The material table is the primary tuning surface for rendering, physics, and AI.
+`EntityManager` in `src/entity.ts` owns enemy lifecycle, mesh caching, flow-field refresh, shape-dispatched simulation, interactions, despawning, and transform upload. Entities are composed from Shape, Material, Role, Size, and Traits.
 
-Per-frame entity flow runs in three passes:
+- Shapes are Sphere and Cube. `src/icosphere.ts` and `src/cube.ts` generate their meshes.
+- Materials have a shared base plus optional shape-specific tuning. Spawning validates material/shape compatibility.
+- Live behaviors are `Role.Rush` for spheres and `Role.Crush` for cubes. `Role.Zone` remains a deferred behavior.
+- `Trait.Breacher` is cube-only. Breachers can carve blocked tip destinations and swept climb volume; use `traitSupportsShape()` in authoring/debug paths.
 
-1. AI then physics for each entity.
-2. Pairwise sphere collision resolution.
-3. Render offset and transform upload.
+The per-frame entity flow is:
+
+1. Rebuild the shared `FlowField` on its bounded cadence when player-cell, terrain, or maximum sphere reach changes.
+2. Run shape-specific AI and solo physics: flow-field-guided sticky sphere pursuit, or greedy cube tipping/crush progression.
+3. Resolve sphere/sphere and sphere/cube pairs. Cubes act as infinite mass against spheres; cube/cube resolution is deferred.
+4. Resolve player/cube contact against the cube's true oriented box.
+5. Advance despawn/death state, then upload player-relative wrapped transforms.
 
 Relevant files:
 
-- `src/entity-renderer.ts`: dedicated entity pipeline and per-entity uniforms.
-- `src/icosphere.ts`: procedural non-indexed unit icosphere.
-- `src/entity-physics.ts`: sphere-vs-voxel and sphere-vs-sphere collision.
-- `src/entity-ai.ts`: role-dispatched AI. `Role.Rush` is implemented.
+- `src/entity.ts`: entity data, material tables, lifecycle orchestration, cube scaffold/carve integration, death and Crush payloads.
+- `src/entity-ai.ts` and `src/flow-field.ts`: sphere pursuit and shared BFS navigation.
+- `src/sphere-physics.ts`: sticky sphere-vs-voxel/player physics.
+- `src/cube-ai.ts` and `src/cube-physics.ts`: greedy tip selection, grid-aligned tipping, and cube collision.
+- `src/entity-interactions.ts`: sphere/sphere, sphere/cube, and player/cube responses plus player-hit lockout.
+- `src/entity-physics-shared.ts`: shared physics constants.
+- `src/entity-renderer.ts`: shared entity pipeline and per-entity uniforms/tints.
+- `src/crush-beam-renderer.ts`: Crush lane telegraph rendering.
 
-See `notes/systems/entity-system.md` and `notes/systems/entity-physics-and-ai.md` for design rationale and deferred decisions.
+Any terrain mutation that affects navigation must invalidate the flow field. Batch invalidation and remeshing for multi-cell operations rather than notifying once per cell.
 
-### Projectile And Tool System
+### Spawning And Despawning
 
-The player's interface to the world lives in `src/tool.ts`, `src/projectile.ts`, `src/projectile-manager.ts`, and `src/projectile-renderer.ts`.
+`src/spawner.ts` combines a constant-pressure Director stub with terrain-driven spawning. A successful spawn finds a bounded, exposed, uniform solid cluster near the player, consumes it, inherits its material, and creates an enemy in the cavity. Shape biases the vertical search band, and eligible cubes have a small chance to receive the Breacher trait.
 
-- Tools are singletons held in `gameState.tools`; the selected slot is `gameState.selectedToolIndex`.
-- Each tool bundles an LMB projectile action and an RMB block placement action resolved through a `BuildProfile`.
-- `canFire(tool, side, gameState)` is the one-place gate before firing.
-- LMB and RMB support autofire; cooldowns are the rate limiter and persist across slot switches.
-- Projectiles spawn at a camera-local offset, travel straight, and break each solid block their OBB overlaps until strength is exhausted.
-- Each projectile carries a `sourceTool` back-reference so break callbacks can dispatch tool-specific effects without attached closures.
+The spawner uses bounded per-search work and a retry cooldown. A full population pauses one outstanding spawn ticket rather than accumulating spawn debt. Keep spawn radius, flow-field reach, and no-path despawn timing coupled; see `notes/systems/spawning-and-despawning.md`.
 
-See `notes/systems/projectile-and-tool-system.md` for details.
+Shape dispatch also controls death: spheres run a telegraphed self-destruct and terrain-carving blast, while cubes use their own lifecycle, including the Crush telegraph/carve/plummet sequence and petrification paths described in the system notes.
+
+### Projectile, Tool, And Growth Systems
+
+The player's interface to the world lives in `src/tool.ts`, `src/projectile.ts`, `src/projectile-manager.ts`, `src/projectile-renderer.ts`, `src/timing.ts`, and `src/growth.ts`.
+
+- Tools are singletons stored in nullable `gameState.tools` hotbar slots; `gameState.selectedToolIndex` selects the active slot. Mutable cooldowns persist across slot switches.
+- LMB fires the tool's mining projectile. RMB either fires a paired build projectile/growth profile or, for tools without that pair, performs raycast-dependent instant placement through a `BuildProfile`.
+- `canFire(tool, side, gameState)` is the shared gate for cooldown, BP, and player-hit lockout checks. LMB and RMB autofire while held when their mode supports it.
+- `ProjectileEffect.Mine` sweep-breaks every solid cell reported by its hitbox, then spends strength by block hardness. `ProjectileEffect.Build` stops at its first solid contact and reports an `ImpactContext`; it does not mine.
+- Projectile motion supports normalized timing functions from `src/timing.ts`. The manager differences the timing curve over each frame and collision-samples motion in at most half-block substeps to prevent tunneling.
+- Projectiles use OBB or compound hitboxes, wrap canonically in X/Z, and apply player-relative wrapping only to rendering. They currently phase through entities.
+
+A build impact hands off to `GrowthManager`:
+
+- `GrowthProfile` is frozen design data held by a Tool.
+- `GrowthPlanner` is a pure `ImpactContext -> ordered cells` function. All build-type geometry belongs in planners; the manager must not branch on build type.
+- Plans are computed once and never rerouted. Growth advances at a per-cell rate, skips blocked cells without charging, stops when its plan or budget is exhausted, and batches remesh/flow-field notification across the frame.
+- The manager deliberately does not depend on `GameState`; affordability and player-overlap policy arrive through callbacks so future non-player sources can reuse it.
+- `buildProjectile` and `growth` are an invariant pair enforced by `defineTool()`.
+
+See `notes/systems/projectile-and-tool-system.md` and `notes/systems/growth-and-build-projectiles.md` before changing these seams. The previous multi-cell ghost outline was built and removed; its rationale is recorded in `notes/sessions/session-2026-08-18-build-pivot.md`.
 
 ### Block Placement
 
 `world.setBlock` is the low-level mutation primitive for terrain generation, chunk streaming, block breaking, and other rule-free writes.
 
-Gameplay-driven placement should go through `tryPlaceBlock(world, entityManager, bx, by, bz, blockId)` from `src/placement.ts`, which currently rejects placements overlapping an entity. Use `tryPlaceBlock` for right-click placement, auto-scaffold, future enemy placement, and similar rule-aware paths unless bypassing gameplay rules is intentional.
+Gameplay-driven single-cell placement should go through `tryPlaceBlock(world, entityManager, bx, by, bz, blockId)` from `src/placement.ts`, which rejects entity overlap and invalidates the flow field after a successful write. Use it for instant RMB placement, auto-climb, and similar rule-aware paths unless bypassing gameplay rules is intentional.
+
+Multi-cell/rate-based placers such as `GrowthManager` use `canPlaceBlock()` first. It is stricter than `tryPlaceBlock()` because it also requires the destination to be air. After validating and charging, the manager writes directly and emits one batched invalidation/remesh notification.
+
+### Rising Void
+
+`src/void-floor.ts` owns the presentation-independent rising hazard. It tracks one surface Y plus Safe, Grace, and Lethal bands; the lethal boundary is also the chunk-deletion floor. `src/void-floor-renderer.ts` draws the current placeholder planes. Effects and death handling are callbacks rather than GPU or UI dependencies in the logic module.
 
 ### Shaders
 
-All WGSL shaders are TypeScript string constants:
+WGSL is stored as TypeScript string constants:
 
-- `src/shader.ts`: main voxel vertex/fragment shader.
-- `src/wireframe.ts`: barycentric edge detection with smooth antialiasing.
+- `src/shader/voxel.ts`: main voxel vertex/fragment shader.
+- `src/shader/wireframe.ts`: barycentric edge detection with smooth antialiasing.
+- `src/shader/shared.ts`: reusable material and binding declarations.
+- `src/shader/crush-beam.ts`: Crush telegraph shader.
+- `src/shader/void-floor.ts`: void-floor shader seam.
 - `src/skybox.ts`: cubemap sampling, texture loading, and mipmap generation.
-- `src/shared.ts`: reusable WGSL binding declarations.
-- `src/entity-renderer.ts`: embedded WGSL for entity rendering.
+- Entity and projectile WGSL remain embedded in their renderer modules.
 
 ### Supporting Modules
 
-- `src/block.ts`: block IDs, registry, block properties, and worker serialization helpers.
-- `src/world.ts`: chunk-based world storage with horizontal wrapping in X/Z.
-- `src/chunk-loader.ts`: vertical chunk streaming around the player.
-- `src/auto-climb.ts`: scaffolding mechanic; uses `tryPlaceBlock`.
+- `src/block.ts`: block IDs, registry, properties, and worker serialization helpers.
+- `src/world.ts`: chunk-based storage with horizontal X/Z wrapping. Block queries wrap internally.
+- `src/chunk-loader.ts`: vertical streaming and deletion below the void floor.
 - `src/raycast.ts`: DDA voxel raycasting for block targeting.
-- `src/game-state.ts`: BP counter, hotbar tools, and selected slot.
-- `src/toolbar.ts`: hotbar UI and selection input.
-- `src/debug.ts`: stats.js FPS counter and Tweakpane debug panel.
+- `src/game-state.ts`: BP, hit lockout, nullable hotbar slots, and selected slot.
+- `src/toolbar.ts`: stateless hotbar UI and selection input.
+- `src/debug.ts`: stats.js FPS counter and Tweakpane controls/hooks.
 
 ### Camera And Input
 
-The camera is FPS-style with pointer lock. Movement uses layout-independent key codes such as `KeyW`. Mouse pitch is clamped.
+The camera is FPS-style with pointer lock. Movement uses layout-independent key codes such as `KeyW`; mouse pitch is clamped. LMB/RMB held state is sampled by the frame loop, with tool cooldowns acting as rate limiters.
 
 ## TypeScript Configuration
 
-The project uses strict TypeScript with additional flags including `exactOptionalPropertyTypes`, `noImplicitReturns`, and `noFallthroughCasesInSwitch`. `noUncheckedIndexedAccess` is off. Target is ES2022 with ESNext modules, WebGPU types from `@webgpu/types`, and `verbatimModuleSyntax`, so use `import type` for type-only imports.
+The project uses strict TypeScript with additional flags including `exactOptionalPropertyTypes`, `noImplicitReturns`, and `noFallthroughCasesInSwitch`. `noUncheckedIndexedAccess` is off. Target is ES2022 with ESNext modules, WebGPU types come from `@webgpu/types`, and `verbatimModuleSyntax` requires `import type` for type-only imports.
 
 ## Code Style
 
@@ -140,14 +181,14 @@ Comments should carry load-bearing why: non-obvious design choices, invariants t
 
 Keep comments timeless:
 
-- Avoid version refs such as `v1`.
-- Avoid specific tuning values in prose when the code already owns the value.
+- Avoid version references such as `v1`.
+- Avoid copying tuning values or layout dimensions into prose when code already owns them.
 - Avoid specific block, tool, or material names in cross-cutting docs when the concept is enough.
-- Avoid historical anchors like `old behavior` once the predecessor is gone.
+- Avoid historical anchors such as `old behavior` once the predecessor is gone.
 - Use prospective flags such as `(TODO when art lands)` or `(future)` when incompleteness matters.
 - Use durable external references such as `Minecraft-style` or `Amanatides & Woo` when helpful.
 
-Dead code kept as a warning record is fine when it explains why a tempting path was rejected.
+Dead code kept as a warning record is acceptable when it explains why a tempting path was rejected.
 
 ## Key Dependencies
 
@@ -159,18 +200,21 @@ Dead code kept as a warning record is fine when it explains why a tempting path 
 
 ## Further Reading
 
-Deeper design rationale and deferred decisions live in `notes/`. Start at `notes/_index.md`:
+Start at `notes/_index.md`. System notes contain durable subsystem decisions, session notes are historical context, and proposals describe designed but unimplemented work. Some top-level status snapshots are explicitly stale, so verify status against code and recent commits.
 
-- `notes/systems/entity-system.md`: entity taxonomy, mesh generation, render pipeline, lifecycle.
-- `notes/systems/entity-physics-and-ai.md`: physics model, AI dispatch, wrap handling, material table, deferred work.
-- `notes/systems/spawning-and-despawning.md`: enemy lifecycle and Director pacing.
-- `notes/systems/flow-field.md`: shared BFS pursuit field.
-- `notes/systems/sticky-spheres.md`: flow-field invalidation and sphere drop-zone spawning.
-- `notes/systems/cube-enemy.md`: cube enemy design and phased implementation plan.
-- `notes/proposals/cube-tip-placement-animation.md`: designed-not-built tip-scaffold animation.
-- `notes/systems/projectile-and-tool-system.md`: tool and projectile system details.
-- `notes/systems/void-floor.md`: rising void hazard.
+- `notes/systems/entity-system.md`: entity taxonomy, rendering, lifecycle, traits, and shape dispatch.
+- `notes/systems/entity-physics-and-ai.md`: physics model, AI dispatch, wrapping, and deferred decisions.
+- `notes/systems/spawning-and-despawning.md`: terrain-driven spawning, Director pacing, death, and despawn coupling.
+- `notes/systems/flow-field.md`: shared BFS pursuit field and invalidation model.
+- `notes/systems/sticky-spheres.md`: surface locomotion and drop-zone behavior.
+- `notes/systems/cube-enemy.md`: cube tipping, climbing, Breacher, and Crush behavior.
+- `notes/proposals/cube-tip-placement-animation.md`: designed-not-built scaffold settling animation.
+- `notes/systems/projectile-and-tool-system.md`: tools, projectiles, hitboxes, timing, rendering, and input flow.
+- `notes/systems/growth-and-build-projectiles.md`: build projectiles, planners, growth rate, and deliberately excluded routing.
+- `notes/sessions/session-2026-08-18-build-pivot.md`: build-system pivot and abandoned outline rationale.
+- `notes/systems/void-floor.md`: rising hazard, bands, chunk-deletion floor, and deferred visuals.
 - `notes/systems/physics-and-collision.md`: player physics and AABB-vs-voxel collision.
 - `notes/systems/skybox-integration.md`: skybox setup.
-- `notes/TECHNICAL-ROADMAP.md`: phased plan and current progress.
+- `notes/systems/water-geometry-reflections.md`: water reflection experiments and active approach notes.
+- `notes/TECHNICAL-ROADMAP.md`: phased plan and a progress snapshot; known to contain stale status.
 - `notes/GAME-DESIGN.md`: game concept and design pillars.

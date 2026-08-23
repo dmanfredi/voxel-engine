@@ -284,6 +284,65 @@ export const bridgePlanner: GrowthPlanner = (ctx) =>
 	faceConnectedLine(ctx.cell, ctx.anchor);
 
 /**
+ * Cube: a solid block `size` cells on a side, resting against the struck face.
+ *
+ * Seated entirely clear of the surface along the normal rather than centered
+ * on the impact — a cube centered on a cell that is itself solid would bury a
+ * whole layer and quietly deliver less than its name promises. Across the
+ * face it straddles the impact.
+ *
+ * Cells are ordered by distance from the cube's own center, so it fills as
+ * concentric shells: running dry leaves a smaller cube rather than a lopsided
+ * slab, and the ordering needs no special case for any particular size.
+ */
+export function cubePlanner(size: number): GrowthPlanner {
+	if (!Number.isInteger(size) || size < 1) {
+		throw new Error(
+			`cubePlanner: size must be a positive integer (got ${String(size)})`,
+		);
+	}
+	const lead = Math.floor((size - 1) / 2);
+	const mid = (size - 1) / 2;
+	return (ctx) => {
+		const lo: [number, number, number] = [0, 0, 0];
+		for (let a = 0; a < 3; a++) {
+			const n = ctx.normal[a];
+			if (n > 0) lo[a] = ctx.cell[a] + 1;
+			else if (n < 0) lo[a] = ctx.cell[a] - size;
+			else lo[a] = ctx.cell[a] - lead;
+		}
+		const cx = lo[0] + mid;
+		const cy = lo[1] + mid;
+		const cz = lo[2] + mid;
+		const cells: VoxelCoord[] = [];
+		for (let x = 0; x < size; x++) {
+			for (let y = 0; y < size; y++) {
+				for (let z = 0; z < size; z++) {
+					cells.push([lo[0] + x, lo[1] + y, lo[2] + z]);
+				}
+			}
+		}
+		cells.sort(
+			(a, b) =>
+				squaredDistance(a, cx, cy, cz) - squaredDistance(b, cx, cy, cz),
+		);
+		return cells;
+	};
+}
+
+function squaredDistance(
+	cell: VoxelCoord,
+	x: number,
+	y: number,
+	z: number,
+): number {
+	const dx = cell[0] - x;
+	const dy = cell[1] - y;
+	const dz = cell[2] - z;
+	return dx * dx + dy * dy + dz * dz;
+}
+
+/**
  * Face the projectile entered `cell` through, written into `out` as a unit
  * axis vector.
  *

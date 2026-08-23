@@ -715,6 +715,54 @@ export function orientationFromDirection(
 }
 
 /**
+ * Resolves a shooter's forward vector into the direction a projectile travels,
+ * writing the unit result into `out` and returning false to reject the shot. A
+ * null constraint on a profile means "fire straight down the aim ray".
+ */
+export type AimConstraint = (
+	aimDir: Float32Array,
+	out: Float32Array,
+) => boolean;
+
+/**
+ * Fire only when the aim falls within `slackDeg` of one of the six axes,
+ * snapping to that exact axis so constrained projectiles stay grid-aligned;
+ * otherwise reject the shot.
+ */
+export function cardinalLock(slackDeg: number): AimConstraint {
+	const minDot = Math.cos((slackDeg * Math.PI) / 180);
+	return (aimDir, out) => {
+		const x = aimDir[0];
+		const y = aimDir[1];
+		const z = aimDir[2];
+		// Nearest axis = the largest-magnitude component. For a unit aimDir
+		// that magnitude is cos(angle to the axis), so it compares directly
+		// against the cone's cos threshold.
+		const ax = Math.abs(x);
+		const ay = Math.abs(y);
+		const az = Math.abs(z);
+		let dot: number;
+		if (ax >= ay && ax >= az) {
+			dot = ax;
+			out[0] = Math.sign(x);
+			out[1] = 0;
+			out[2] = 0;
+		} else if (ay >= az) {
+			dot = ay;
+			out[0] = 0;
+			out[1] = Math.sign(y);
+			out[2] = 0;
+		} else {
+			dot = az;
+			out[0] = 0;
+			out[1] = 0;
+			out[2] = Math.sign(z);
+		}
+		return dot >= minDot;
+	};
+}
+
+/**
  * Template for a class of projectiles. Frozen at design time and shared
  * across spawns — spawning fills in origin/direction on a Projectile
  * instance and keeps a reference to the profile.
@@ -740,6 +788,21 @@ export interface ProjectileProfile {
 	 * richer `{ mesh, color, ... }` visual struct.
 	 */
 	visualSize: readonly [number, number, number];
+	/**
+	 * Muzzle offset from the shooter, in shooter-local axes
+	 * [right, up, forward], world units. Scales with the projectile rather
+	 * than the shooter: a wide slab has to clear the view by more than a small
+	 * bolt does, which is why it rides here and not on whatever fires it.
+	 */
+	spawnOffset: Float32Array;
+	/**
+	 * Optional aim resolver; null fires straight down the aim ray. A
+	 * constraint can snap the direction (e.g. cardinal lock) or reject the
+	 * shot, in which case the fire path bails without spending cooldown or
+	 * cost. A property of the hitbox's shape — a tall constrained box wants
+	 * grid-aligned lanes whatever is holding it.
+	 */
+	aimConstraint: AimConstraint | null;
 }
 
 /**

@@ -21,7 +21,7 @@ import {
 	type ProjectileProfile,
 	type VoxelCoord,
 } from './projectile';
-import { bridgePlanner, type GrowthProfile } from './growth';
+import { bridgePlanner, cubePlanner, type GrowthProfile } from './growth';
 import type { RaycastHit } from './raycast';
 import { assertMonotonicTiming, timingFunctions } from './timing';
 
@@ -56,60 +56,14 @@ export function singleBlockBuild(
 	};
 }
 
-/**
- * Resolves camera-forward into the direction a projectile travels, writing
- * the unit result into `out` and returning false to reject the shot. A null
- * constraint on a Tool means "fire straight down the camera ray" (the default).
- */
-export type AimConstraint = (
-	cameraDir: Float32Array,
-	out: Float32Array,
-) => boolean;
-
-/**
- * Fire only when the camera aims within `slackDeg` of one of the six axes,
- * snapping to that exact axis so constrained projectiles stay grid-aligned;
- * otherwise reject the shot.
- */
-export function cardinalLock(slackDeg: number): AimConstraint {
-	const minDot = Math.cos((slackDeg * Math.PI) / 180);
-	return (cameraDir, out) => {
-		const x = cameraDir[0];
-		const y = cameraDir[1];
-		const z = cameraDir[2];
-		// Nearest axis = the largest-magnitude component. For a unit
-		// cameraDir that magnitude is cos(angle to the axis), so it compares
-		// directly against the cone's cos threshold.
-		const ax = Math.abs(x);
-		const ay = Math.abs(y);
-		const az = Math.abs(z);
-		let dot: number;
-		if (ax >= ay && ax >= az) {
-			dot = ax;
-			out[0] = Math.sign(x);
-			out[1] = 0;
-			out[2] = 0;
-		} else if (ay >= az) {
-			dot = ay;
-			out[0] = 0;
-			out[1] = Math.sign(y);
-			out[2] = 0;
-		} else {
-			dot = az;
-			out[0] = 0;
-			out[1] = 0;
-			out[2] = Math.sign(z);
-		}
-		return dot >= minDot;
-	};
-}
-
 export type FireSide = 'lmb' | 'rmb';
 
 /**
- * The player's interface to the world. LMB fires a projectile; RMB
- * places a BuildProfile. Cooldowns are independent — fire and build on
- * their own clocks so you can interleave them.
+ * The player's interface to the world. LMB mines, RMB builds. The two sides
+ * share nothing: each carries its own ProjectileProfile, and a profile now
+ * describes its own launch (muzzle offset, aim rule), so a tool's build shot
+ * is never shaped by how its mining shot flies. Cooldowns are independent too
+ * — fire and build on their own clocks so you can interleave them.
  *
  * Construct via `defineTool()` — it initializes runtime state and runs
  * invariant checks the type system can't express.
@@ -122,8 +76,8 @@ export interface Tool {
 	/** First-person model path. Null = stub (TODO once models land). */
 	model: string | null;
 
-	// --- LMB (fire projectile) ---
-	projectile: ProjectileProfile;
+	// --- LMB (mine) ---
+	mineProjectile: ProjectileProfile;
 	/** Seconds between LMB shots. Must be > 0. */
 	lmbCooldown: number;
 	/** BP debited per LMB press. 0 = firing is free. */
@@ -148,15 +102,6 @@ export interface Tool {
 	/** Seconds between RMB activations. Must be > 0. */
 	rmbCooldown: number;
 
-	// --- Geometry ---
-	/**
-	 * Spawn point relative to camera, in camera-local axes
-	 * [right, up, forward], world units. Hip-fire offset keeps the
-	 * projectile out of the camera frustum on emit so it doesn't
-	 * briefly occlude the view.
-	 */
-	spawnOffset: Float32Array;
-
 	// --- Fire mode ---
 	/**
 	 * null = autofire while LMB held (gated by cooldown). number = hold
@@ -164,14 +109,6 @@ export interface Tool {
 	 * branch is wired into the tick; non-null is a field-shaped hole.
 	 */
 	chargeTime: number | null;
-
-	// --- Aim ---
-	/**
-	 * Optional aim resolver; null fires straight down the camera ray. A
-	 * constraint can snap the direction (e.g. cardinal lock) or reject the
-	 * shot, in which case the fire path bails without spending cooldown or cost.
-	 */
-	aimConstraint: AimConstraint | null;
 
 	// --- Runtime state ---
 	/** Seconds until LMB can fire again. Ticked toward 0 each frame. */
@@ -195,6 +132,11 @@ function assertProjectileProfile(
 			`${label}.speed must be finite and >= 0 (got ${String(profile.speed)})`,
 		);
 	}
+	if (profile.spawnOffset.length !== 3) {
+		throw new Error(
+			`${label}.spawnOffset must have 3 components (got ${String(profile.spawnOffset.length)})`,
+		);
+	}
 	assertMonotonicTiming(`${label}.timing`, profile.timing);
 }
 
@@ -216,7 +158,10 @@ export function defineTool(
 			`Tool "${spec.name}": rmbCooldown must be > 0 (got ${String(spec.rmbCooldown)})`,
 		);
 	}
-	assertProjectileProfile(`Tool "${spec.name}": projectile`, spec.projectile);
+	assertProjectileProfile(
+		`Tool "${spec.name}": mineProjectile`,
+		spec.mineProjectile,
+	);
 	// buildProjectile and growth are two halves of one mechanism — a
 	// projectile with nothing to grow lands and does nothing, and a growth
 	// with nothing to launch it can never start.
@@ -328,6 +273,10 @@ export function tickToolCooldowns(
 // Concrete tools
 // ============================================
 
+/** Hip-fire muzzle every current profile uses. Per-profile, not per-tool. */
+const HIP_FIRE_OFFSET: readonly [number, number, number] = [0, -5, 5];
+const hipFire = (): Float32Array => new Float32Array(HIP_FIRE_OFFSET);
+
 /**
  * Starter pickaxe.
  */
@@ -340,13 +289,15 @@ const pickaxeProjectile: ProjectileProfile = {
 	hitbox: obbHitbox(PICKAXE_VISUAL * 0.5),
 	maxLifetime: 5,
 	visualSize: [PICKAXE_VISUAL, PICKAXE_VISUAL, PICKAXE_VISUAL],
+	spawnOffset: hipFire(),
+	aimConstraint: null,
 };
 
 export const pickaxeTool: Tool = defineTool({
 	name: 'Pickaxe',
 	icon: null,
 	model: null,
-	projectile: pickaxeProjectile,
+	mineProjectile: pickaxeProjectile,
 	lmbCooldown: 0.4,
 	lmbCost: 0,
 	bpPerBreak: 1,
@@ -354,15 +305,17 @@ export const pickaxeTool: Tool = defineTool({
 	buildProjectile: null,
 	growth: null,
 	rmbCooldown: 0.1,
-	spawnOffset: new Float32Array([0, -5, 5]),
 	chargeTime: null,
-	aimConstraint: null,
 });
 
 /**
  * Free-aim tunneller: fires a slab along the resolved crosshair direction —
  * wide across the lane and thin along travel, so each sweep-break clears a
  * broad cross-section.
+ *
+ * RMB throws the same slab as a build bolt, growing a cube against whatever it
+ * lands on. Sharing the mining bolt's flight stats keeps one set of range and
+ * lead instincts covering both buttons: aim the same, get a hole or a plug.
  */
 // Slab edges in world units: BORE_WIDTH across the lane (right/up),
 // BORE_THICKNESS along travel (forward). Thin along travel so each tick
@@ -382,23 +335,48 @@ const boreProjectile: ProjectileProfile = {
 	]),
 	maxLifetime: 1,
 	visualSize: [BORE_WIDTH, BORE_WIDTH, BORE_THICKNESS],
+	spawnOffset: hipFire(),
+	aimConstraint: null,
+};
+
+/**
+ * The bore's build bolt. Defined independently of the mining slab rather than
+ * derived from it — the two buttons only happen to agree on flight right now,
+ * and speed/lifetime here is the cube's throw range, which is its own dial.
+ */
+const BORE_CUBE_CELLS = 3;
+const BORE_BOLT = 8;
+const boreBuildProjectile: ProjectileProfile = {
+	effect: ProjectileEffect.Build,
+	// Unread on a Build projectile — it carries no mining budget.
+	strength: 1,
+	speed: 140,
+	timing: timingFunctions.quadOut,
+	hitbox: obbHitbox(BORE_BOLT * 0.5),
+	maxLifetime: 1,
+	visualSize: [BORE_BOLT, BORE_BOLT, BORE_BOLT],
+	spawnOffset: hipFire(),
+	aimConstraint: null,
 };
 
 export const boreTool: Tool = defineTool({
 	name: 'Bore',
 	icon: null,
 	model: null,
-	projectile: boreProjectile,
+	mineProjectile: boreProjectile,
 	lmbCooldown: 1.25,
 	lmbCost: 0,
 	bpPerBreak: 1,
 	buildProfile: singleBlockBuild(MARBLE, 1),
-	buildProjectile: null,
-	growth: null,
-	rmbCooldown: 0.1,
-	spawnOffset: new Float32Array([0, -5, 5]),
+	buildProjectile: boreBuildProjectile,
+	growth: {
+		planner: cubePlanner(BORE_CUBE_CELLS),
+		blockId: MARBLE,
+		costPerCell: 1,
+		cellsPerSecond: 40,
+	},
+	rmbCooldown: 1.25,
 	chargeTime: null,
-	aimConstraint: null,
 });
 
 /**
@@ -420,13 +398,15 @@ const bridgeBoltProjectile: ProjectileProfile = {
 	hitbox: obbHitbox(BRIDGE_BOLT * 0.5),
 	maxLifetime: 1.2,
 	visualSize: [BRIDGE_BOLT, BRIDGE_BOLT, BRIDGE_BOLT],
+	spawnOffset: hipFire(),
+	aimConstraint: null,
 };
 
 export const bridgeTool: Tool = defineTool({
 	name: 'Bridge',
 	icon: null,
 	model: null,
-	projectile: pickaxeProjectile,
+	mineProjectile: pickaxeProjectile,
 	lmbCooldown: 0.4,
 	lmbCost: 0,
 	bpPerBreak: 1,
@@ -439,7 +419,5 @@ export const bridgeTool: Tool = defineTool({
 		cellsPerSecond: 40,
 	},
 	rmbCooldown: 2,
-	spawnOffset: new Float32Array([0, -5, 5]),
 	chargeTime: null,
-	aimConstraint: null,
 });

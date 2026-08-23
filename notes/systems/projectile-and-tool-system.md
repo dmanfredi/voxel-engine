@@ -30,20 +30,25 @@ Projectiles carry a back-reference to their `sourceTool` so the break callback c
 interface Tool {
   // Identity
   name, icon, model,
-  // LMB (fire)
-  projectile, lmbCooldown, lmbCost, bpPerBreak,
-  // RMB (build)
-  buildProfile, rmbCooldown,
-  // Geometry
-  spawnOffset,     // camera-local [right, up, forward], world units
+  // LMB (mine)
+  mineProjectile, lmbCooldown, lmbCost, bpPerBreak,
+  // RMB (build) — buildProjectile+growth, or buildProfile for instant placement
+  buildProjectile, growth, buildProfile, rmbCooldown,
   // Fire mode
   chargeTime,      // null = autofire on hold
-  // Aim
-  aimConstraint,   // null = ordinary free aim
   // Runtime state
   lmbCooldownRemaining, rmbCooldownRemaining,
 }
 ```
+
+### The two buttons share nothing
+
+Each side carries its own `ProjectileProfile`, and a profile describes its own
+launch — muzzle offset and aim rule included. A tool's build shot is therefore
+never shaped by how its mining shot flies: different reach, different hitbox,
+different muzzle, no override fields and no fallback rules. The same property
+is what lets a profile be fired by something that isn't a Tool at all, which is
+where enemy projectiles plug in.
 
 Construct via `defineTool(spec)` — initializes runtime state to 0 and asserts invariants the type system can't (positive cooldowns, non-negative costs). One central place to add new guards.
 
@@ -81,15 +86,19 @@ Currently checks cooldown ready + sufficient BP. New gates (target validity, pro
 
 `chargeTime: number | null` is the seam for charge-up tools. `null` = autofire-on-hold (current branch). A positive number would mean "hold for this many seconds, release to fire." Only the null branch is wired into the tick; the non-null case grows alongside when a charge-up tool actually needs it.
 
-### spawnOffset
+### spawnOffset (on the profile)
 
-Camera-local axes `[right, up, forward]` in world units. The fire function computes `cameraRight = normalize(cross(cameraFront, cameraUp))` at emit time and reconstructs the world-space origin as `cameraPos + right·off[0] + up·off[1] + front·off[2]`. The hip-fire nudge keeps the projectile outside the camera frustum so it doesn't briefly occlude the view on emit.
+Shooter-local axes `[right, up, forward]` in world units. The fire function computes `cameraRight = normalize(cross(cameraFront, cameraUp))` at emit time and reconstructs the world-space origin as `cameraPos + right·off[0] + up·off[1] + front·off[2]`. The hip-fire nudge keeps the projectile outside the camera frustum so it doesn't briefly occlude the view on emit.
 
-### aimConstraint
+It rides on the profile rather than the shooter because the distance needed scales with the projectile: a wide slab has to clear the view by more than a small bolt does.
+
+### aimConstraint (on the profile)
 
 `null` routes through ordinary free aim: close shots travel parallel to the camera ray so the hip-fire offset stays visually stable, while farther shots converge on the crosshair hit point. A non-null `AimConstraint` instead writes the projectile's unit travel direction and may reject the shot without spending BP or cooldown.
 
-`cardinalLock(slackDeg)` remains available as a reusable constraint. It selects the camera direction's largest-magnitude component, compares that component with `cos(slackDeg)`, and—when accepted—writes the corresponding signed world axis. The Bore currently leaves `aimConstraint` null, so its slab and matching compound hitbox rotate freely with its resolved shot direction.
+Also a profile property, for the same reason: the constraint exists to keep a tall hitbox in grid-aligned lanes, which is a fact about the hitbox's shape rather than about whatever is holding it.
+
+`cardinalLock(slackDeg)` remains available as a reusable constraint. It selects the aim direction's largest-magnitude component, compares that component with `cos(slackDeg)`, and—when accepted—writes the corresponding signed world axis. The Bore currently leaves `aimConstraint` null, so its slab and matching compound hitbox rotate freely with its resolved shot direction.
 
 ## 2. Projectile (`projectile.ts`)
 
@@ -245,6 +254,7 @@ The interesting tuning surface is the Tool itself — each field is a knob with 
 | `lmbCost` | BP debited per LMB fire. 0 = firing is free; positive = consumable shot. |
 | `bpPerBreak` | BP awarded per block this tool's projectiles break. |
 | `buildProfile.costPerBlock` | BP debited per cell placed by RMB. |
-| `spawnOffset` | Camera-local emission point `[right, up, forward]`. Hip-fire nudge keeps the projectile out of the camera frustum on emit. |
+| `projectile.spawnOffset` | Shooter-local emission point `[right, up, forward]`. Hip-fire nudge keeps the projectile out of the camera frustum on emit. |
+| `growth.costPerCell` | BP debited per cell a build projectile's growth lands. |
 
 `defineTool()` asserts the invariants the type system can't: positive cooldowns/lifetime, finite non-negative speed, non-negative costs, and a sampled monotonic timing curve. Add new invariants there.

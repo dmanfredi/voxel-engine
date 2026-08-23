@@ -691,10 +691,10 @@ async function main(): Promise<void> {
 	 * line up.
 	 */
 	function fireLMB(tool: Tool): boolean {
-		if (!resolveSpawnGeometry(tool, tool.projectile)) return false;
+		if (!resolveSpawnGeometry(tool.mineProjectile)) return false;
 
 		projectileManager.spawn(
-			tool.projectile,
+			tool.mineProjectile,
 			spawnOrigin,
 			spawnDirection,
 			tool,
@@ -709,19 +709,16 @@ async function main(): Promise<void> {
 	}
 
 	/**
-	 * Resolve `spawnOrigin` and `spawnDirection` for a shot from `tool` using
-	 * `profile`'s reach. Returns false when the tool's aimConstraint rejects
-	 * the current aim, in which case the caller must not spend cooldown or
-	 * cost — the player can retry the instant they line up.
+	 * Resolve `spawnOrigin` and `spawnDirection` for a shot of `profile`.
+	 * Returns false when the profile's aimConstraint rejects the current aim,
+	 * in which case the caller must not spend cooldown or cost — the player
+	 * can retry the instant they line up.
 	 *
-	 * Shared by mining and build shots so both leave the same muzzle and
-	 * converge the same way; only the reach differs, which is why the profile
-	 * is a parameter rather than read off the tool.
+	 * Takes only the profile: muzzle, aim rule and reach all ride on it, so
+	 * mining and build shots resolve through the same path without either
+	 * inheriting the other's geometry.
 	 */
-	function resolveSpawnGeometry(
-		tool: Tool,
-		profile: ProjectileProfile,
-	): boolean {
+	function resolveSpawnGeometry(profile: ProjectileProfile): boolean {
 		// camera-local right = normalize(cross(front, up)). cameraUp is
 		// world-Y by construction, so this is well-defined unless the
 		// player is looking straight up/down — pitch is clamped to ±88°
@@ -737,7 +734,7 @@ async function main(): Promise<void> {
 		cameraRight[1] /= rLen;
 		cameraRight[2] /= rLen;
 
-		const off = tool.spawnOffset;
+		const off = profile.spawnOffset;
 		for (let i = 0; i < 3; i++) {
 			spawnOrigin[i] =
 				cameraPos[i] +
@@ -746,11 +743,11 @@ async function main(): Promise<void> {
 				cameraFront[i] * off[2];
 		}
 
-		// Resolve the travel direction. A tool with an aimConstraint (e.g.
-		// cardinal lock) resolves and may reject its own direction; tools
+		// Resolve the travel direction. A profile with an aimConstraint (e.g.
+		// cardinal lock) resolves and may reject its own direction; profiles
 		// without one use the crosshair convergence aiming below.
-		if (tool.aimConstraint) {
-			if (!tool.aimConstraint(cameraFront, spawnDirection)) {
+		if (profile.aimConstraint) {
+			if (!profile.aimConstraint(cameraFront, spawnDirection)) {
 				return false;
 			}
 			// Center the spawn on the block grid along Y so a tall constrained
@@ -807,7 +804,7 @@ async function main(): Promise<void> {
 		tool: Tool,
 		profile: ProjectileProfile,
 	): boolean {
-		if (!resolveSpawnGeometry(tool, profile)) return false;
+		if (!resolveSpawnGeometry(profile)) return false;
 		projectileManager.spawn(
 			profile,
 			spawnOrigin,

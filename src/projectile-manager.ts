@@ -34,9 +34,12 @@ import type { World } from './world';
 import {
 	MAX_HITBOX_CELLS,
 	orientationFromDirection,
+	ProjectileEffect,
 	type Projectile,
 	type ProjectileProfile,
+	type VoxelCoord,
 } from './projectile';
+import { deriveImpactNormal, type ImpactContext } from './growth';
 
 const MAX_SUBSTEP_BLOCKS = 0.5;
 
@@ -61,6 +64,15 @@ export interface ProjectileManagerCallbacks {
 		count: number,
 		sourceTool: Tool,
 	): void;
+
+	/**
+	 * Fired once when a Build-effect projectile reaches its first solid
+	 * contact, immediately before it disposes. The caller hands the context to
+	 * the growth system; the manager itself knows nothing about growths.
+	 * Never fired for a projectile that expires without hitting anything —
+	 * a whiffed build produces nothing at all.
+	 */
+	onBuildImpact(ctx: ImpactContext, sourceTool: Tool): void;
 }
 
 export class ProjectileManager {
@@ -85,6 +97,12 @@ export class ProjectileManager {
 	// consumes it before the next call, so no per-frame allocation.
 	private readonly cellScratch = new Int32Array(3 * MAX_HITBOX_CELLS);
 
+	// Scratch face normal for build impacts; copied into the context on use.
+	private readonly normalScratch: [number, number, number] = [0, 0, 0];
+
+	/** World width in cells — seam-nearest resolution for build anchors. */
+	private readonly worldWidthCells: number;
+
 	constructor(
 		world: World,
 		callbacks: ProjectileManagerCallbacks,
@@ -94,6 +112,7 @@ export class ProjectileManager {
 		this.world = world;
 		this.callbacks = callbacks;
 		this.worldWidthUnits = world.widthChunks * CHUNK_SIZE * world.blockSize;
+		this.worldWidthCells = world.widthChunks * CHUNK_SIZE;
 		this.device = device;
 		this.renderer = renderer;
 	}
@@ -105,12 +124,18 @@ export class ProjectileManager {
 	 * direction × profile.speed. `sourceTool` is stamped on the projectile
 	 * and threaded to the break callback so the callback can dispatch
 	 * per-tool effects (BP payout, FX, sounds).
+	 *
+	 * `buildAnchor` is only meaningful for Build-effect profiles: it is the
+	 * cell the resulting growth should plan back toward, captured now so the
+	 * span meets where the shot was fired rather than where the shooter ends
+	 * up. Mine projectiles pass null.
 	 */
 	spawn(
 		profile: ProjectileProfile,
 		origin: Float32Array,
 		direction: Float32Array,
 		sourceTool: Tool,
+		buildAnchor: VoxelCoord | null = null,
 	): void {
 		const position = new Float32Array([origin[0], origin[1], origin[2]]);
 		const velocity = new Float32Array([
@@ -130,6 +155,7 @@ export class ProjectileManager {
 			strength: profile.strength,
 			age: 0,
 			sourceTool,
+			buildAnchor,
 		};
 		const renderData = createProjectileRenderData(
 			this.device,
@@ -187,6 +213,7 @@ export class ProjectileManager {
 			// Accumulate one notification across every sub-step. Each individual
 			// overlap breaks completely before strength is checked, preserving the
 			// soft-cap rule without letting an exhausted projectile travel farther.
+			const building = p.profile.effect === ProjectileEffect.Build;
 			let brokenCount = 0;
 			let minBX = Infinity;
 			let minBY = Infinity;
@@ -194,7 +221,17 @@ export class ProjectileManager {
 			let maxBX = -Infinity;
 			let maxBY = -Infinity;
 			let maxBZ = -Infinity;
+			let impacted = false;
+			let impactX = 0;
+			let impactY = 0;
+			let impactZ = 0;
 			for (let step = 0; step < substepCount; step++) {
+				// Cell occupied before this step — the reference for working out
+				// which face a build impact arrived through.
+				const preX = Math.floor(p.position[0] / bs);
+				const preY = Math.floor(p.position[1] / bs);
+				const preZ = Math.floor(p.position[2] / bs);
+
 				p.position[0] += p.velocity[0] * substepTime;
 				p.position[1] += p.velocity[1] * substepTime;
 				p.position[2] += p.velocity[2] * substepTime;
@@ -205,6 +242,47 @@ export class ProjectileManager {
 					bs,
 					this.cellScratch,
 				);
+
+				if (building) {
+					// Stop at the solid cell nearest where this step began — of
+					// everything the hitbox straddles, that is the one travel
+					// reached first.
+					let bestCell = -1;
+					let bestDistance = Infinity;
+					for (let c = 0; c < cellCount; c++) {
+						const bx = this.cellScratch[3 * c];
+						const by = this.cellScratch[3 * c + 1];
+						const bz = this.cellScratch[3 * c + 2];
+						if (!this.world.isSolid(bx, by, bz)) continue;
+						const ddx = bx - preX;
+						const ddy = by - preY;
+						const ddz = bz - preZ;
+						const d = ddx * ddx + ddy * ddy + ddz * ddz;
+						if (d < bestDistance) {
+							bestDistance = d;
+							bestCell = c;
+						}
+					}
+					if (bestCell >= 0) {
+						impacted = true;
+						impactX = this.cellScratch[3 * bestCell];
+						impactY = this.cellScratch[3 * bestCell + 1];
+						impactZ = this.cellScratch[3 * bestCell + 2];
+						deriveImpactNormal(
+							preX,
+							preY,
+							preZ,
+							impactX,
+							impactY,
+							impactZ,
+							p.velocity,
+							this.normalScratch,
+						);
+						break;
+					}
+					continue;
+				}
+
 				for (let c = 0; c < cellCount; c++) {
 					const bx = this.cellScratch[3 * c];
 					const by = this.cellScratch[3 * c + 1];
@@ -244,7 +322,29 @@ export class ProjectileManager {
 					p.sourceTool,
 				);
 			}
-			if (p.strength <= 0 || lifetimeExpired) {
+			if (impacted && p.buildAnchor) {
+				this.callbacks.onBuildImpact(
+					{
+						// Resolved to the copy nearest the anchor: a shot that
+						// crossed the world seam mid-flight would otherwise plan a
+						// span the long way around the world.
+						cell: [
+							this.nearestCellCopy(impactX, p.buildAnchor[0]),
+							impactY,
+							this.nearestCellCopy(impactZ, p.buildAnchor[2]),
+						],
+						normal: [
+							this.normalScratch[0],
+							this.normalScratch[1],
+							this.normalScratch[2],
+						],
+						direction: unitVector(p.velocity),
+						anchor: p.buildAnchor,
+					},
+					p.sourceTool,
+				);
+			}
+			if (impacted || p.strength <= 0 || lifetimeExpired) {
 				this.disposeAt(i);
 				continue;
 			}
@@ -259,6 +359,25 @@ export class ProjectileManager {
 			const offsetZ = dz > hw ? -ww : dz < -hw ? ww : 0;
 			this.writeTransform(p, this.renderDatas[i], offsetX, offsetZ);
 		}
+	}
+
+	/**
+	 * Shift a cell coordinate to whichever wrapped copy sits nearest
+	 * `reference`, so span planning works in one continuous space.
+	 */
+	private nearestCellCopy(cell: number, reference: number): number {
+		const w = this.worldWidthCells;
+		const half = w / 2;
+		let d = cell - reference;
+		while (d > half) {
+			cell -= w;
+			d -= w;
+		}
+		while (d < -half) {
+			cell += w;
+			d += w;
+		}
+		return cell;
 	}
 
 	private writeTransform(
@@ -303,4 +422,11 @@ export class ProjectileManager {
 		this.projectiles.pop();
 		this.renderDatas.pop();
 	}
+}
+
+/** Normalized copy of `v`. Allocates — only called once per build impact. */
+function unitVector(v: Float32Array): Float32Array {
+	const len = Math.hypot(v[0], v[1], v[2]);
+	if (len < 1e-6) return new Float32Array([0, 0, 0]);
+	return new Float32Array([v[0] / len, v[1] / len, v[2] / len]);
 }

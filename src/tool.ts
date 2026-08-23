@@ -17,9 +17,11 @@ import type { GameState } from './game-state';
 import {
 	compoundHitbox,
 	obbHitbox,
+	ProjectileEffect,
 	type ProjectileProfile,
 	type VoxelCoord,
 } from './projectile';
+import { bridgePlanner, type GrowthProfile } from './growth';
 import type { RaycastHit } from './raycast';
 import { assertMonotonicTiming, timingFunctions } from './timing';
 
@@ -130,7 +132,19 @@ export interface Tool {
 	bpPerBreak: number;
 
 	// --- RMB (build) ---
+	/**
+	 * Instant placement — the utility for plugging one specific cell. Consulted
+	 * only when the tool has no build projectile.
+	 */
 	buildProfile: BuildProfile;
+	/**
+	 * Build projectile fired by RMB, or null to fall back to `buildProfile`'s
+	 * instant placement. Always paired with `growth`: the projectile flies and
+	 * dies on contact, the growth lays the structure that impact implies.
+	 */
+	buildProjectile: ProjectileProfile | null;
+	/** Structure a build impact grows. Non-null exactly when buildProjectile is. */
+	growth: GrowthProfile | null;
 	/** Seconds between RMB activations. Must be > 0. */
 	rmbCooldown: number;
 
@@ -166,6 +180,24 @@ export interface Tool {
 	rmbCooldownRemaining: number;
 }
 
+/** Shared invariants for any ProjectileProfile a Tool carries. */
+function assertProjectileProfile(
+	label: string,
+	profile: ProjectileProfile,
+): void {
+	if (!Number.isFinite(profile.maxLifetime) || profile.maxLifetime <= 0) {
+		throw new Error(
+			`${label}.maxLifetime must be finite and > 0 (got ${String(profile.maxLifetime)})`,
+		);
+	}
+	if (!Number.isFinite(profile.speed) || profile.speed < 0) {
+		throw new Error(
+			`${label}.speed must be finite and >= 0 (got ${String(profile.speed)})`,
+		);
+	}
+	assertMonotonicTiming(`${label}.timing`, profile.timing);
+}
+
 /**
  * Factory for Tool. Initializes runtime state to 0 and asserts the
  * invariants the type system can't express (positive cooldowns,
@@ -184,23 +216,36 @@ export function defineTool(
 			`Tool "${spec.name}": rmbCooldown must be > 0 (got ${String(spec.rmbCooldown)})`,
 		);
 	}
-	if (
-		!Number.isFinite(spec.projectile.maxLifetime) ||
-		spec.projectile.maxLifetime <= 0
-	) {
+	assertProjectileProfile(`Tool "${spec.name}": projectile`, spec.projectile);
+	// buildProjectile and growth are two halves of one mechanism — a
+	// projectile with nothing to grow lands and does nothing, and a growth
+	// with nothing to launch it can never start.
+	if ((spec.buildProjectile === null) !== (spec.growth === null)) {
 		throw new Error(
-			`Tool "${spec.name}": projectile.maxLifetime must be finite and > 0 (got ${String(spec.projectile.maxLifetime)})`,
+			`Tool "${spec.name}": buildProjectile and growth must both be set or both be null`,
 		);
 	}
-	if (!Number.isFinite(spec.projectile.speed) || spec.projectile.speed < 0) {
-		throw new Error(
-			`Tool "${spec.name}": projectile.speed must be finite and >= 0 (got ${String(spec.projectile.speed)})`,
+	if (spec.buildProjectile && spec.growth) {
+		assertProjectileProfile(
+			`Tool "${spec.name}": buildProjectile`,
+			spec.buildProjectile,
 		);
+		if (spec.buildProjectile.effect !== ProjectileEffect.Build) {
+			throw new Error(
+				`Tool "${spec.name}": buildProjectile.effect must be ProjectileEffect.Build`,
+			);
+		}
+		if (spec.growth.cellsPerSecond <= 0) {
+			throw new Error(
+				`Tool "${spec.name}": growth.cellsPerSecond must be > 0 (got ${String(spec.growth.cellsPerSecond)})`,
+			);
+		}
+		if (spec.growth.costPerCell < 0) {
+			throw new Error(
+				`Tool "${spec.name}": growth.costPerCell must be >= 0 (got ${String(spec.growth.costPerCell)})`,
+			);
+		}
 	}
-	assertMonotonicTiming(
-		`Tool "${spec.name}": projectile.timing`,
-		spec.projectile.timing,
-	);
 	if (spec.lmbCost < 0) {
 		throw new Error(
 			`Tool "${spec.name}": lmbCost must be >= 0 (got ${String(spec.lmbCost)})`,
@@ -244,9 +289,13 @@ export function canFire(
 	if (tool.rmbCooldownRemaining > 0) return false;
 	// Placement is a build action — disallowed entirely during lockout.
 	if (gameState.lockoutRemaining > 0) return false;
-	// RMB needs enough BP for at least one block; per-cell BP is rechecked
-	// by the committer as it walks the target list.
-	if (gameState.bp < tool.buildProfile.costPerBlock) return false;
+	// RMB needs enough BP for at least one cell; the rest is rechecked as the
+	// committer (or the growth) walks its cells, so a build that outruns the
+	// player's BP simply stops where it stands.
+	const perCell = tool.growth
+		? tool.growth.costPerCell
+		: tool.buildProfile.costPerBlock;
+	if (gameState.bp < perCell) return false;
 	return true;
 }
 
@@ -284,6 +333,7 @@ export function tickToolCooldowns(
  */
 const PICKAXE_VISUAL = 6;
 const pickaxeProjectile: ProjectileProfile = {
+	effect: ProjectileEffect.Mine,
 	strength: 10,
 	speed: 450,
 	timing: timingFunctions.linear,
@@ -301,6 +351,8 @@ export const pickaxeTool: Tool = defineTool({
 	lmbCost: 0,
 	bpPerBreak: 1,
 	buildProfile: singleBlockBuild(MARBLE, 1),
+	buildProjectile: null,
+	growth: null,
 	rmbCooldown: 0.1,
 	spawnOffset: new Float32Array([0, -5, 5]),
 	chargeTime: null,
@@ -318,6 +370,7 @@ export const pickaxeTool: Tool = defineTool({
 const BORE_WIDTH = 20;
 const BORE_THICKNESS = 10;
 const boreProjectile: ProjectileProfile = {
+	effect: ProjectileEffect.Mine,
 	strength: 90,
 	speed: 140,
 	timing: timingFunctions.quadOut,
@@ -340,7 +393,52 @@ export const boreTool: Tool = defineTool({
 	lmbCost: 0,
 	bpPerBreak: 1,
 	buildProfile: singleBlockBuild(MARBLE, 1),
+	buildProjectile: null,
+	growth: null,
 	rmbCooldown: 0.1,
+	spawnOffset: new Float32Array([0, -5, 5]),
+	chargeTime: null,
+	aimConstraint: null,
+});
+
+/**
+ * Long-range span builder. LMB is an ordinary mining bolt; RMB launches a
+ * build projectile whose impact grows a one-cell walkway back to wherever the
+ * shot was fired from.
+ *
+ * Range is the whole point, and the growth rate is what keeps it honest: a
+ * span takes time proportional to its length, so a distant anchor is a
+ * commitment rather than a free upgrade over a near one.
+ */
+const BRIDGE_BOLT = 6;
+const bridgeBoltProjectile: ProjectileProfile = {
+	effect: ProjectileEffect.Build,
+	// Unread on a Build projectile — it carries no mining budget.
+	strength: 1,
+	speed: 500,
+	timing: timingFunctions.linear,
+	hitbox: obbHitbox(BRIDGE_BOLT * 0.5),
+	maxLifetime: 1.2,
+	visualSize: [BRIDGE_BOLT, BRIDGE_BOLT, BRIDGE_BOLT],
+};
+
+export const bridgeTool: Tool = defineTool({
+	name: 'Bridge',
+	icon: null,
+	model: null,
+	projectile: pickaxeProjectile,
+	lmbCooldown: 0.4,
+	lmbCost: 0,
+	bpPerBreak: 1,
+	buildProfile: singleBlockBuild(MARBLE, 1),
+	buildProjectile: bridgeBoltProjectile,
+	growth: {
+		planner: bridgePlanner,
+		blockId: MARBLE,
+		costPerCell: 1,
+		cellsPerSecond: 40,
+	},
+	rmbCooldown: 2,
 	spawnOffset: new Float32Array([0, -5, 5]),
 	chargeTime: null,
 	aimConstraint: null,

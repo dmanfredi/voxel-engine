@@ -10,7 +10,7 @@
 
 import type { World } from './world';
 import type { EntityManager } from './entity';
-import type { BlockId } from './block';
+import { AIR, type BlockId } from './block';
 
 /**
  * Attempts to place a block. Returns true if the block was placed, false if
@@ -29,4 +29,24 @@ export function tryPlaceBlock(
 	const ok = world.setBlock(bx, by, bz, blockId);
 	if (ok) entityManager.invalidateFlowField();
 	return ok;
+}
+
+/**
+ * Non-mutating placement test: true when a block would genuinely land here.
+ *
+ * Stricter than `tryPlaceBlock`, which overwrites whatever already occupies
+ * the cell. A batched placer needs to know a cell is actually free *before*
+ * charging for it, and needs the rules to stay in this file rather than
+ * being re-derived at the call site.
+ */
+export function canPlaceBlock(
+	world: World,
+	entityManager: EntityManager,
+	bx: number,
+	by: number,
+	bz: number,
+): boolean {
+	if (world.getBlock(bx, by, bz) !== AIR) return false;
+	if (entityManager.blockIntersectsEntity(bx, by, bz)) return false;
+	return true;
 }

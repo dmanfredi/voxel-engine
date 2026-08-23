@@ -10,6 +10,8 @@ import { World } from './world';
 import { CHUNK_SIZE, chunkKey } from './chunk';
 import { extractBlockProps } from './block';
 import { raycast, type RaycastHit } from './raycast';
+import type { ProjectileProfile, VoxelCoord } from './projectile';
+import { GrowthManager } from './growth';
 // import { initHighlight, drawHighlight } from './highlight';
 import { createGameState } from './game-state';
 import { LOCKOUT_DURATION, type PlayerContext } from './entity-interactions';
@@ -689,6 +691,37 @@ async function main(): Promise<void> {
 	 * line up.
 	 */
 	function fireLMB(tool: Tool): boolean {
+		if (!resolveSpawnGeometry(tool, tool.projectile)) return false;
+
+		projectileManager.spawn(
+			tool.projectile,
+			spawnOrigin,
+			spawnDirection,
+			tool,
+		);
+
+		tool.lmbCooldownRemaining = tool.lmbCooldown;
+		if (tool.lmbCost > 0) {
+			gameState.bp -= tool.lmbCost;
+			updateBPDisplay();
+		}
+		return true;
+	}
+
+	/**
+	 * Resolve `spawnOrigin` and `spawnDirection` for a shot from `tool` using
+	 * `profile`'s reach. Returns false when the tool's aimConstraint rejects
+	 * the current aim, in which case the caller must not spend cooldown or
+	 * cost — the player can retry the instant they line up.
+	 *
+	 * Shared by mining and build shots so both leave the same muzzle and
+	 * converge the same way; only the reach differs, which is why the profile
+	 * is a parameter rather than read off the tool.
+	 */
+	function resolveSpawnGeometry(
+		tool: Tool,
+		profile: ProjectileProfile,
+	): boolean {
 		// camera-local right = normalize(cross(front, up)). cameraUp is
 		// world-Y by construction, so this is well-defined unless the
 		// player is looking straight up/down — pitch is clamped to ±88°
@@ -736,8 +769,7 @@ async function main(): Promise<void> {
 			// distances, so a convergence-aimed direction over-rotates and the
 			// projectile veers heavily off the crosshair. Parallel-at-close
 			// keeps the visible offset small and constant (just the spawn nudge).
-			const aimReach =
-				tool.projectile.speed * tool.projectile.maxLifetime;
+			const aimReach = profile.speed * profile.maxLifetime;
 			const aimHit = raycast(cameraPos, cameraFront, world, aimReach);
 			if (aimHit && aimHit.distance < PARALLEL_FIRE_RANGE) {
 				spawnDirection[0] = cameraFront[0];
@@ -764,50 +796,58 @@ async function main(): Promise<void> {
 			}
 		}
 
-		projectileManager.spawn(
-			tool.projectile,
-			spawnOrigin,
-			spawnDirection,
-			tool,
-		);
-
-		tool.lmbCooldownRemaining = tool.lmbCooldown;
-		if (tool.lmbCost > 0) {
-			gameState.bp -= tool.lmbCost;
-			updateBPDisplay();
-		}
 		return true;
 	}
 
 	/**
-	 * Fire the given tool's RMB action — resolve the build profile against
-	 * the raycast hit, place each cell the player can afford, and reset
-	 * the RMB cooldown iff something was actually placed. No-op on
-	 * targets that yield zero cells; no rate penalty when nothing lands
-	 * (Minecraft-style — holding RMB into open air doesn't cool down).
+	 * Launch a build projectile down the crosshair, stamping the anchor its
+	 * span should reach back to.
+	 */
+	function fireBuildProjectile(
+		tool: Tool,
+		profile: ProjectileProfile,
+	): boolean {
+		if (!resolveSpawnGeometry(tool, profile)) return false;
+		projectileManager.spawn(
+			profile,
+			spawnOrigin,
+			spawnDirection,
+			tool,
+			currentBuildAnchor(),
+		);
+		return true;
+	}
+
+	/**
+	 * Fire the given tool's RMB action. Tools carrying a build projectile
+	 * launch one, no target required; the rest fall back to instant placement,
+	 * which needs a face under the crosshair — resolve the build profile
+	 * against that hit and place each cell the player can afford.
+	 *
+	 * Either way the cooldown is reset only when something actually happened.
+	 * No-op on targets that yield zero cells; no rate penalty when nothing
+	 * lands (Minecraft-style — holding RMB into open air doesn't cool down).
 	 *
 	 * onRegionChanged handles the meshing fan-out for any cell count; for
 	 * a single cell it does the same surgical neighbor scheduling
 	 * onBlockChanged would.
 	 */
-	function fireRMB(tool: Tool, hit: RaycastHit): void {
+	function fireRMB(tool: Tool, hit: RaycastHit | null): void {
+		// A tool with a build projectile launches instead of placing: the
+		// structure is grown from whatever the shot hits, not stamped onto the
+		// face under the crosshair. Free-fire like LMB — the crosshair
+		// raycast's reach is a placement constraint and has nothing to say
+		// about how far a projectile may travel.
+		if (tool.buildProjectile) {
+			if (fireBuildProjectile(tool, tool.buildProjectile)) {
+				tool.rmbCooldownRemaining = tool.rmbCooldown;
+			}
+			return;
+		}
+		// Instant placement needs a face within reach to build against.
+		if (!hit) return;
 		const cells = tool.buildProfile.targetSelector(hit, cameraFront);
 		if (cells.length === 0) return;
-
-		// Player AABB in block coords. Computed once; each candidate cell
-		// is tested against this so we don't trap the player in their own
-		// build.
-		const camX = cameraPos[0] / BLOCK_SIZE;
-		const camY = cameraPos[1] / BLOCK_SIZE;
-		const camZ = cameraPos[2] / BLOCK_SIZE;
-		const feetY = camY - playerHeight / BLOCK_SIZE;
-		const hw = playerHalfWidth / BLOCK_SIZE;
-		const pMinX = Math.floor(camX - hw);
-		const pMaxX = Math.floor(camX + hw - 1e-6);
-		const pMinY = Math.floor(feetY);
-		const pMaxY = Math.floor(camY - 1e-6);
-		const pMinZ = Math.floor(camZ - hw);
-		const pMaxZ = Math.floor(camZ + hw - 1e-6);
 
 		const { blockId, costPerBlock } = tool.buildProfile;
 
@@ -821,16 +861,7 @@ async function main(): Promise<void> {
 
 		for (const [px, py, pz] of cells) {
 			if (gameState.bp < costPerBlock) break;
-			if (
-				px >= pMinX &&
-				px <= pMaxX &&
-				py >= pMinY &&
-				py <= pMaxY &&
-				pz >= pMinZ &&
-				pz <= pMaxZ
-			) {
-				continue; // would trap the player
-			}
+			if (playerOccupiesCell(px, py, pz)) continue; // would trap the player
 			if (!tryPlaceBlock(world, entityManager, px, py, pz, blockId)) {
 				continue; // entity overlap, or cell already non-air
 			}
@@ -850,6 +881,58 @@ async function main(): Promise<void> {
 		tool.rmbCooldownRemaining = tool.rmbCooldown;
 	}
 
+	/**
+	 * True when a block cell overlaps the player's AABB. Every placement path
+	 * consults this so nothing can seal the player inside its own build.
+	 */
+	function playerOccupiesCell(bx: number, by: number, bz: number): boolean {
+		const camX = cameraPos[0] / BLOCK_SIZE;
+		const camY = cameraPos[1] / BLOCK_SIZE;
+		const camZ = cameraPos[2] / BLOCK_SIZE;
+		const feetY = camY - playerHeight / BLOCK_SIZE;
+		const hw = playerHalfWidth / BLOCK_SIZE;
+		return (
+			bx >= Math.floor(camX - hw) &&
+			bx <= Math.floor(camX + hw - 1e-6) &&
+			by >= Math.floor(feetY) &&
+			by <= Math.floor(camY - 1e-6) &&
+			bz >= Math.floor(camZ - hw) &&
+			bz <= Math.floor(camZ + hw - 1e-6)
+		);
+	}
+
+	/**
+	 * The cell a span fired right now should reach back to: the block
+	 * *supporting* the player, not the one their feet occupy, so a bridge deck
+	 * arrives level with whatever they are standing on. Captured at launch —
+	 * the span meets where the shot came from, not where the player drifted to.
+	 */
+	function currentBuildAnchor(): VoxelCoord {
+		const feetY = cameraPos[1] - playerHeight;
+		return [
+			Math.floor(cameraPos[0] / BLOCK_SIZE),
+			Math.floor(feetY / BLOCK_SIZE) - 1,
+			Math.floor(cameraPos[2] / BLOCK_SIZE),
+		];
+	}
+
+	// Growth system — runs the structures that build projectiles leave behind.
+	// Never sees gameState: affordability arrives through `spend`, so an
+	// enemy-owned growth later plugs in with a different policy and no changes
+	// here.
+	const growthManager = new GrowthManager(world, entityManager, {
+		spend: (cost) => {
+			if (gameState.bp < cost) return false;
+			gameState.bp -= cost;
+			return true;
+		},
+		blockedByPlayer: playerOccupiesCell,
+		onCellsPlaced: (minBX, minBY, minBZ, maxBX, maxBY, maxBZ) => {
+			onRegionChanged(minBX, minBY, minBZ, maxBX, maxBY, maxBZ);
+			updateBPDisplay();
+		},
+	});
+
 	// Projectile system. Constructed here (rather than next to entityManager)
 	// so its onBlocksBroken callback can close over gameState + updateBPDisplay.
 	// onRegionChanged is a hoisted function declaration so referencing it from
@@ -857,6 +940,13 @@ async function main(): Promise<void> {
 	const projectileManager = new ProjectileManager(
 		world,
 		{
+			onBuildImpact: (ctx, sourceTool) => {
+				// Non-null by construction: defineTool asserts that only a tool
+				// with a growth profile can carry a Build-effect projectile.
+				if (sourceTool.growth) {
+					growthManager.begin(sourceTool.growth, ctx, sourceTool);
+				}
+			},
 			onBlocksBroken: (
 				minBX,
 				minBY,
@@ -1093,6 +1183,10 @@ async function main(): Promise<void> {
 		updateLockoutDisplay();
 
 		projectileManager.update(dt, cameraPos);
+		// After projectiles, so a build bolt landing this frame starts growing
+		// on the same frame it impacts.
+		growthManager.update(dt);
+		debuggerParams.growthCount = growthManager.activeCount;
 
 		// Raycast from camera to find targeted block
 		currentHit = raycast(cameraPos, cameraFront, world, MAX_REACH);
@@ -1115,11 +1209,7 @@ async function main(): Promise<void> {
 			) {
 				fireLMB(selectedTool);
 			}
-			if (
-				rmbDown &&
-				currentHit &&
-				canFire(selectedTool, 'rmb', gameState)
-			) {
+			if (rmbDown && canFire(selectedTool, 'rmb', gameState)) {
 				fireRMB(selectedTool, currentHit);
 			}
 		}

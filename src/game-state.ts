@@ -1,5 +1,5 @@
 import type { Tool } from './tool';
-import { pickaxeTool, boreTool } from './tool';
+import { pickaxeTool, boreTool, bridgeTool } from './tool';
 
 export interface GameState {
 	bp: number;
@@ -27,7 +27,7 @@ export function createGameState(): GameState {
 	return {
 		bp: 500,
 		lockoutRemaining: 0,
-		tools: [pickaxeTool, boreTool, null, null],
+		tools: [pickaxeTool, boreTool, bridgeTool, null],
 		selectedToolIndex: 0,
 	};
 }

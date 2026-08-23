@@ -23,6 +23,7 @@ export const debuggerParams = {
 	voidGap: '0', // blocks from player feet to the void surface (+ = above)
 	// Enemy readouts / toggles (the Enemies pane)
 	enemyCount: 0,
+	growthCount: 0,
 	enemyXray: false, // paint enemies over terrain (see-through debug view)
 	spawnerEnabled: false, // automatic terrain-born spawner (manual spawn still works)
 };
@@ -144,6 +145,11 @@ export function BuildDebug(render: () => void, hooks: DebugHooks): void {
 	enemyPane.addBinding(debuggerParams, 'enemyCount', {
 		readonly: true,
 		label: 'Count',
+		format: (v) => v.toFixed(0),
+	});
+	enemyPane.addBinding(debuggerParams, 'growthCount', {
+		readonly: true,
+		label: 'Growths',
 		format: (v) => v.toFixed(0),
 	});
 	enemyPane.addBinding(debuggerParams, 'spawnerEnabled', {

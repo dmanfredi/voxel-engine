@@ -21,6 +21,24 @@ import type { TimingFunction } from './timing';
 
 export type VoxelCoord = readonly [number, number, number];
 
+/**
+ * What a projectile does on contact. Motion (spawn, timing curve, sub-stepping,
+ * wrap, lifetime) is identical across every effect; only the contact
+ * resolution differs, and it differs enough to need different queries — Mine
+ * consumes the whole overlap set, Build needs the single first cell along
+ * travel.
+ */
+export enum ProjectileEffect {
+	/** Sweep-break every overlapped cell; `strength` gates penetration depth. */
+	Mine,
+	/**
+	 * Stop dead at the first solid contact and hand the impact to the growth
+	 * system. `strength` is unread — a build projectile carries no mining
+	 * budget, it just needs to arrive.
+	 */
+	Build,
+}
+
 /** Upper bound on cells one query may report; sizes the caller's scratch. */
 export const MAX_HITBOX_CELLS = 256;
 
@@ -702,6 +720,8 @@ export function orientationFromDirection(
  * instance and keeps a reference to the profile.
  */
 export interface ProjectileProfile {
+	/** Contact resolution. Determines which manager branch runs on overlap. */
+	effect: ProjectileEffect;
 	/** Initial strength; decrements by `block.hardness` on each break. */
 	strength: number;
 	/** Average travel speed across a complete normalized timing curve. */
@@ -747,4 +767,14 @@ export interface Projectile {
 	 * never reads tool fields itself — opaque pass-through.
 	 */
 	sourceTool: Tool;
+	/**
+	 * Cell a Build-effect impact should plan back toward — the player's foot
+	 * cell captured at launch, so a span meets where they fired from rather
+	 * than where they have drifted to since. Null on Mine projectiles.
+	 *
+	 * Captured at the feet rather than at the visual spawn point: the muzzle
+	 * sits near chest height, and a span terminating there would be neither
+	 * walkable nor placeable (the player's own AABB blocks those cells).
+	 */
+	buildAnchor: VoxelCoord | null;
 }

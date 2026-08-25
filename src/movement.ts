@@ -27,6 +27,18 @@ export function createPlayerState(): PlayerState {
 	return { velX: 0, velY: 0, velZ: 0, onGround: false, jumpCooldown: 0 };
 }
 
+/** Write the player's tick-scaled physics velocity in world units per second. */
+export function writePlayerVelocityPerSecond(
+	state: PlayerState,
+	out: Float32Array,
+): void {
+	out[0] = state.velX / MC_TICK;
+	// Ground resolution zeroes Y before gravity seeds the next frame's floor
+	// probe. That probe is not real source motion for a projectile to inherit.
+	out[1] = state.onGround && state.velY < 0 ? 0 : state.velY / MC_TICK;
+	out[2] = state.velZ / MC_TICK;
+}
+
 function getMovementDirection(
 	keysDown: Set<string>,
 	cameraFront: Vec3,

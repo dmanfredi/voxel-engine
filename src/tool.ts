@@ -395,7 +395,7 @@ const bridgeBoltProjectile: ProjectileProfile = {
 	effect: ProjectileEffect.Build,
 	// Unread on a Build projectile — it carries no mining budget.
 	strength: 1,
-	speed: 500,
+	speed: 800,
 	timing: timingFunctions.linear,
 	hitbox: obbHitbox(BRIDGE_BOLT * 0.5),
 	maxLifetime: 1.2,

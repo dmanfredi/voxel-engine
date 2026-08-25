@@ -107,9 +107,11 @@ Also a profile property, for the same reason: the constraint exists to keep a ta
 - **`ProjectileProfile`** is design data, frozen and shared across spawns: `strength`, `speed`, `timing`, `hitbox`, `maxLifetime`, `visualSize`.
 - **`Projectile`** is the live instance: `position`, `velocity`, `orientation`, mutable `strength`, `age`, `sourceTool`, plus a reference back to the profile.
 
+At spawn, the source's world velocity is projected onto the resolved unit shot direction. Only a positive aligned component is inherited; backward and perpendicular motion are discarded. The resulting velocity is `direction × (profile.speed + max(0, sourceAlongShot))`, so `profile.speed` remains a floor, a source moving backward can never slow or reverse its own shot, and lateral motion cannot skew it. The physical player's tick-scaled velocity is converted to world units per second at the fire seam; debug freecam deliberately contributes zero.
+
 ### Timing functions
 
-`ProjectileProfile.timing` maps normalized lifetime `[0, 1]` to normalized completed distance `[0, 1]`. Each update evaluates the curve at the frame's previous and next ages and moves by the difference. This is frame-rate independent, preserves total open-air range at `speed × maxLifetime`, and keeps lifetime as the clock rather than letting the curve decide when the projectile despawns. The final partial frame reaches the curve endpoint, processes collision, then disposes.
+`ProjectileProfile.timing` maps normalized lifetime `[0, 1]` to normalized completed distance `[0, 1]`. Each update evaluates the curve at the frame's previous and next ages and moves by the difference. This is frame-rate independent and keeps lifetime as the clock rather than letting the curve decide when the projectile despawns. A stationary source preserves the nominal open-air range of `speed × maxLifetime`; inherited source velocity changes the world-space range. The final partial frame reaches the curve endpoint, processes collision, then disposes.
 
 `timingFunctions` provides `linear`, CSS-style `ease`/`easeIn`/`easeOut`/`easeInOut`, and quadratic, cubic, and exponential in/out/in-out families. `cubicBezier(x1, y1, x2, y2)` supports custom CSS-style curves while restricting control points to monotonic, non-overshooting projectile motion. A plain custom `TimingFunction` is also accepted; `defineTool()` samples it at startup to reject invalid endpoints, non-finite values, range escapes, and practical reversals.
 
@@ -144,7 +146,7 @@ The manager mutates only the exact solid cells reported by the hitbox, while acc
 
 ### Distance-based sub-stepping
 
-Each frame's timing-derived displacement is divided into samples no farther apart than half a block. Every sample runs the existing hitbox query and complete-overlap break, so fast projectiles cannot skip entire voxel cells between rendered frames and arbitrary compound hitboxes require no special sweep implementation. Strength exhaustion stops the remaining sub-steps, while block bounds and BP count accumulate into the frame's single downstream callback.
+Each frame's timing-derived displacement is divided into samples no farther apart than half a block. The sample count uses the live projectile velocity, including inherited source motion, rather than the profile's nominal speed. Every sample runs the existing hitbox query and complete-overlap break, so fast projectiles cannot skip entire voxel cells between rendered frames and arbitrary compound hitboxes require no special sweep implementation. Strength exhaustion stops the remaining sub-steps, while block bounds and BP count accumulate into the frame's single downstream callback.
 
 Projectile coordinates remain unwrapped during the sub-step loop and canonicalize afterward. A frame that crosses the horizontal world seam therefore reports compact raw bounds across that seam instead of conservatively spanning almost the entire world. Only the final transform is uploaded; intermediate collision samples are not rendered.
 
@@ -246,9 +248,9 @@ The interesting tuning surface is the Tool itself — each field is a knob with 
 | Field | What it tunes |
 |---|---|
 | `projectile.strength` | Mining budget. Determines penetration depth — how many blocks a single shot clears before the killing blow. |
-| `projectile.speed` | Average world units / sec across the complete normalized timing curve. |
+| `projectile.speed` | Nominal world units / sec across the complete timing curve. Aligned source motion can add but not subtract. |
 | `projectile.timing` | How total travel distance is distributed over the lifetime; monotonic `[0,1] → [0,1]`. |
-| `projectile.maxLifetime` | Seconds over which the timing curve unfolds before disposal. Open-air range is `speed × maxLifetime`. |
+| `projectile.maxLifetime` | Seconds over which the timing curve unfolds before disposal. Stationary-source open-air range is `speed × maxLifetime`. |
 | `projectile.visualSize` | Edge length of the rendered cube. **Must** match the OBB hitbox half-extent (`visualSize × 0.5`). |
 | `lmbCooldown` / `rmbCooldown` | Seconds between successive fires while held. Independent. |
 | `lmbCost` | BP debited per LMB fire. 0 = firing is free; positive = consumable shot. |

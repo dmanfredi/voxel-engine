@@ -119,12 +119,13 @@ export class ProjectileManager {
 	}
 
 	/**
-	 * Spawn a projectile. `origin` and `direction` are copied into fresh
-	 * buffers — the caller may mutate or reuse the inputs after the call.
-	 * `direction` must be a unit vector; velocity is computed as
-	 * direction × profile.speed. `sourceTool` is stamped on the projectile
-	 * and threaded to the break callback so the callback can dispatch
-	 * per-tool effects (BP payout, FX, sounds).
+	 * Spawn a projectile. The launch inputs are sampled into fresh projectile
+	 * state, so the caller may mutate or reuse them after the call.
+	 * `direction` must be a unit vector. Source velocity along the shot can
+	 * increase but never reduce its forward speed; perpendicular motion is
+	 * discarded so inheritance cannot skew the shot. `sourceTool` is stamped on
+	 * the projectile and threaded to the break callback so the callback can
+	 * dispatch per-tool effects (BP payout, FX, sounds).
 	 *
 	 * `buildAnchor` is only meaningful for Build-effect profiles: it is the
 	 * cell the resulting growth should plan back toward, captured now so the
@@ -135,14 +136,21 @@ export class ProjectileManager {
 		profile: ProjectileProfile,
 		origin: Float32Array,
 		direction: Float32Array,
+		sourceVelocity: Float32Array,
 		sourceTool: Tool,
 		buildAnchor: VoxelCoord | null = null,
 	): void {
 		const position = new Float32Array([origin[0], origin[1], origin[2]]);
+		const sourceAlongShot =
+			sourceVelocity[0] * direction[0] +
+			sourceVelocity[1] * direction[1] +
+			sourceVelocity[2] * direction[2];
+		const inheritedForward = Math.max(0, sourceAlongShot);
+		const forwardSpeed = profile.speed + inheritedForward;
 		const velocity = new Float32Array([
-			direction[0] * profile.speed,
-			direction[1] * profile.speed,
-			direction[2] * profile.speed,
+			direction[0] * forwardSpeed,
+			direction[1] * forwardSpeed,
+			direction[2] * forwardSpeed,
 		]);
 		// Orientation derived from velocity at spawn. Constant for the
 		// projectile's lifetime — no spin or trajectory bending.
@@ -204,7 +212,9 @@ export class ProjectileManager {
 			p.age = nextAge;
 			const lifetimeExpired = nextAge >= maxLifetime;
 			const maxStepDistance = bs * MAX_SUBSTEP_BLOCKS;
-			const travelDistance = Math.abs(p.profile.speed * motionTime);
+			const travelDistance =
+				Math.hypot(p.velocity[0], p.velocity[1], p.velocity[2]) *
+				Math.abs(motionTime);
 			const substepCount = Math.max(
 				1,
 				Math.ceil(travelDistance / maxStepDistance),

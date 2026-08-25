@@ -774,7 +774,7 @@ export interface ProjectileProfile {
 	effect: ProjectileEffect;
 	/** Initial strength; decrements by `block.hardness` on each break. */
 	strength: number;
-	/** Average travel speed across a complete normalized timing curve. */
+	/** Nominal speed; aligned source motion can add but not subtract. */
 	speed: number;
 	/** Normalized age → normalized distance; must be monotonic from 0 to 1. */
 	timing: TimingFunction;

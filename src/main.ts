@@ -5,7 +5,12 @@ import { initSkybox, drawSkybox, type SkyboxResources } from './skybox';
 
 import { BuildDebug, refreshDebug, debuggerParams, stats } from './debug';
 import { greedyMesh } from './greedy-mesh';
-import { FREECAM, physicsTick, createPlayerState } from './movement';
+import {
+	FREECAM,
+	physicsTick,
+	createPlayerState,
+	writePlayerVelocityPerSecond,
+} from './movement';
 import { World } from './world';
 import { CHUNK_SIZE, chunkKey } from './chunk';
 import { extractBlockProps } from './block';
@@ -673,11 +678,21 @@ async function main(): Promise<void> {
 		},
 	});
 
-	// Spawn scratch — reused every fire, avoid per-shot allocation. Both
-	// are copied inside spawn(), so it's safe to overwrite them next call.
+	// Spawn scratch — reused every fire, avoid per-shot allocation. All three
+	// are copied into projectile state, so it is safe to overwrite them next call.
 	const spawnOrigin = new Float32Array(3);
 	const spawnDirection = new Float32Array(3);
+	const spawnSourceVelocity = new Float32Array(3);
 	const cameraRight = new Float32Array(3);
+
+	/** Capture physical player velocity; debug freecam is not a projectile source. */
+	function resolveSpawnSourceVelocity(): void {
+		if (debuggerParams.freecam) {
+			spawnSourceVelocity.fill(0);
+			return;
+		}
+		writePlayerVelocityPerSecond(playerState, spawnSourceVelocity);
+	}
 
 	/**
 	 * Fire the given tool's LMB action — spawn one projectile from a
@@ -692,11 +707,13 @@ async function main(): Promise<void> {
 	 */
 	function fireLMB(tool: Tool): boolean {
 		if (!resolveSpawnGeometry(tool.mineProjectile)) return false;
+		resolveSpawnSourceVelocity();
 
 		projectileManager.spawn(
 			tool.mineProjectile,
 			spawnOrigin,
 			spawnDirection,
+			spawnSourceVelocity,
 			tool,
 		);
 
@@ -805,10 +822,12 @@ async function main(): Promise<void> {
 		profile: ProjectileProfile,
 	): boolean {
 		if (!resolveSpawnGeometry(profile)) return false;
+		resolveSpawnSourceVelocity();
 		projectileManager.spawn(
 			profile,
 			spawnOrigin,
 			spawnDirection,
+			spawnSourceVelocity,
 			tool,
 			currentBuildAnchor(),
 		);

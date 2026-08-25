@@ -66,11 +66,12 @@ export interface ProjectileManagerCallbacks {
 	): void;
 
 	/**
-	 * Fired once when a Build-effect projectile reaches its first solid
-	 * contact, immediately before it disposes. The caller hands the context to
-	 * the growth system; the manager itself knows nothing about growths.
-	 * Never fired for a projectile that expires without hitting anything —
-	 * a whiffed build produces nothing at all.
+	 * Fired once when a Build-effect projectile comes to rest, immediately
+	 * before it disposes — on first solid contact, or at the end of its flight
+	 * if it never touched anything (`ctx.normal` is null in that case). The
+	 * caller hands the context to the growth system, which decides whether a
+	 * site without a face builds anything; the manager itself knows nothing
+	 * about growths.
 	 */
 	onBuildImpact(ctx: ImpactContext, sourceTool: Tool): void;
 }
@@ -305,10 +306,26 @@ export class ProjectileManager {
 				if (p.strength <= 0) break;
 			}
 
+			// Cell the bolt came to rest in — the struck cell, or wherever its
+			// flight ran out. Captured before the canonical wrap so it shares
+			// the unwrapped frame the impact cell was resolved in.
+			let restX = impactX;
+			let restY = impactY;
+			let restZ = impactZ;
+			if (building && !impacted) {
+				restX = Math.floor(p.position[0] / bs);
+				restY = Math.floor(p.position[1] / bs);
+				restZ = Math.floor(p.position[2] / bs);
+			}
+
 			// Keep coordinates unwrapped during sub-stepping so a seam-crossing
 			// batch has compact raw bounds (e.g. 318..321, not 0..319).
 			p.position[0] = ((p.position[0] % ww) + ww) % ww;
 			p.position[2] = ((p.position[2] % ww) + ww) % ww;
+
+			// One condition for both resolving and disposing, so a build can
+			// never be dropped by a disposal path that forgot to resolve it.
+			const disposing = impacted || p.strength <= 0 || lifetimeExpired;
 
 			if (brokenCount > 0) {
 				this.callbacks.onBlocksBroken(
@@ -322,29 +339,33 @@ export class ProjectileManager {
 					p.sourceTool,
 				);
 			}
-			if (impacted && p.buildAnchor) {
+			// A build bolt resolves wherever it stops, contact or not; the null
+			// normal is what tells the planner which happened.
+			if (building && disposing && p.buildAnchor) {
 				this.callbacks.onBuildImpact(
 					{
 						// Resolved to the copy nearest the anchor: a shot that
 						// crossed the world seam mid-flight would otherwise plan a
 						// span the long way around the world.
 						cell: [
-							this.nearestCellCopy(impactX, p.buildAnchor[0]),
-							impactY,
-							this.nearestCellCopy(impactZ, p.buildAnchor[2]),
+							this.nearestCellCopy(restX, p.buildAnchor[0]),
+							restY,
+							this.nearestCellCopy(restZ, p.buildAnchor[2]),
 						],
-						normal: [
-							this.normalScratch[0],
-							this.normalScratch[1],
-							this.normalScratch[2],
-						],
+						normal: impacted
+							? [
+									this.normalScratch[0],
+									this.normalScratch[1],
+									this.normalScratch[2],
+								]
+							: null,
 						direction: unitVector(p.velocity),
 						anchor: p.buildAnchor,
 					},
 					p.sourceTool,
 				);
 			}
-			if (impacted || p.strength <= 0 || lifetimeExpired) {
+			if (disposing) {
 				this.disposeAt(i);
 				continue;
 			}

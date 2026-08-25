@@ -313,9 +313,10 @@ export const pickaxeTool: Tool = defineTool({
  * wide across the lane and thin along travel, so each sweep-break clears a
  * broad cross-section.
  *
- * RMB throws the same slab as a build bolt, growing a cube against whatever it
- * lands on. Sharing the mining bolt's flight stats keeps one set of range and
- * lead instincts covering both buttons: aim the same, get a hole or a plug.
+ * RMB throws a build bolt that grows a cube — seated against whatever it hits,
+ * or planted in open air at the end of its flight if it hits nothing. Not
+ * needing a surface is what makes it a placement tool rather than a patching
+ * one: the pairing is dig a hole, then fill a space that was never there.
  */
 // Slab edges in world units: BORE_WIDTH across the lane (right/up),
 // BORE_THICKNESS along travel (forward). Thin along travel so each tick
@@ -350,10 +351,10 @@ const boreBuildProjectile: ProjectileProfile = {
 	effect: ProjectileEffect.Build,
 	// Unread on a Build projectile — it carries no mining budget.
 	strength: 1,
-	speed: 140,
+	speed: 400,
 	timing: timingFunctions.quadOut,
 	hitbox: obbHitbox(BORE_BOLT * 0.5),
-	maxLifetime: 1,
+	maxLifetime: 0.5,
 	visualSize: [BORE_BOLT, BORE_BOLT, BORE_BOLT],
 	spawnOffset: hipFire(),
 	aimConstraint: null,
@@ -374,8 +375,9 @@ export const boreTool: Tool = defineTool({
 		blockId: MARBLE,
 		costPerCell: 1,
 		cellsPerSecond: 40,
+		requiresContact: false,
 	},
-	rmbCooldown: 1.25,
+	rmbCooldown: 0.6,
 	chargeTime: null,
 });
 
@@ -417,6 +419,9 @@ export const bridgeTool: Tool = defineTool({
 		blockId: MARBLE,
 		costPerCell: 1,
 		cellsPerSecond: 40,
+		// A span needs a far endpoint; fired into open air it has nothing to
+		// reach back from, so a whiff produces nothing.
+		requiresContact: true,
 	},
 	rmbCooldown: 2,
 	chargeTime: null,

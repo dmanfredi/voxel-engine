@@ -53,11 +53,18 @@ you're standing on. Fired mid-fall, this is also what catches you.
 **Lines are face-connected.** A cheaper diagonal line meets only at edges and
 you drop through the joints.
 
+**Whether a build needs something to build against is the structure's
+question, not the bolt's.** A span has two endpoints and produces nothing
+fired into open air; a freestanding shape doesn't care and plants itself
+wherever the flight ran out. Same bolt, different plan, different answer — so
+the flag sits with the plan. It also means flight time doubles as throw range
+for anything freestanding, which is the dial that keeps long-range placement
+honest.
+
 ## Deferred
 
 - No cancellation, no re-planning, no cap on concurrent growths.
 - Build projectiles phase through enemies. This is the seam where a trap/cage
   planner eventually lives.
-- A whiff produces nothing — a build must impact to have an effect.
 - Cells appear instantly. `../proposals/cube-tip-placement-animation.md`
   describes the settling animation that would plug in here.

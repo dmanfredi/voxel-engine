@@ -32,9 +32,11 @@ export enum ProjectileEffect {
 	/** Sweep-break every overlapped cell; `strength` gates penetration depth. */
 	Mine,
 	/**
-	 * Stop dead at the first solid contact and hand the impact to the growth
-	 * system. `strength` is unread — a build projectile carries no mining
-	 * budget, it just needs to arrive.
+	 * Stop dead at the first solid contact and hand the site to the growth
+	 * system, which also gets handed the end of the flight path if nothing was
+	 * ever touched — whether that faceless site builds anything is the growth
+	 * profile's call. `strength` is unread: a build projectile carries no
+	 * mining budget, it just needs to arrive.
 	 */
 	Build,
 }

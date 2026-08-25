@@ -28,13 +28,21 @@ import type { Tool } from './tool';
 import type { VoxelCoord } from './projectile';
 import type { World } from './world';
 
-/** What a planner knows at the moment of impact. */
+/** What a planner knows about where a build bolt came to rest. */
 export interface ImpactContext {
-	/** Cell the projectile struck. Typically solid, so plans starting here
-	 *  simply skip their first cells and effectively begin at the surface. */
+	/**
+	 * Cell the bolt came to rest in. Solid on contact, so plans starting here
+	 * simply skip their first cells and effectively begin at the surface; air
+	 * when the bolt's flight ran out instead.
+	 */
 	cell: VoxelCoord;
-	/** Face the projectile entered through. See `deriveImpactNormal`. */
-	normal: VoxelCoord;
+	/**
+	 * Face the bolt entered through (see `deriveImpactNormal`), or null when
+	 * it touched nothing and resolved at the end of its flight. Planners that
+	 * seat a structure against a surface have to handle the null — there is
+	 * no face to sit against.
+	 */
+	normal: VoxelCoord | null;
 	/** Unit travel direction at impact. */
 	direction: Float32Array;
 	/** Player's foot cell captured at launch — where a span should reach back to. */
@@ -54,6 +62,14 @@ export interface GrowthProfile {
 	blockId: BlockId;
 	/** BP debited per cell that actually lands. */
 	costPerCell: number;
+	/**
+	 * Whether this structure needs something to build against. A span has two
+	 * endpoints and produces nothing fired into open air; a freestanding shape
+	 * does not care. Lives on the structure rather than the bolt because that
+	 * is whose fact it is — the same bolt carrying a different plan answers
+	 * differently.
+	 */
+	requiresContact: boolean;
 	/**
 	 * Propagation rate. A rate rather than a total duration, so a long span
 	 * takes proportionally longer — range costs time, and a distant shot is a
@@ -127,8 +143,13 @@ export class GrowthManager {
 	 * Run the profile's planner and start laying its cells. Plans are computed
 	 * once and never revised: the world may change underneath a long span, and
 	 * the per-cell placement check absorbs that without re-planning.
+	 *
+	 * Structures that need a surface drop out here rather than inside each
+	 * planner, so the requirement is visible where the tool is defined instead
+	 * of buried in a function body.
 	 */
 	begin(profile: GrowthProfile, ctx: ImpactContext, source: Tool): void {
+		if (profile.requiresContact && ctx.normal === null) return;
 		const cells = profile.planner(ctx);
 		if (cells.length === 0) return;
 		this.growths.push({
@@ -289,7 +310,9 @@ export const bridgePlanner: GrowthPlanner = (ctx) =>
  * Seated entirely clear of the surface along the normal rather than centered
  * on the impact — a cube centered on a cell that is itself solid would bury a
  * whole layer and quietly deliver less than its name promises. Across the
- * face it straddles the impact.
+ * face it straddles the impact. With no face at all (a bolt that ran out of
+ * flight in open air) there is nothing to clear, so it centers on the resting
+ * cell on every axis.
  *
  * Cells are ordered by distance from the cube's own center, so it fills as
  * concentric shells: running dry leaves a smaller cube rather than a lopsided
@@ -306,7 +329,7 @@ export function cubePlanner(size: number): GrowthPlanner {
 	return (ctx) => {
 		const lo: [number, number, number] = [0, 0, 0];
 		for (let a = 0; a < 3; a++) {
-			const n = ctx.normal[a];
+			const n = ctx.normal ? ctx.normal[a] : 0;
 			if (n > 0) lo[a] = ctx.cell[a] + 1;
 			else if (n < 0) lo[a] = ctx.cell[a] - size;
 			else lo[a] = ctx.cell[a] - lead;

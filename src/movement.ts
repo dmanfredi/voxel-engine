@@ -21,10 +21,19 @@ export interface PlayerState {
 	velZ: number;
 	onGround: boolean;
 	jumpCooldown: number; // seconds remaining
+	/** Vertical gain from auto-step on the last move; 0 when none. */
+	steppedUp: number;
 }
 
 export function createPlayerState(): PlayerState {
-	return { velX: 0, velY: 0, velZ: 0, onGround: false, jumpCooldown: 0 };
+	return {
+		velX: 0,
+		velY: 0,
+		velZ: 0,
+		onGround: false,
+		jumpCooldown: 0,
+		steppedUp: 0,
+	};
 }
 
 /** Write the player's tick-scaled physics velocity in world units per second. */
@@ -161,7 +170,10 @@ export function physicsTick(
 		world,
 		halfWidth,
 		height,
+		state.onGround,
 	);
+
+	state.steppedUp = result.steppedUp;
 
 	// Zero velocity on collided axes
 	if (result.collidedX) state.velX = 0;

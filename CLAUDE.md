@@ -75,7 +75,7 @@ The mesher runs in three phases and has several non-obvious design decisions:
 Minecraft-style physics with tick-based simulation:
 
 - **movement.ts** — Minecraft-like physics tick: gravity, jump velocity, ground/air drag, horizontal acceleration. Uses `MC_TICK = 0.05` as the reference timestep; all physics values scale by `dt/MC_TICK`. Two modes: physics movement (default) and freecam (`FREECAM` function, toggled via debug panel).
-- **collision.ts** — AABB-vs-voxel-grid collision. `moveAndCollide()` resolves axes independently (X → Z → Y order). Player AABB is defined relative to eye position: feet at `pos.y - height`, top at `pos.y`. Returns per-axis collision flags (`onGround`, `collidedX`, `collidedZ`, `collidedCeiling`).
+- **collision.ts** — AABB-vs-voxel-grid collision. `moveAndCollide()` resolves axes independently (X → Z → Y order). Player AABB is defined relative to eye position: feet at `pos.y - height`, top at `pos.y`. Returns per-axis collision flags (`onGround`, `collidedX`, `collidedZ`, `collidedCeiling`) plus `steppedUp`. A blocked horizontal move gets a second attempt from a raised start (**auto-step**), gated on pre-move ground contact and full AABB clearance at the landing — see `notes/systems/auto-step.md`.
 
 The player is **not** an entity — deliberate, see `notes/systems/entity-physics-and-ai.md`. Sphere-vs-sphere collision is built (entity-vs-entity); player remains a special-cased AABB. Revisit the player-as-entity refactor when enemy density / interaction complexity justifies unifying them.
 
@@ -216,6 +216,7 @@ Deeper design rationale and "what's deferred and why" notes live in `notes/`; st
 - `notes/systems/growth-and-build-projectiles.md` — building as a projectile: planners as the variation point, growth as a process, what is deliberately not routed
 - `notes/systems/void-floor.md` — rising void hazard (the "fire floor"): bands, chunk-delete floor, design intent, stubbed seams
 - `notes/systems/physics-and-collision.md` — player physics and AABB-vs-voxel collision (predates entity work)
+- `notes/systems/auto-step.md` — walking up one-block ledges: guards, view smoothing, why no step-down
 - `notes/systems/skybox-integration.md` — skybox setup
 - `notes/TECHNICAL-ROADMAP.md` — phased plan + current progress
 - `notes/GAME-DESIGN.md` — game concept and design pillars

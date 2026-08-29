@@ -13,6 +13,7 @@ import {
 } from './movement';
 import { World } from './world';
 import { CHUNK_SIZE, chunkKey } from './chunk';
+import { STEP_HEIGHT_BLOCKS } from './collision';
 import { extractBlockProps } from './block';
 import { raycast, type RaycastHit } from './raycast';
 import type { ProjectileProfile, VoxelCoord } from './projectile';
@@ -64,6 +65,8 @@ const WORLD_WIDTH = 10; // horizontal chunk width (X and Z), wrapping
 const VERTICAL_RADIUS = 6; // chunks above/below player to keep loaded
 const SPAWN_CY = 4; // initial player chunk Y
 const AUTO_CLIMB_DURATION = 0.4;
+const STEP_SMOOTH_RATE = 18; // exponential decay of the step offset, per second
+const STEP_SMOOTH_SNAP = 0.02; // below this the offset is spent
 
 const world = new World(BLOCK_SIZE, WORLD_WIDTH);
 
@@ -72,6 +75,8 @@ const up = vec3.create(0, 1, 0);
 
 const worldCenter = (WORLD_WIDTH * CHUNK_SIZE * BLOCK_SIZE) / 2;
 const cameraPos = vec3.create(worldCenter, worldCenter, worldCenter);
+const eyePos = vec3.create(worldCenter, worldCenter, worldCenter);
+let stepSmoothOffset = 0;
 const cameraFront = vec3.create(0, 0, -1);
 const cameraUp = up;
 
@@ -754,7 +759,7 @@ async function main(): Promise<void> {
 		const off = profile.spawnOffset;
 		for (let i = 0; i < 3; i++) {
 			spawnOrigin[i] =
-				cameraPos[i] +
+				eyePos[i] +
 				cameraRight[i] * off[0] +
 				cameraUp[i] * off[1] +
 				cameraFront[i] * off[2];
@@ -784,7 +789,7 @@ async function main(): Promise<void> {
 			// projectile veers heavily off the crosshair. Parallel-at-close
 			// keeps the visible offset small and constant (just the spawn nudge).
 			const aimReach = profile.speed * profile.maxLifetime;
-			const aimHit = raycast(cameraPos, cameraFront, world, aimReach);
+			const aimHit = raycast(eyePos, cameraFront, world, aimReach);
 			if (aimHit && aimHit.distance < PARALLEL_FIRE_RANGE) {
 				spawnDirection[0] = cameraFront[0];
 				spawnDirection[1] = cameraFront[1];
@@ -792,17 +797,11 @@ async function main(): Promise<void> {
 			} else {
 				const aimDistance = aimHit ? aimHit.distance : aimReach;
 				const tx =
-					cameraPos[0] +
-					cameraFront[0] * aimDistance -
-					spawnOrigin[0];
+					eyePos[0] + cameraFront[0] * aimDistance - spawnOrigin[0];
 				const ty =
-					cameraPos[1] +
-					cameraFront[1] * aimDistance -
-					spawnOrigin[1];
+					eyePos[1] + cameraFront[1] * aimDistance - spawnOrigin[1];
 				const tz =
-					cameraPos[2] +
-					cameraFront[2] * aimDistance -
-					spawnOrigin[2];
+					eyePos[2] + cameraFront[2] * aimDistance - spawnOrigin[2];
 				const tLen = Math.hypot(tx, ty, tz);
 				spawnDirection[0] = tx / tLen;
 				spawnDirection[1] = ty / tLen;
@@ -1122,6 +1121,7 @@ async function main(): Promise<void> {
 
 		if (debuggerParams.freecam) {
 			FREECAM(keysDown, cameraPos, cameraFront, cameraUp, dt * 300);
+			stepSmoothOffset = 0;
 		} else {
 			const justJumped = physicsTick(
 				playerState,
@@ -1135,12 +1135,27 @@ async function main(): Promise<void> {
 				dt,
 			);
 			if (justJumped) autoClimbRemaining = AUTO_CLIMB_DURATION;
+
+			// Clamped so a stair run cannot stack offsets into a view that
+			// trails the body by more than the step it just took.
+			stepSmoothOffset = Math.max(
+				stepSmoothOffset - playerState.steppedUp,
+				-STEP_HEIGHT_BLOCKS * BLOCK_SIZE,
+			);
+			stepSmoothOffset *= Math.exp(-STEP_SMOOTH_RATE * dt);
+			if (stepSmoothOffset > -STEP_SMOOTH_SNAP) stepSmoothOffset = 0;
 		}
 
 		// Wrap player position horizontally
 		const worldWidth = world.widthChunks * CHUNK_SIZE * BLOCK_SIZE;
 		cameraPos[0] = ((cameraPos[0] % worldWidth) + worldWidth) % worldWidth;
 		cameraPos[2] = ((cameraPos[2] % worldWidth) + worldWidth) % worldWidth;
+
+		// The eye the player looks and aims through. Gameplay reads — streaming,
+		// void floor, entity targeting, placement — stay on cameraPos.
+		eyePos[0] = cameraPos[0];
+		eyePos[1] = cameraPos[1] + stepSmoothOffset;
+		eyePos[2] = cameraPos[2];
 
 		// Advance the void floor (rise + clamp + damage) before streaming, so
 		// the chunk loader sees this frame's consumed-chunk floor.
@@ -1205,7 +1220,7 @@ async function main(): Promise<void> {
 		debuggerParams.growthCount = growthManager.activeCount;
 
 		// Raycast from camera to find targeted block
-		currentHit = raycast(cameraPos, cameraFront, world, MAX_REACH);
+		currentHit = raycast(eyePos, cameraFront, world, MAX_REACH);
 		debuggerParams.targetBlock = currentHit
 			? currentHit.blockPos.join(', ')
 			: 'none';
@@ -1239,20 +1254,15 @@ async function main(): Promise<void> {
 
 	BuildDebug(render, {
 		onSpawnEnemy: (shape, material, size, traits) => {
-			const hit = raycast(
-				cameraPos,
-				cameraFront,
-				world,
-				DEBUG_SPAWN_REACH,
-			);
+			const hit = raycast(eyePos, cameraFront, world, DEBUG_SPAWN_REACH);
 			if (!hit) return; // nothing in front of the camera within reach
 
 			// Surface point along the ray, pushed out by the enemy's radius so
 			// it rests on the hit face rather than embedded in it.
 			const [nx, ny, nz] = hit.faceNormal;
-			const y = cameraPos[1] + cameraFront[1] * hit.distance + ny * size;
-			let x = cameraPos[0] + cameraFront[0] * hit.distance + nx * size;
-			let z = cameraPos[2] + cameraFront[2] * hit.distance + nz * size;
+			const y = eyePos[1] + cameraFront[1] * hit.distance + ny * size;
+			let x = eyePos[0] + cameraFront[0] * hit.distance + nx * size;
+			let z = eyePos[2] + cameraFront[2] * hit.distance + nz * size;
 
 			// Cubes must stay grid-aligned for tipping — snap the footprint to
 			// the block grid in X/Z (Y already rests on the surface).
@@ -1318,8 +1328,8 @@ async function main(): Promise<void> {
 		);
 
 		const viewMatrix = mat4.lookAt(
-			cameraPos,
-			vec3.add(cameraPos, cameraFront),
+			eyePos,
+			vec3.add(eyePos, cameraFront),
 			cameraUp,
 		);
 		// Compute the view projection matrix
@@ -1327,9 +1337,9 @@ async function main(): Promise<void> {
 
 		// Upload uniforms: VP matrix + eye position + reflection params
 		uniformValues.set(viewProjectionMatrix);
-		uniformValues[16] = cameraPos[0]; // eyePosition.x
-		uniformValues[17] = cameraPos[1]; // eyePosition.y
-		uniformValues[18] = cameraPos[2]; // eyePosition.z
+		uniformValues[16] = eyePos[0]; // eyePosition.x
+		uniformValues[17] = eyePos[1]; // eyePosition.y
+		uniformValues[18] = eyePos[2]; // eyePosition.z
 		uniformValues[19] = debuggerParams.shininess; // shininess
 		uniformValues[20] = debuggerParams.specularStrength; // specularStrength
 		uniformValues[21] = debuggerParams.fogStart; // fogStart

@@ -14,6 +14,7 @@ Project-wide docs and loose notes that do not need a narrower home yet.
 
 Durable subsystem references and implementation design notes. These are the first stop when changing code in a specific area.
 
+- `auto-step.md` - walking up one-block ledges: the second-chance move, the preconditions behind each guard, and why there is no step-down.
 - `cube-enemy.md` - cube enemy design, tipping, climbing, Breacher trait, and Crush/Zone role notes.
 - `entity-physics-and-ai.md` - entity physics model, AI dispatch, deferred decisions.
 - `entity-system.md` - entity taxonomy, mesh generation, render pipeline, lifecycle.

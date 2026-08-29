@@ -14,6 +14,14 @@ const AIR_DRAG = 0.895;
 const SPRINT_JUMP_BOOST = 0;
 const NEGLIGIBLE_THRESHOLD = 0.05;
 const JUMP_COOLDOWN = 0.4;
+// Air-jump knobs, deliberately parallel to the ground set so the recovery
+// jump can be retuned without disturbing the jump taken off the floor.
+const AIR_JUMP_VELOCITY = 6.4;
+const AIR_SPRINT_JUMP_BOOST = 0;
+const AIR_JUMP_COOLDOWN = 0.4;
+
+/** Air jumps available between landings. */
+export const MAX_AIR_JUMPS = 1;
 
 export interface PlayerState {
 	velX: number;
@@ -23,6 +31,8 @@ export interface PlayerState {
 	jumpCooldown: number; // seconds remaining
 	/** Vertical gain from auto-step on the last move; 0 when none. */
 	steppedUp: number;
+	/** Air jumps left; landing restores them. */
+	airJumpsLeft: number;
 }
 
 export function createPlayerState(): PlayerState {
@@ -33,6 +43,7 @@ export function createPlayerState(): PlayerState {
 		onGround: false,
 		jumpCooldown: 0,
 		steppedUp: 0,
+		airJumpsLeft: MAX_AIR_JUMPS,
 	};
 }
 
@@ -90,6 +101,40 @@ function getMovementDirection(
 	return [dx, 0, dz];
 }
 
+/**
+ * Apply a jump impulse. Downward velocity is clamped away rather than
+ * overwritten: a jump taken while falling still yields its full height, and
+ * one taken while already rising stacks onto the launch instead of arresting
+ * it — the difference matters the moment anything can throw the player.
+ */
+function launch(
+	state: PlayerState,
+	keysDown: Set<string>,
+	cameraFront: Vec3,
+	velocity: number,
+	cooldown: number,
+	boost: number,
+): void {
+	state.velY = Math.max(0, state.velY) + velocity;
+	state.jumpCooldown = cooldown;
+
+	// Jump boost toward facing (only when moving)
+	if (
+		keysDown.has('KeyW') ||
+		keysDown.has('KeyA') ||
+		keysDown.has('KeyS') ||
+		keysDown.has('KeyD')
+	) {
+		const facingX = cameraFront[0] ?? 0;
+		const facingZ = cameraFront[2] ?? 0;
+		const facingLen = Math.sqrt(facingX * facingX + facingZ * facingZ);
+		if (facingLen > 0) {
+			state.velX += (facingX / facingLen) * boost;
+			state.velZ += (facingZ / facingLen) * boost;
+		}
+	}
+}
+
 export function physicsTick(
 	state: PlayerState,
 	keysDown: Set<string>,
@@ -103,40 +148,39 @@ export function physicsTick(
 ): boolean {
 	const t = dt / MC_TICK;
 
-	// Jump cooldown
+	// Jump cooldown. Runs purely on time.
 	if (state.jumpCooldown > 0) state.jumpCooldown -= dt;
 
 	// Negligible vertical threshold
 	if (Math.abs(state.velY) < NEGLIGIBLE_THRESHOLD * t) state.velY = 0;
 
-	// Jump check
+	// Jump check. The cooldown is the sole rate limiter, so holding the key
+	// takes every jump the instant it becomes available — the air jump included,
+	// which by the cooldown's length arrives near the apex of the first.
 	let justJumped = false;
-	if (keysDown.has('Space')) {
-		if (state.onGround && state.jumpCooldown <= 0) {
-			state.velY = JUMP_VELOCITY;
-			state.jumpCooldown = JUMP_COOLDOWN;
+	if (keysDown.has('Space') && state.jumpCooldown <= 0) {
+		if (state.onGround) {
+			launch(
+				state,
+				keysDown,
+				cameraFront,
+				JUMP_VELOCITY,
+				JUMP_COOLDOWN,
+				SPRINT_JUMP_BOOST,
+			);
 			justJumped = true;
-
-			// Jump boost toward facing (only when moving)
-			if (
-				keysDown.has('KeyW') ||
-				keysDown.has('KeyA') ||
-				keysDown.has('KeyS') ||
-				keysDown.has('KeyD')
-			) {
-				const facingX = cameraFront[0] ?? 0;
-				const facingZ = cameraFront[2] ?? 0;
-				const facingLen = Math.sqrt(
-					facingX * facingX + facingZ * facingZ,
-				);
-				if (facingLen > 0) {
-					state.velX += (facingX / facingLen) * SPRINT_JUMP_BOOST;
-					state.velZ += (facingZ / facingLen) * SPRINT_JUMP_BOOST;
-				}
-			}
+		} else if (state.airJumpsLeft > 0) {
+			state.airJumpsLeft--;
+			launch(
+				state,
+				keysDown,
+				cameraFront,
+				AIR_JUMP_VELOCITY,
+				AIR_JUMP_COOLDOWN,
+				AIR_SPRINT_JUMP_BOOST,
+			);
+			justJumped = true;
 		}
-	} else {
-		state.jumpCooldown = 0;
 	}
 
 	const dir = getMovementDirection(keysDown, cameraFront, cameraUp);
@@ -186,8 +230,11 @@ export function physicsTick(
 	state.velY *= VERTICAL_DRAG ** t;
 	if (state.velY < TERMINAL_VELOCITY) state.velY = TERMINAL_VELOCITY;
 
-	// Update ground state
+	// Update ground state. Landing restores the air charge whether or not a
+	// ground jump preceded it — the case this exists for is walking off an
+	// edge you never meant to leave.
 	state.onGround = result.onGround;
+	if (result.onGround) state.airJumpsLeft = MAX_AIR_JUMPS;
 
 	return justJumped;
 }

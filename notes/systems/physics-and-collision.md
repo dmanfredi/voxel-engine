@@ -67,10 +67,23 @@ Instead, `physicsTick` runs once per frame and receives `dt` (frame delta in sec
 
 ### Jumping
 
-- Sets vertical velocity to `JUMP_VELOCITY` (6.4), enough to gain roughly one additional block of height over the previous jump
-- Arms auto-climb for one second. During that window, an air block directly beneath the player is filled if placement rules and BP allow it; Shift suppresses placement
-- 0.4s cooldown when holding Space (auto-jump). Releasing Space resets the cooldown immediately, so tapping gives instant re-jumps
+- Clamps away downward velocity, then adds `JUMP_VELOCITY`. Clamp-then-add rather than overwrite: a jump taken while falling still delivers its full height, and one taken while already rising stacks onto that launch instead of arresting it. Nothing throws the player yet, but knockback is on the way and this is the formula that survives it
+- Both jumps briefly arm auto-climb. During that window an air block directly beneath the player is filled if placement rules and BP allow it; Shift suppresses placement
 - Jump boost (`SPRINT_JUMP_BOOST`) adds horizontal velocity toward facing, but only when a movement key is held — prevents lurching forward from a stationary jump
+
+### The air jump
+
+A second jump is available in mid-air, spending an air charge that landing restores.
+
+The charge is refreshed on every landing and spendable whether or not a ground jump preceded it. It is an *air* charge, not a *second* jump: the case it exists for is walking off an edge you never meant to leave, and that case never spends a ground jump. Strength, cooldown and boost are separate constants from the ground set, so the recovery jump tunes on its own.
+
+The cooldown is the sole rate limiter, and it runs purely on time — releasing Space no longer clears it. Three things follow:
+
+- Holding Space takes each jump the instant it becomes available, so the air jump arrives near the first jump's apex, where it stacks about as cleanly as it can
+- Frantic tapping cannot blend the two jumps into one launch, which is the failure the release-reset used to allow
+- Holding Space therefore always spends the charge. A player who habitually holds it has nothing left to recover with — legible, but a real cost
+
+Air-jumping into a ceiling spends the charge for no height, and a press within a few frames of the cooldown expiring spends it for little. Both are left unguarded: the ground jump has the same properties, and a clearance pre-check or a minimum-airtime gate makes the button feel like it is second-guessing the player.
 
 ### Vertical physics
 
@@ -94,10 +107,14 @@ All constants live at the top of `movement.ts`. The base values come from Minecr
 | `AIR_ACCEL` | 0.5 | How much you can steer in air |
 | `GROUND_DRAG` | 0.546 | How quickly you stop on ground (lower = snappier) |
 | `AIR_DRAG` | 0.895 | How much speed you keep in air (higher = more momentum) |
-| `JUMP_VELOCITY` | 6.4 | Initial upward velocity on jump |
+| `JUMP_VELOCITY` | 6.4 | Upward velocity added by the ground jump |
 | `GRAVITY` | 0.8 | Downward acceleration per tick |
 | `VERTICAL_DRAG` | 0.98 | Air resistance on vertical movement |
 | `TERMINAL_VELOCITY` | -39.2 | Max falling speed |
 | `SPRINT_JUMP_BOOST` | 0 | Horizontal velocity added when jump-moving |
-| `JUMP_COOLDOWN` | 0.4 | Seconds between auto-jumps when holding Space |
+| `JUMP_COOLDOWN` | 0.4 | Refractory period a ground jump starts |
+| `AIR_JUMP_VELOCITY` | 6.4 | Upward velocity added by the air jump |
+| `AIR_JUMP_COOLDOWN` | 0.4 | Refractory period an air jump starts |
+| `AIR_SPRINT_JUMP_BOOST` | 0 | Horizontal velocity added when air-jump-moving |
+| `MAX_AIR_JUMPS` | 1 | Air jumps restored on landing |
 | `NEGLIGIBLE_THRESHOLD` | 0.05 | Velocity below this is snapped to zero |

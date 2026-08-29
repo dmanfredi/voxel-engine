@@ -10,6 +10,7 @@ import {
 	physicsTick,
 	createPlayerState,
 	writePlayerVelocityPerSecond,
+	MAX_AIR_JUMPS,
 } from './movement';
 import { World } from './world';
 import { CHUNK_SIZE, chunkKey } from './chunk';
@@ -1530,6 +1531,7 @@ async function main(): Promise<void> {
 				playerState.velX = 0;
 				playerState.velY = 0;
 				playerState.velZ = 0;
+				playerState.airJumpsLeft = MAX_AIR_JUMPS;
 			}
 			refreshDebug();
 		}
